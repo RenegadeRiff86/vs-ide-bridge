@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.VisualStudio.Sdk.Build">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>VsIdeBridge</AssemblyName>
+    <RootNamespace>VsIdeBridge</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <GeneratePkgDefFile>true</GeneratePkgDefFile>
+    <UseCodeBase>true</UseCodeBase>
+    <UseCodebase>true</UseCodebase>
+    <CopyBuildOutputToOutputDirectory>true</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
+    <IncludeAssemblyInVSIXContainer>true</IncludeAssemblyInVSIXContainer>
+    <IncludeDebugSymbolsInVSIXContainer>false</IncludeDebugSymbolsInVSIXContainer>
+    <IncludeDebugSymbolsInLocalVSIXDeployment>false</IncludeDebugSymbolsInLocalVSIXDeployment>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <CreateVsixContainer>true</CreateVsixContainer>
+    <InstallationTargetVersion>18.0</InstallationTargetVersion>
+    <InstallationTargetProductArchitecture>amd64</InstallationTargetProductArchitecture>
+    <VisualStudioSDKImplicitPackageVersion>17.14.40265</VisualStudioSDKImplicitPackageVersion>
+    <VSSDKBuildToolsImplicitPackageVersion>18.4.33</VSSDKBuildToolsImplicitPackageVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="source.extension.vsixmanifest">
+      <SubType>Designer</SubType>
+    </Content>
+  </ItemGroup>
+</Project>

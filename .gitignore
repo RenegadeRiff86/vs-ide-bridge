@@ -1,0 +1,4 @@
+.vs/
+output/
+src/VsIdeBridge/bin/
+src/VsIdeBridge/obj/
