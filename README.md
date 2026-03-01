@@ -2,6 +2,10 @@
 
 Local Visual Studio 2026 extension for scriptable IDE control through stable `Tools.*` commands.
 
+## Disclaimer
+
+This project is experimental. Use it at your own risk.
+
 ## Purpose
 
 This repo exposes Visual Studio automation commands that are easy to call from:
