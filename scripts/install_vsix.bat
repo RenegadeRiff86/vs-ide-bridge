@@ -22,6 +22,12 @@ if not exist "%VSIXINSTALLER%" (
 )
 
 echo Installing "%VSIX%"
-echo VSIX installer log: %%TEMP%%\%LOGFILE%
-"%VSIXINSTALLER%" /quiet /shutdownprocesses "%VSIX%" /logFile:%LOGFILE%
-exit /b %ERRORLEVEL%
+echo VSIX installer log: %TEMP%\%LOGFILE%
+"%VSIXINSTALLER%" /quiet /shutdownprocesses "%VSIX%" /logFile:"%LOGFILE%"
+set "RC=%ERRORLEVEL%"
+if %RC%==0 (
+    echo Done - installed successfully.
+) else (
+    echo Failed - exit code %RC%. Check %TEMP%\%LOGFILE% for details.
+)
+exit /b %RC%
