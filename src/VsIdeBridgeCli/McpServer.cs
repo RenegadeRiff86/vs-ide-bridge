@@ -16,7 +16,7 @@ internal static partial class CliApp
         return 0;
     }
 
-    private static sealed class McpServer
+    private static class McpServer
     {
         public static async Task RunAsync(PipeDiscovery discovery, CliOptions options)
         {
@@ -167,7 +167,7 @@ internal static partial class CliApp
                         ["text"] = response.ToJsonString(JsonOptions),
                     },
                 },
-                ["isError"] = !IsSuccess(response),
+                ["isError"] = !ResponseFormatter.IsSuccess(response),
                 ["structuredContent"] = response.DeepClone(),
             };
         }
