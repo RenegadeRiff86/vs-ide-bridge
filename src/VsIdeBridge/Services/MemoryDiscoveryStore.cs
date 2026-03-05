@@ -2,17 +2,52 @@ using System;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using Newtonsoft.Json.Linq;
 
 namespace VsIdeBridge.Services;
 
 internal sealed class MemoryDiscoveryStore
 {
-    private const string MapName = @"Global\VsIdeBridge.Discovery.v1";
-    private const string MutexName = @"Global\VsIdeBridge.Discovery.v1.mutex";
-    private const int CapacityBytes = 1024 * 1024;
+    private const string DefaultMapName = @"Global\VsIdeBridge.Discovery.v1";
+    private const string DefaultMutexName = @"Global\VsIdeBridge.Discovery.v1.mutex";
+    private const int DefaultCapacityBytes = 1024 * 1024;
     private static readonly TimeSpan EntryTtl = TimeSpan.FromHours(6);
+    private static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
+    private readonly string _mapName;
+    private readonly string _mutexName;
+    private readonly int _capacityBytes;
+    private readonly TimeSpan _lockTimeout;
+    private readonly Func<string, Mutex> _mutexFactory;
+    private readonly Func<string, int, MemoryMappedFile> _mapFactory;
+
+    public MemoryDiscoveryStore()
+        : this(
+            DefaultMapName,
+            DefaultMutexName,
+            DefaultCapacityBytes,
+            DefaultLockTimeout,
+            static name => new Mutex(false, name),
+            static (name, capacity) => MemoryMappedFile.CreateOrOpen(name, capacity, MemoryMappedFileAccess.ReadWrite))
+    {
+    }
+
+    internal MemoryDiscoveryStore(
+        string mapName,
+        string mutexName,
+        int capacityBytes,
+        TimeSpan lockTimeout,
+        Func<string, Mutex> mutexFactory,
+        Func<string, int, MemoryMappedFile> mapFactory)
+    {
+        _mapName = string.IsNullOrWhiteSpace(mapName) ? DefaultMapName : mapName;
+        _mutexName = string.IsNullOrWhiteSpace(mutexName) ? DefaultMutexName : mutexName;
+        _capacityBytes = capacityBytes > 0 ? capacityBytes : DefaultCapacityBytes;
+        _lockTimeout = lockTimeout > TimeSpan.Zero ? lockTimeout : DefaultLockTimeout;
+        _mutexFactory = mutexFactory ?? throw new ArgumentNullException(nameof(mutexFactory));
+        _mapFactory = mapFactory ?? throw new ArgumentNullException(nameof(mapFactory));
+    }
 
     public void Upsert(object discoveryRecord)
     {
@@ -103,23 +138,32 @@ internal sealed class MemoryDiscoveryStore
         }
     }
 
-    private static void ExecuteWithStore(Action<JObject> mutate)
+    private void ExecuteWithStore(Action<JObject> mutate)
     {
-        using var mutex = new System.Threading.Mutex(false, MutexName);
+        Mutex? mutex = null;
         var hasLock = false;
         try
         {
-            hasLock = mutex.WaitOne(TimeSpan.FromSeconds(2));
+            mutex = _mutexFactory(_mutexName);
+            try
+            {
+                hasLock = mutex.WaitOne(_lockTimeout);
+            }
+            catch (AbandonedMutexException)
+            {
+                hasLock = true;
+            }
+
             if (!hasLock)
             {
                 return;
             }
 
-            using var map = MemoryMappedFile.CreateOrOpen(MapName, CapacityBytes, MemoryMappedFileAccess.ReadWrite);
-            using var view = map.CreateViewStream(0, CapacityBytes, MemoryMappedFileAccess.ReadWrite);
-            var root = ReadRoot(view);
+            using var map = _mapFactory(_mapName, _capacityBytes);
+            using var view = map.CreateViewStream(0, _capacityBytes, MemoryMappedFileAccess.ReadWrite);
+            var root = ReadRoot(view, _capacityBytes);
             mutate(root);
-            WriteRoot(view, root);
+            WriteRoot(view, root, _capacityBytes);
         }
         catch
         {
@@ -127,14 +171,22 @@ internal sealed class MemoryDiscoveryStore
         }
         finally
         {
-            if (hasLock)
+            if (hasLock && mutex is not null)
             {
-                mutex.ReleaseMutex();
+                try
+                {
+                    mutex.ReleaseMutex();
+                }
+                catch
+                {
+                }
             }
+
+            mutex?.Dispose();
         }
     }
 
-    private static JObject ReadRoot(MemoryMappedViewStream view)
+    private static JObject ReadRoot(MemoryMappedViewStream view, int capacityBytes)
     {
         view.Position = 0;
         var lenBuffer = new byte[4];
@@ -145,7 +197,7 @@ internal sealed class MemoryDiscoveryStore
         }
 
         var payloadLength = BitConverter.ToInt32(lenBuffer, 0);
-        if (payloadLength <= 0 || payloadLength > CapacityBytes - 4)
+        if (payloadLength <= 0 || payloadLength > capacityBytes - 4)
         {
             return new JObject { ["items"] = new JArray() };
         }
@@ -167,12 +219,12 @@ internal sealed class MemoryDiscoveryStore
         }
     }
 
-    private static void WriteRoot(MemoryMappedViewStream view, JObject root)
+    private static void WriteRoot(MemoryMappedViewStream view, JObject root, int capacityBytes)
     {
         root["updatedAtUtc"] = DateTimeOffset.UtcNow.ToString("O");
 
         var payload = Utf8NoBom.GetBytes(root.ToString());
-        if (payload.Length > CapacityBytes - 4)
+        if (payload.Length > capacityBytes - 4)
         {
             // Keep dropping oldest entries until the payload fits.
             var items = GetItems(root)
@@ -184,14 +236,14 @@ internal sealed class MemoryDiscoveryStore
             {
                 item.Remove();
                 payload = Utf8NoBom.GetBytes(root.ToString());
-                if (payload.Length <= CapacityBytes - 4)
+                if (payload.Length <= capacityBytes - 4)
                 {
                     break;
                 }
             }
         }
 
-        if (payload.Length > CapacityBytes - 4)
+        if (payload.Length > capacityBytes - 4)
         {
             return;
         }
@@ -201,7 +253,7 @@ internal sealed class MemoryDiscoveryStore
         view.Write(length, 0, length.Length);
         view.Write(payload, 0, payload.Length);
 
-        var remaining = CapacityBytes - 4 - payload.Length;
+        var remaining = capacityBytes - 4 - payload.Length;
         if (remaining > 0)
         {
             var zeros = new byte[Math.Min(remaining, 4096)];

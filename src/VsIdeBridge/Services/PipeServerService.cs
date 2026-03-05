@@ -118,7 +118,14 @@ internal sealed class PipeServerService : IDisposable
 
         if (_emitMemoryDiscovery)
         {
-            _memoryDiscoveryStore.Upsert(record);
+            try
+            {
+                _memoryDiscoveryStore.Upsert(record);
+            }
+            catch (Exception ex)
+            {
+                ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update memory discovery store: {ex.Message}");
+            }
         }
     }
 
@@ -525,7 +532,14 @@ internal sealed class PipeServerService : IDisposable
 
         if (_emitMemoryDiscovery)
         {
-            _memoryDiscoveryStore.Remove(_runtime.BridgeInstanceService.InstanceId);
+            try
+            {
+                _memoryDiscoveryStore.Remove(_runtime.BridgeInstanceService.InstanceId);
+            }
+            catch (Exception ex)
+            {
+                ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to remove memory discovery entry: {ex.Message}");
+            }
         }
     }
 }
