@@ -12,23 +12,25 @@ internal sealed class OutputPaneLogger
     private const string PaneName = "IDE Bridge";
 
     private readonly AsyncPackage _package;
-    private readonly DTE2 _dte;
 
-    public OutputPaneLogger(AsyncPackage package, DTE2 dte)
+    public OutputPaneLogger(AsyncPackage package)
     {
         _package = package;
-        _dte = dte;
     }
 
     public async Task LogAsync(string message, CancellationToken cancellationToken, bool activatePane = false)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-        var pane = GetOrCreatePane();
-        pane.OutputString($"{message}{Environment.NewLine}");
-        if (activatePane)
+        var dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+        if (dte is not null)
         {
-            pane.Activate();
+            var pane = GetOrCreatePane(dte);
+            pane.OutputString($"{message}{Environment.NewLine}");
+            if (activatePane)
+            {
+                pane.Activate();
+            }
         }
 
         if (await _package.GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) is IVsStatusbar statusbar)
@@ -37,11 +39,11 @@ internal sealed class OutputPaneLogger
         }
     }
 
-    private EnvDTE.OutputWindowPane GetOrCreatePane()
+    private static EnvDTE.OutputWindowPane GetOrCreatePane(DTE2 dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var panes = _dte.ToolWindows.OutputWindow.OutputWindowPanes;
+        var panes = dte.ToolWindows.OutputWindow.OutputWindowPanes;
         for (var i = 1; i <= panes.Count; i++)
         {
             var pane = panes.Item(i);

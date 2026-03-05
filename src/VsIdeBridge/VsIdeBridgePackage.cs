@@ -9,7 +9,7 @@ using VsIdeBridge.Services;
 namespace VsIdeBridge;
 
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-[InstalledProductRegistration("VS IDE Bridge", "Scriptable IDE control commands for Visual Studio.", "0.1.0")]
+[InstalledProductRegistration("VS IDE Bridge", "Scriptable IDE control commands for Visual Studio.", "2.0.0")]
 [ProvideMenuResource("Menus.ctmenu", 1)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
@@ -34,7 +34,6 @@ public sealed class VsIdeBridgePackage : AsyncPackage
         try
         {
             _pipeServer = new PipeServerService(this, _runtime);
-            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             _pipeServer.Start();
         }
         catch (Exception ex)

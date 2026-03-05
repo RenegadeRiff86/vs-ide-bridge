@@ -55,22 +55,6 @@ internal sealed class PipeServerService : IDisposable
     {
         PurgeStaleDiscoveryFiles();
         WriteDiscoveryFile(string.Empty);
-        _ = _package.JoinableTaskFactory.RunAsync(async delegate
-        {
-            try
-            {
-                await _package.JoinableTaskFactory.SwitchToMainThreadAsync(_cts.Token);
-                var dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
-                if (dte != null)
-                {
-                    WriteDiscoveryFile(GetSolutionPath(dte));
-                }
-            }
-            catch (Exception ex)
-            {
-                ActivityLog.LogWarning(nameof(PipeServerService), $"Initial discovery refresh failed: {ex.Message}");
-            }
-        });
         _listenTask = Task.Run(() => ListenLoopAsync(_cts.Token));
     }
 
@@ -382,6 +366,25 @@ internal sealed class PipeServerService : IDisposable
                 var args = CommandArgumentParser.Parse(request.Args);
                 result = await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
             }, commandToken);
+
+            var completed = await Task.WhenAny(
+                executionTask,
+                Task.Delay(timeoutMilliseconds, serverCancellationToken)).ConfigureAwait(false);
+            if (!ReferenceEquals(completed, executionTask))
+            {
+                if (serverCancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(serverCancellationToken);
+                }
+
+                commandCts.Cancel();
+                _ = executionTask.ContinueWith(
+                    task => _ = task.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
+                throw new OperationCanceledException(commandToken);
+            }
 
             await executionTask.ConfigureAwait(false);
 

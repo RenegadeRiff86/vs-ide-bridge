@@ -1,10 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using EnvDTE80;
-using Microsoft;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.Interop;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -95,13 +91,9 @@ internal sealed class IdeBridgeRuntime
     internal bool TryGetCommand(string name, out IdeCommandBase cmd)
         => _dispatcher.TryGetValue(name, out cmd!);
 
-    public static async Task<IdeBridgeRuntime> CreateAsync(VsIdeBridgePackage package)
+    public static Task<IdeBridgeRuntime> CreateAsync(VsIdeBridgePackage package)
     {
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(package.DisposalToken);
-        var dte = await package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
-        Assumes.Present(dte);
-
-        var logger = new OutputPaneLogger(package, dte);
+        var logger = new OutputPaneLogger(package);
         var bridgeInstanceService = new BridgeInstanceService();
         var uiSettings = new BridgeUiSettingsService(package);
         var documentService = new DocumentService(package);
@@ -111,7 +103,7 @@ internal sealed class IdeBridgeRuntime
         var errorListService = new ErrorListService(readinessService);
         var buildService = new BuildService(readinessService);
 
-        return new IdeBridgeRuntime(
+        var runtime = new IdeBridgeRuntime(
             logger,
             bridgeInstanceService,
             uiSettings,
@@ -127,5 +119,6 @@ internal sealed class IdeBridgeRuntime
             new DebuggerService(),
             buildService,
             errorListService);
+        return Task.FromResult(runtime);
     }
 }
