@@ -25,6 +25,8 @@ namespace VsIdeBridge.Services;
 internal sealed class PipeServerService : IDisposable
 {
     private const int PipeStreamBufferSize = 4096;
+    private const int DefaultCommandTimeoutMilliseconds = 120_000;
+    private const int DefaultDiagnosticsTimeoutMilliseconds = 10_000;
 
     private readonly VsIdeBridgePackage _package;
     private readonly IdeBridgeRuntime _runtime;
@@ -33,7 +35,9 @@ internal sealed class PipeServerService : IDisposable
     private readonly bool _emitDiscoveryJson;
     private readonly bool _emitMemoryDiscovery;
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+    private readonly object _executorSync = new();
     private Task? _listenTask;
+    private Task? _activeCommandTask;
 
     public PipeServerService(VsIdeBridgePackage package, IdeBridgeRuntime runtime)
     {
@@ -272,38 +276,96 @@ internal sealed class PipeServerService : IDisposable
 
     private async Task<string> ExecuteRequestAsync(string requestJson, CancellationToken ct)
     {
+        PipeRequest request;
+        try
+        {
+            request = JsonConvert.DeserializeObject<PipeRequest>(requestJson)
+                ?? throw new CommandErrorException("invalid_request", "Could not parse request JSON.");
+        }
+        catch (JsonException ex)
+        {
+            var envelope = BuildEnvelope(
+                string.Empty,
+                null,
+                false,
+                "Could not parse request JSON.",
+                new JObject(),
+                new JArray(),
+                new { code = "invalid_request", message = ex.Message },
+                DateTimeOffset.UtcNow);
+            return JsonConvert.SerializeObject(envelope);
+        }
+
+        var hasBatch = request.Batch is { Count: > 0 };
+        var commandName = hasBatch
+            ? (!string.IsNullOrWhiteSpace(request.Command) ? request.Command : "Tools.IdeBatchCommands")
+            : (request.Command ?? string.Empty);
+        var timeoutMilliseconds = ResolveTimeoutMilliseconds(commandName, request.Args, hasBatch);
+        var isDiagnosticsCommand = IsDiagnosticsCommand(commandName);
         var startedAt = DateTimeOffset.UtcNow;
-        string commandName = "";
-        string? requestId = null;
+
+        Task<string>? executionTask;
+        lock (_executorSync)
+        {
+            if (_activeCommandTask is { IsCompleted: false })
+            {
+                var busyEnvelope = BuildEnvelope(
+                    commandName,
+                    request.Id,
+                    false,
+                    "Another bridge command is still running.",
+                    new JObject(),
+                    new JArray(),
+                    new { code = "command_in_progress", message = "Another bridge command is still running.", details = new { active = true } },
+                    startedAt);
+                return JsonConvert.SerializeObject(busyEnvelope);
+            }
+
+            executionTask = ExecuteRequestCoreAsync(request, commandName, hasBatch, timeoutMilliseconds, isDiagnosticsCommand, ct);
+            _activeCommandTask = executionTask;
+        }
+
+        var response = await executionTask.ConfigureAwait(false);
+        return response;
+    }
+
+    private async Task<string> ExecuteRequestCoreAsync(PipeRequest request, string commandName, bool hasBatch, int timeoutMilliseconds, bool isDiagnosticsCommand, CancellationToken serverCancellationToken)
+    {
+        var startedAt = DateTimeOffset.UtcNow;
+        var commandStopwatch = Stopwatch.StartNew();
+        string? requestId = request.Id;
         IdeCommandContext? failureContext = null;
+        using var commandCts = CancellationTokenSource.CreateLinkedTokenSource(serverCancellationToken);
+        commandCts.CancelAfter(timeoutMilliseconds);
+        var commandToken = commandCts.Token;
 
         try
         {
-            var request = JsonConvert.DeserializeObject<PipeRequest>(requestJson);
-            if (request == null)
-                throw new CommandErrorException("invalid_request", "Could not parse request JSON.");
+            await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} start (timeout={timeoutMilliseconds}ms)", commandToken).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
 
-            requestId = request.Id;
-            var hasBatch = request.Batch is { Count: > 0 };
-            commandName = hasBatch
-                ? (!string.IsNullOrWhiteSpace(request.Command) ? request.Command : "Tools.IdeBatchCommands")
-                : (request.Command ?? string.Empty);
-
+        try
+        {
             CommandExecutionResult result = null!;
-            await _package.JoinableTaskFactory.RunAsync(async delegate
+            var executionTask = Task.Run(async () =>
             {
-                await _package.JoinableTaskFactory.SwitchToMainThreadAsync(ct);
-                var dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+                var dte = await GetDteAsync(commandToken).ConfigureAwait(false);
                 Assumes.Present(dte);
+
+                await _package.JoinableTaskFactory.SwitchToMainThreadAsync(commandToken);
                 WriteDiscoveryFile(GetSolutionPath(dte!));
-                var ctx = new IdeCommandContext(_package, dte!, _runtime.Logger, _runtime, ct);
+
+                var ctx = new IdeCommandContext(_package, dte!, _runtime.Logger, _runtime, commandToken);
                 failureContext = ctx;
-                await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} requested", ct).ConfigureAwait(true);
+                await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} requested", commandToken).ConfigureAwait(false);
 
                 if (hasBatch)
                 {
                     var steps = BuildBatchSteps(request);
-                    result = await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(true);
+                    result = await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(false);
                     return;
                 }
 
@@ -311,31 +373,118 @@ internal sealed class PipeServerService : IDisposable
                     throw new CommandErrorException("command_not_found", $"Unknown command: '{commandName}'.");
 
                 var args = CommandArgumentParser.Parse(request.Args);
-                result = await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(true);
-            });
+                result = await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
+            }, commandToken);
+
+            await executionTask.ConfigureAwait(false);
 
             await _runtime.Logger.LogAsync(
                 $"IDE Bridge: {commandName} OK - {result.Summary}",
-                ct,
+                commandToken,
                 activatePane: ShouldRevealActivity(commandName)).ConfigureAwait(false);
+            await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} end (duration={commandStopwatch.ElapsedMilliseconds}ms)", commandToken).ConfigureAwait(false);
             var envelope = BuildEnvelope(commandName, requestId, true, result.Summary, result.Data, result.Warnings, null, startedAt);
+            return JsonConvert.SerializeObject(envelope);
+        }
+        catch (OperationCanceledException) when (commandCts.IsCancellationRequested && !serverCancellationToken.IsCancellationRequested)
+        {
+            var errorCode = isDiagnosticsCommand ? "ide_blocked" : "timeout";
+            var summary = isDiagnosticsCommand
+                ? "IDE appears blocked (modal dialog or busy state) while processing the command."
+                : $"Command timed out after {timeoutMilliseconds} ms.";
+            var details = new
+            {
+                timeoutMs = timeoutMilliseconds,
+                durationMs = commandStopwatch.ElapsedMilliseconds,
+                reason = isDiagnosticsCommand ? "ui_not_responsive" : "command_timeout",
+            };
+            var errorObj = new { code = errorCode, message = summary, details };
+            var failureData = await _runtime.FailureContextService.CaptureAsync(failureContext).ConfigureAwait(false);
+            try
+            {
+                await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} timeout (duration={commandStopwatch.ElapsedMilliseconds}ms)", CancellationToken.None, activatePane: true).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+
+            var envelope = BuildEnvelope(commandName, requestId, false, summary, failureData, new JArray(), errorObj, startedAt);
             return JsonConvert.SerializeObject(envelope);
         }
         catch (CommandErrorException ex)
         {
-            await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} FAIL - {ex.Code}", ct, activatePane: true).ConfigureAwait(false);
+            await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} FAIL - {ex.Code}", CancellationToken.None, activatePane: true).ConfigureAwait(false);
             var errorObj = new { code = ex.Code, message = ex.Message, details = ex.Details };
             var failureData = await _runtime.FailureContextService.CaptureAsync(failureContext).ConfigureAwait(false);
+            await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} end (duration={commandStopwatch.ElapsedMilliseconds}ms, failed={ex.Code})", CancellationToken.None).ConfigureAwait(false);
             var envelope = BuildEnvelope(commandName, requestId, false, ex.Message, failureData, new JArray(), errorObj, startedAt);
             return JsonConvert.SerializeObject(envelope);
         }
         catch (Exception ex)
         {
-            await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} FAIL - internal_error", ct, activatePane: true).ConfigureAwait(false);
+            await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} FAIL - internal_error", CancellationToken.None, activatePane: true).ConfigureAwait(false);
             var errorObj = new { code = "internal_error", message = ex.Message, details = new { exception = ex.ToString() } };
             var failureData = await _runtime.FailureContextService.CaptureAsync(failureContext).ConfigureAwait(false);
+            await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} end (duration={commandStopwatch.ElapsedMilliseconds}ms, failed=internal_error)", CancellationToken.None).ConfigureAwait(false);
             var envelope = BuildEnvelope(commandName, requestId, false, ex.Message, failureData, new JArray(), errorObj, startedAt);
             return JsonConvert.SerializeObject(envelope);
+        }
+        finally
+        {
+            lock (_executorSync)
+            {
+                if (_activeCommandTask?.IsCompleted ?? false)
+                {
+                    _activeCommandTask = null;
+                }
+            }
+        }
+    }
+
+    private async Task<DTE2?> GetDteAsync(CancellationToken cancellationToken)
+    {
+        await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+        return await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+    }
+
+    private static bool IsDiagnosticsCommand(string commandName)
+    {
+        return string.Equals(commandName, "Tools.IdeWaitForReady", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "Tools.IdeGetErrorList", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "Tools.IdeGetWarnings", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "Tools.IdeBuildAndCaptureErrors", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "Tools.IdeDiagnosticsSnapshot", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "ready", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "errors", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "warnings", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(commandName, "build-errors", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ResolveTimeoutMilliseconds(string commandName, string? rawArgs, bool isBatch)
+    {
+        if (isBatch)
+        {
+            return DefaultCommandTimeoutMilliseconds;
+        }
+
+        var defaultTimeout = IsDiagnosticsCommand(commandName)
+            ? DefaultDiagnosticsTimeoutMilliseconds
+            : DefaultCommandTimeoutMilliseconds;
+
+        if (string.IsNullOrWhiteSpace(rawArgs))
+        {
+            return defaultTimeout;
+        }
+
+        try
+        {
+            var args = CommandArgumentParser.Parse(rawArgs);
+            var requested = args.GetInt32("timeout-ms", defaultTimeout);
+            return requested > 0 ? requested : defaultTimeout;
+        }
+        catch (CommandErrorException)
+        {
+            return defaultTimeout;
         }
     }
 
