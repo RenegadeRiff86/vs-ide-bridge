@@ -561,13 +561,37 @@ src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe mcp-server --instance <ins
 Exposed MCP tools use simple names:
 
 - `state`
+- `ready`
+- `tool_help`
+- `bridge_health`
+- `list_instances`
+- `bind_instance`
+- `bind_solution`
 - `errors`
 - `warnings`
 - `list_tabs`
 - `open_file`
+- `find_files`
+- `find_text`
+- `read_file`
 - `search_symbols`
+- `count_references`
+- `find_references`
+- `peek_definition`
+- `file_outline`
 - `quick_info`
 - `apply_diff`
+- `debug_threads`
+- `debug_stack`
+- `debug_locals`
+- `debug_modules`
+- `debug_watch`
+- `debug_exceptions`
+- `diagnostics_snapshot`
+- `build_configurations`
+- `set_build_configuration`
+- `build`
+- `open_solution`
 - `git_status`
 - `git_current_branch`
 - `git_remote_list`
@@ -592,6 +616,8 @@ Exposed MCP tools use simple names:
 - `git_push`
 - `github_issue_search`
 - `github_issue_close`
+
+Use `tool_help` to retrieve descriptions, schemas, and examples for every MCP tool in one call.
 
 Exposed MCP resources:
 

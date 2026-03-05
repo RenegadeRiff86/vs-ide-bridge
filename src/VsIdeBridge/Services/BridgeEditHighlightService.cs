@@ -9,6 +9,8 @@ namespace VsIdeBridge.Services;
 
 internal sealed class BridgeEditHighlightService
 {
+    private const int HighlightExpirationMinutes = 5;
+
     private sealed class BufferHighlights
     {
         public List<ITrackingSpan> AddedOrModified { get; } = new();
@@ -29,7 +31,7 @@ internal sealed class BridgeEditHighlightService
         var snapshot = view.TextSnapshot;
         var state = new BufferHighlights
         {
-            ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(5),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(HighlightExpirationMinutes),
         };
 
         foreach (var range in changedRanges)
@@ -55,7 +57,7 @@ internal sealed class BridgeEditHighlightService
         }
 
         _highlights.AddOrUpdate(snapshot.TextBuffer, state, (_, _) => state);
-        HighlightsChanged?.Invoke(this, new SnapshotSpanEventArgs(snapshot.GetFullSpan()));
+        HighlightsChanged?.Invoke(this, new SnapshotSpanEventArgs(new SnapshotSpan(snapshot, 0, snapshot.Length)));
     }
 
     public IReadOnlyList<(SnapshotSpan Span, string MarkerType)> GetHighlights(ITextSnapshot snapshot)

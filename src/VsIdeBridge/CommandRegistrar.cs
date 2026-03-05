@@ -34,10 +34,12 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new SearchNavigationCommands.IdeCloseDocumentCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeCloseFileCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeCloseAllExceptCurrentCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new SearchNavigationCommands.IdeSaveDocumentCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeActivateWindowCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeListWindowsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeExecuteVsCommandCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeFindAllReferencesCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new SearchNavigationCommands.IdeCountReferencesCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeShowCallHierarchyCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetDocumentSliceCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetSmartContextForQueryCommand(package, runtime, commandService));
@@ -67,6 +69,15 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new DebugBuildCommands.IdeDebugStepOverCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeDebugStepIntoCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeDebugStepOutCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeDebugThreadsCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeDebugStackCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeDebugLocalsCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeDebugModulesCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeDebugWatchCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeDebugExceptionsCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeDiagnosticsSnapshotCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeBuildConfigurationsCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new DebugBuildCommands.IdeSetBuildConfigurationCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeBuildSolutionCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeGetErrorListCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeGetWarningsCommand(package, runtime, commandService));

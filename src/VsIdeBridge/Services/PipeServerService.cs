@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using EnvDTE80;
@@ -23,9 +24,14 @@ namespace VsIdeBridge.Services;
 /// </summary>
 internal sealed class PipeServerService : IDisposable
 {
+    private const int PipeStreamBufferSize = 4096;
+
     private readonly VsIdeBridgePackage _package;
     private readonly IdeBridgeRuntime _runtime;
     private readonly string _discoveryFile;
+    private readonly MemoryDiscoveryStore _memoryDiscoveryStore = new();
+    private readonly bool _emitDiscoveryJson;
+    private readonly bool _emitMemoryDiscovery;
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
     private Task? _listenTask;
 
@@ -36,6 +42,9 @@ internal sealed class PipeServerService : IDisposable
         var discoveryDir = Path.Combine(Path.GetTempPath(), "vs-ide-bridge", "pipes");
         Directory.CreateDirectory(discoveryDir);
         _discoveryFile = Path.Combine(discoveryDir, $"bridge-{runtime.BridgeInstanceService.ProcessId}.json");
+        _emitDiscoveryJson = ReadBooleanEnvironmentVariable("VS_IDE_BRIDGE_EMIT_DISCOVERY_JSON", true);
+        var mode = Environment.GetEnvironmentVariable("VS_IDE_BRIDGE_DISCOVERY_MODE");
+        _emitMemoryDiscovery = !string.Equals(mode, "json-only", StringComparison.OrdinalIgnoreCase);
     }
 
     public void Start()
@@ -88,14 +97,52 @@ internal sealed class PipeServerService : IDisposable
 
     private void WriteDiscoveryFile(string? solutionPath)
     {
+        var record = _runtime.BridgeInstanceService.CreateDiscoveryRecord(solutionPath);
+
+        if (_emitDiscoveryJson)
+        {
+            try
+            {
+                var discoveryJson = JsonConvert.SerializeObject(record);
+                File.WriteAllText(_discoveryFile, discoveryJson, new UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update discovery file: {ex.Message}");
+            }
+        }
+
+        if (_emitMemoryDiscovery)
+        {
+            _memoryDiscoveryStore.Upsert(record);
+        }
+    }
+
+    private static bool ReadBooleanEnvironmentVariable(string name, bool defaultValue)
+    {
         try
         {
-            var discoveryJson = JsonConvert.SerializeObject(_runtime.BridgeInstanceService.CreateDiscoveryRecord(solutionPath));
-            File.WriteAllText(_discoveryFile, discoveryJson, new UTF8Encoding(false));
+            var raw = Environment.GetEnvironmentVariable(name);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return defaultValue;
+            }
+
+            if (bool.TryParse(raw, out var parsed))
+            {
+                return parsed;
+            }
+
+            if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric))
+            {
+                return numeric != 0;
+            }
+
+            return defaultValue;
         }
-        catch (Exception ex)
+        catch
         {
-            ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update discovery file: {ex.Message}");
+            return defaultValue;
         }
     }
 
@@ -191,8 +238,8 @@ internal sealed class PipeServerService : IDisposable
         {
             try
             {
-                var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
-                var writer = new StreamWriter(pipe, new UTF8Encoding(false), bufferSize: 4096, leaveOpen: true)
+                var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: PipeStreamBufferSize, leaveOpen: true);
+                var writer = new StreamWriter(pipe, new UTF8Encoding(false), bufferSize: PipeStreamBufferSize, leaveOpen: true)
                 {
                     AutoFlush = true,
                     NewLine = "\n",
@@ -322,9 +369,14 @@ internal sealed class PipeServerService : IDisposable
         _cts.Cancel();
         try
         {
-            if (File.Exists(_discoveryFile))
+            if (_emitDiscoveryJson && File.Exists(_discoveryFile))
                 File.Delete(_discoveryFile);
         }
         catch { }
+
+        if (_emitMemoryDiscovery)
+        {
+            _memoryDiscoveryStore.Remove(_runtime.BridgeInstanceService.InstanceId);
+        }
     }
 }

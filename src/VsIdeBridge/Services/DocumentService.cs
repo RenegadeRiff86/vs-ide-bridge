@@ -61,15 +61,11 @@ internal sealed class DocumentService
         };
     }
 
-    public async Task<JObject> OpenDocumentAsync(DTE2 dte, string filePath, int line, int column)
+    public async Task<JObject> OpenDocumentAsync(DTE2 dte, string filePath, int line, int column, bool allowDiskFallback = true)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
-        if (!File.Exists(normalizedPath))
-        {
-            throw new CommandErrorException("document_not_found", $"File not found: {normalizedPath}");
-        }
+        var normalizedPath = ResolveDocumentPath(dte, filePath, allowDiskFallback);
 
         var window = dte.ItemOperations.OpenFile(normalizedPath);
         window.Activate();
@@ -345,6 +341,55 @@ internal sealed class DocumentService
             ["saveChanges"] = saveChanges,
             ["count"] = closed.Count,
             ["items"] = closed,
+        };
+    }
+
+    public async Task<JObject> SaveDocumentAsync(DTE2 dte, string? filePath, bool saveAll)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        if (saveAll)
+        {
+            dte.Documents.SaveAll();
+            return new JObject
+            {
+                ["saveAll"] = true,
+                ["count"] = dte.Documents.Count,
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(filePath))
+        {
+            var normalized = PathNormalization.NormalizeFilePath(filePath);
+            var document = TryFindOpenDocumentByPath(dte, normalized);
+            if (document is null)
+            {
+                throw new CommandErrorException("document_not_found", $"No open document matching path: {filePath}");
+            }
+
+            document.Save();
+            return new JObject
+            {
+                ["saveAll"] = false,
+                ["count"] = 1,
+                ["path"] = TryGetDocumentFullName(document),
+                ["saved"] = TryGetDocumentSaved(document),
+            };
+        }
+
+        var active = dte.ActiveDocument;
+        if (active is null)
+        {
+            throw new CommandErrorException("no_active_document", "No active document to save.");
+        }
+
+        active.Save();
+        return new JObject
+        {
+            ["saveAll"] = false,
+            ["count"] = 1,
+            ["path"] = TryGetDocumentFullName(active),
+            ["saved"] = TryGetDocumentSaved(active),
         };
     }
 
@@ -863,19 +908,13 @@ internal sealed class DocumentService
         };
     }
 
-    private static string ResolveDocumentPath(DTE2 dte, string? filePath)
+    private static string ResolveDocumentPath(DTE2 dte, string? filePath, bool allowDiskFallback = true)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
         if (!string.IsNullOrWhiteSpace(filePath))
         {
-            var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
-            if (!File.Exists(normalizedPath))
-            {
-                throw new CommandErrorException("document_not_found", $"File not found: {normalizedPath}");
-            }
-
-            return normalizedPath;
+            return ResolveRequestedDocumentPath(dte, filePath!, allowDiskFallback);
         }
 
         if (dte.ActiveDocument is null || string.IsNullOrWhiteSpace(dte.ActiveDocument.FullName))
@@ -884,6 +923,73 @@ internal sealed class DocumentService
         }
 
         return PathNormalization.NormalizeFilePath(dte.ActiveDocument.FullName);
+    }
+
+    private static string ResolveRequestedDocumentPath(DTE2 dte, string filePath, bool allowDiskFallback)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (!Path.IsPathRooted(filePath))
+        {
+            var solutionPath = dte.Solution?.IsOpen == true ? dte.Solution.FullName : string.Empty;
+            var solutionDirectory = string.IsNullOrWhiteSpace(solutionPath)
+                ? string.Empty
+                : Path.GetDirectoryName(PathNormalization.NormalizeFilePath(solutionPath)) ?? string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(solutionDirectory))
+            {
+                var solutionRelativePath = PathNormalization.NormalizeFilePath(Path.Combine(solutionDirectory, filePath));
+                if (File.Exists(solutionRelativePath))
+                {
+                    return solutionRelativePath;
+                }
+            }
+        }
+
+        var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
+        if (File.Exists(normalizedPath))
+        {
+            return normalizedPath;
+        }
+
+        var allMatches = SolutionFileLocator.FindMatches(dte, filePath)
+            .Concat(allowDiskFallback ? SolutionFileLocator.FindDiskMatches(dte, filePath, maxResults: 250) : Array.Empty<SolutionFileLocator.Match>())
+            .GroupBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new
+            {
+                Path = group.Key,
+                Score = group.Max(item => item.Score),
+                Source = group.OrderByDescending(item => item.Score).First().Source,
+            })
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Path.Length)
+            .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (allMatches.Length == 0)
+        {
+            throw new CommandErrorException(
+                "document_not_found",
+                $"File not found: {normalizedPath}. No solution item matched '{filePath}'.");
+        }
+
+        var topScore = allMatches[0].Score;
+        var topMatches = allMatches
+            .Where(item => item.Score == topScore)
+            .ToArray();
+        var secondScore = allMatches.Length > topMatches.Length ? allMatches[topMatches.Length].Score : int.MinValue;
+        var clearLead = topScore - secondScore >= 50;
+
+        if (topMatches.Length == 1 && topScore >= 900 && clearLead)
+        {
+            return topMatches[0].Path;
+        }
+
+        var preview = string.Join(", ", allMatches.Take(5).Select(item => $"{item.Path} ({item.Source}, score={item.Score})"));
+        var suffix = allMatches.Length > 5 ? ", ..." : string.Empty;
+        throw new CommandErrorException(
+            "document_ambiguous",
+            $"Multiple solution items matched '{filePath}'. Use find-files to disambiguate. Candidates: {preview}{suffix}");
     }
 
     private static void TrySelectCurrentWord(TextSelection selection)

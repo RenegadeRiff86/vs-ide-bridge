@@ -20,6 +20,8 @@ internal static partial class CliApp
     {
         private static readonly string McpLog = @"C:\Temp\mcp-server.log";
         private static readonly byte[] RawJsonTerminator = [(byte)'\n'];
+        private static readonly byte[] HeaderTerminator = "\r\n\r\n"u8.ToArray();
+        private static readonly string[] SupportedProtocolVersions = ["2025-03-26", "2024-11-05"];
 
         private enum McpWireFormat
         {
@@ -34,19 +36,12 @@ internal static partial class CliApp
             public McpWireFormat WireFormat { get; set; }
         }
 
-        private sealed class BridgeBinding
+        private sealed class BridgeBinding(CliOptions options)
         {
-            private readonly CliOptions _options;
-            private readonly bool _verbose;
-            private BridgeInstanceSelector _selector;
+            private readonly CliOptions _options = options;
+            private readonly bool _verbose = options.GetFlag("verbose");
+            private BridgeInstanceSelector _selector = BridgeInstanceSelector.FromOptions(options);
             private PipeDiscovery? _cachedDiscovery;
-
-            public BridgeBinding(CliOptions options)
-            {
-                _options = options;
-                _selector = BridgeInstanceSelector.FromOptions(options);
-                _verbose = options.GetFlag("verbose");
-            }
 
             public async Task<JsonObject> SendAsync(JsonNode? id, string command, string args)
             {
@@ -112,6 +107,21 @@ internal static partial class CliApp
             }
 
             public PipeDiscovery? CurrentDiscovery => _cachedDiscovery;
+            public BridgeInstanceSelector CurrentSelector => _selector;
+            public DiscoveryMode DiscoveryMode => ResolveDiscoveryMode(_options);
+
+            public void PreferSolution(string? solutionHint)
+            {
+                _selector = new BridgeInstanceSelector
+                {
+                    InstanceId = _selector.InstanceId,
+                    ProcessId = _selector.ProcessId,
+                    PipeName = _selector.PipeName,
+                    SolutionHint = solutionHint,
+                };
+                _cachedDiscovery = null;
+                McpTrace($"selector updated to prefer solution hint '{solutionHint ?? string.Empty}'.");
+            }
 
             private async Task<JsonObject> SendCoreAsync(string command, string args)
             {
@@ -134,9 +144,11 @@ internal static partial class CliApp
                     return _cachedDiscovery;
                 }
 
-                var discovery = await PipeDiscovery.SelectAsync(_selector, _verbose).ConfigureAwait(false);
+                var discovery = await PipeDiscovery
+                    .SelectAsync(_selector, _verbose, ResolveDiscoveryMode(_options))
+                    .ConfigureAwait(false);
                 _cachedDiscovery = discovery;
-                McpTrace($"bound instance={discovery.InstanceId} pipe={discovery.PipeName} solution={discovery.SolutionPath}");
+                McpTrace($"bound instance={discovery.InstanceId} pipe={discovery.PipeName} source={discovery.Source} solution={discovery.SolutionPath}");
                 return discovery;
             }
 
@@ -181,6 +193,7 @@ internal static partial class CliApp
             var input = Console.OpenStandardInput();
             var output = Console.OpenStandardOutput();
             var bridgeBinding = new BridgeBinding(options);
+            var advertiseExtraCapabilities = !options.GetFlag("tools-only");
             var wireFormat = McpWireFormat.HeaderFramed;
             McpTrace("stdin/stdout opened");
             while (true)
@@ -201,7 +214,7 @@ internal static partial class CliApp
                     var request = incoming.Request;
                     var method = request["method"]?.GetValue<string>() ?? "(null)";
                     McpTrace($"got request method={method}");
-                    response = await HandleRequestAsync(request, bridgeBinding).ConfigureAwait(false);
+                    response = await HandleRequestAsync(request, bridgeBinding, advertiseExtraCapabilities).ConfigureAwait(false);
                     McpTrace($"handled method={method} response={(response is null ? "null" : "ok")}");
                 }
                 catch (McpRequestException ex)
@@ -229,7 +242,7 @@ internal static partial class CliApp
             }
         }
 
-        private static async Task<JsonObject?> HandleRequestAsync(JsonObject request, BridgeBinding bridgeBinding)
+        private static async Task<JsonObject?> HandleRequestAsync(JsonObject request, BridgeBinding bridgeBinding, bool advertiseExtraCapabilities)
         {
             var id = request["id"]?.DeepClone();
             var method = request["method"]?.GetValue<string>() ?? string.Empty;
@@ -240,10 +253,11 @@ internal static partial class CliApp
 
             JsonNode result = method switch
             {
-                "initialize" => InitializeResult(),
+                "initialize" => InitializeResult(@params, advertiseExtraCapabilities),
                 "tools/list" => new JsonObject { ["tools"] = ListTools() },
                 "tools/call" => await CallToolAsync(id, @params, bridgeBinding).ConfigureAwait(false),
                 "resources/list" => new JsonObject { ["resources"] = ListResources() },
+                "resources/templates/list" => new JsonObject { ["resourceTemplates"] = ListResourceTemplates() },
                 "resources/read" => await ReadResourceAsync(id, @params, bridgeBinding).ConfigureAwait(false),
                 "prompts/list" => new JsonObject { ["prompts"] = ListPrompts() },
                 "prompts/get" => GetPrompt(id, @params),
@@ -254,25 +268,57 @@ internal static partial class CliApp
             return new JsonObject { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
         }
 
-        private static JsonObject InitializeResult() => new()
+        private static JsonObject InitializeResult(JsonObject? @params, bool advertiseExtraCapabilities)
         {
-            ["protocolVersion"] = "2024-11-05",
-            ["capabilities"] = new JsonObject
+            var capabilities = new JsonObject
             {
                 ["tools"] = new JsonObject(),
-                ["resources"] = new JsonObject { ["subscribe"] = false },
-                ["prompts"] = new JsonObject(),
-            },
-            ["serverInfo"] = new JsonObject
-            {
-                ["name"] = "vs-ide-bridge-mcp",
-                ["version"] = "0.1.0",
-            },
-        };
+            };
 
-        private static JsonArray ListTools() => new()
+            if (advertiseExtraCapabilities)
+            {
+                capabilities["resources"] = new JsonObject { ["subscribe"] = false };
+                capabilities["prompts"] = new JsonObject();
+            }
+
+            return new JsonObject
+            {
+                ["protocolVersion"] = SelectProtocolVersion(@params?["protocolVersion"]?.GetValue<string>()),
+                ["capabilities"] = capabilities,
+                ["serverInfo"] = new JsonObject
+                {
+                    ["name"] = "vs-ide-bridge-mcp",
+                    ["version"] = "0.1.0",
+                },
+            };
+        }
+
+        private static string SelectProtocolVersion(string? clientProtocolVersion)
         {
+            if (string.IsNullOrWhiteSpace(clientProtocolVersion))
+            {
+                return SupportedProtocolVersions[0];
+            }
+
+            if (SupportedProtocolVersions.Contains(clientProtocolVersion, StringComparer.Ordinal))
+            {
+                return clientProtocolVersion;
+            }
+
+            // Compatibility fallback for clients that require an exact echo.
+            McpTrace($"initialize: client requested unsupported protocolVersion={clientProtocolVersion}; echoing for compatibility.");
+            return clientProtocolVersion;
+        }
+
+        private static JsonArray ListTools() =>
+        [
             Tool("state", "Capture current Visual Studio bridge state.", EmptySchema()),
+            Tool("ready", "Wait for Visual Studio/IntelliSense readiness before semantic diagnostics.", EmptySchema()),
+            Tool(
+                "tool_help",
+                "Return MCP tool help with descriptions, schemas, and examples. Pass name for one tool or omit for all.",
+                ObjectSchema(("name", StringSchema("Optional tool name for focused help."), false))),
+            Tool("bridge_health", "Get binding health, discovery source, and last round-trip metrics.", EmptySchema()),
             Tool("list_instances", "List live VS IDE Bridge instances visible to this MCP server.", EmptySchema()),
             Tool(
                 "bind_instance",
@@ -287,8 +333,28 @@ internal static partial class CliApp
                 "Bind this MCP session to the Visual Studio bridge instance whose solution matches a name or path hint.",
                 ObjectSchema(
                     ("solution", StringSchema("Solution name or path substring to match."), true))),
-            Tool("errors", "Get current errors.", EmptySchema()),
-            Tool("warnings", "Get current warnings.", EmptySchema()),
+            Tool(
+                "errors",
+                "Get current errors.",
+                ObjectSchema(
+                    ("wait_for_intellisense", BooleanSchema("Wait for IntelliSense readiness first (default true)."), false),
+                    ("quick", BooleanSchema("Read current snapshot immediately without stability polling (default false)."), false),
+                    ("max", IntegerSchema("Optional max rows."), false),
+                    ("code", StringSchema("Optional diagnostic code prefix filter."), false),
+                    ("project", StringSchema("Optional project filter."), false),
+                    ("path", StringSchema("Optional path filter."), false),
+                    ("text", StringSchema("Optional message text filter."), false))),
+            Tool(
+                "warnings",
+                "Get current warnings.",
+                ObjectSchema(
+                    ("wait_for_intellisense", BooleanSchema("Wait for IntelliSense readiness first (default true)."), false),
+                    ("quick", BooleanSchema("Read current snapshot immediately without stability polling (default false)."), false),
+                    ("max", IntegerSchema("Optional max rows."), false),
+                    ("code", StringSchema("Optional diagnostic code prefix filter."), false),
+                    ("project", StringSchema("Optional project filter."), false),
+                    ("path", StringSchema("Optional path filter."), false),
+                    ("text", StringSchema("Optional message text filter."), false))),
             Tool("list_tabs", "List open editor tabs.", EmptySchema()),
             Tool(
                 "open_file",
@@ -296,18 +362,32 @@ internal static partial class CliApp
                 ObjectSchema(
                     ("file", StringSchema("Absolute path, solution-relative path, or solution item name."), true),
                     ("line", IntegerSchema("Optional 1-based line number."), false),
-                    ("column", IntegerSchema("Optional 1-based column number."), false))),
+                    ("column", IntegerSchema("Optional 1-based column number."), false),
+                    ("allow_disk_fallback", BooleanSchema("Allow disk fallback under solution root when solution items do not match (default true)."), false))),
             Tool(
                 "find_files",
                 "Search solution explorer files by name or path fragment.",
                 ObjectSchema(
-                    ("query", StringSchema("File name or path fragment."), true))),
+                    ("query", StringSchema("File name or path fragment."), true),
+                    ("path", StringSchema("Optional path fragment filter."), false),
+                    ("extensions", ArrayOfStringsSchema("Optional extension filters like ['.cmake','.txt']."), false),
+                    ("max_results", IntegerSchema("Optional max result count (default 200)."), false),
+                    ("include_non_project", BooleanSchema("Include disk files under solution root that are not in projects (default true)."), false))),
             Tool(
                 "search_symbols",
                 "Search solution symbols by query.",
                 ObjectSchema(
                     ("query", StringSchema("Symbol search text."), true),
                     ("kind", StringSchema("Optional symbol kind filter."), false))),
+            Tool(
+                "count_references",
+                "Count symbol references at file/line/column with exact-or-explicit semantics.",
+                ObjectSchema(
+                    ("file", StringSchema("Absolute or solution-relative file path."), true),
+                    ("line", IntegerSchema("1-based line number."), true),
+                    ("column", IntegerSchema("1-based column number."), true),
+                    ("activate_window", BooleanSchema("Activate references window while counting (default true)."), false),
+                    ("timeout_ms", IntegerSchema("Optional window wait timeout in milliseconds."), false))),
             Tool(
                 "quick_info",
                 "Get quick info at file/line/column.",
@@ -319,7 +399,42 @@ internal static partial class CliApp
                 "apply_diff",
                 "Apply unified diff through Visual Studio editor buffer. Changes are saved and opened automatically.",
                 ObjectSchema(
-                    ("patch", StringSchema("Unified diff text."), true))),
+                    ("patch", StringSchema("Unified diff text."), true),
+                    ("post_check", BooleanSchema("If true, run ready and errors after applying diff."), false))),
+            Tool("debug_threads", "Get debugger thread snapshot.", EmptySchema()),
+            Tool(
+                "debug_stack",
+                "Get debugger stack frames for current or selected thread.",
+                ObjectSchema(
+                    ("thread_id", IntegerSchema("Optional debugger thread id."), false),
+                    ("max_frames", IntegerSchema("Optional max frames (default 100)."), false))),
+            Tool(
+                "debug_locals",
+                "Get local variables for the current stack frame.",
+                ObjectSchema(
+                    ("max", IntegerSchema("Optional max locals (default 200)."), false))),
+            Tool("debug_modules", "Get debugger modules snapshot (best effort).", EmptySchema()),
+            Tool(
+                "debug_watch",
+                "Evaluate one watch expression in break mode.",
+                ObjectSchema(
+                    ("expression", StringSchema("Debugger watch expression."), true),
+                    ("timeout_ms", IntegerSchema("Optional evaluation timeout milliseconds (default 1000)."), false))),
+            Tool("debug_exceptions", "Get debugger exception settings snapshot (best effort).", EmptySchema()),
+            Tool(
+                "diagnostics_snapshot",
+                "Capture IDE/debug/build state and errors/warnings in one response.",
+                ObjectSchema(
+                    ("wait_for_intellisense", BooleanSchema("Wait for IntelliSense before diagnostics (default true)."), false),
+                    ("quick", BooleanSchema("Use quick diagnostics snapshot mode (default false)."), false),
+                    ("max", IntegerSchema("Optional max diagnostics rows for errors/warnings."), false))),
+            Tool("build_configurations", "List solution build configurations/platforms.", EmptySchema()),
+            Tool(
+                "set_build_configuration",
+                "Activate one build configuration/platform pair.",
+                ObjectSchema(
+                    ("configuration", StringSchema("Build configuration name (e.g. Debug)."), true),
+                    ("platform", StringSchema("Optional platform (e.g. x64)."), false))),
             Tool("git_status", "Get repository status in porcelain mode.", EmptySchema()),
             Tool("git_current_branch", "Get current branch name (short).", EmptySchema()),
             Tool("git_remote_list", "List configured remotes with URLs.", EmptySchema()),
@@ -437,13 +552,15 @@ internal static partial class CliApp
                 "build",
                 "Trigger a solution build and return errors/warnings. Builds may take several minutes.",
                 ObjectSchema(
-                    ("configuration", StringSchema("Optional build configuration (e.g. Debug, Release)."), false))),
+                    ("configuration", StringSchema("Optional build configuration (e.g. Debug, Release)."), false),
+                    ("platform", StringSchema("Optional build platform (e.g. x64)."), false))),
             Tool(
                 "open_solution",
                 "Open a solution file in the current Visual Studio instance without opening a new window.",
                 ObjectSchema(
-                    ("solution", StringSchema("Absolute path to the .sln file to open."), true))),
-        };
+                    ("solution", StringSchema("Absolute path to the .sln file to open."), true),
+                    ("wait_for_ready", BooleanSchema("Wait for readiness after opening the solution (default true)."), false)))
+        ];
 
         private static JsonObject Tool(string name, string description, JsonObject inputSchema) => new()
         {
@@ -456,6 +573,16 @@ internal static partial class CliApp
         {
             var toolName = p?["name"]?.GetValue<string>() ?? throw new McpRequestException(id, -32602, "tools/call missing name.");
             var args = p?["arguments"] as JsonObject;
+
+            if (string.Equals(toolName, "tool_help", StringComparison.Ordinal))
+            {
+                return ToolHelp(id, args?["name"]?.GetValue<string>());
+            }
+
+            if (string.Equals(toolName, "bridge_health", StringComparison.Ordinal))
+            {
+                return await BridgeHealthAsync(id, bridgeBinding).ConfigureAwait(false);
+            }
 
             if (toolName.StartsWith("git_", StringComparison.Ordinal))
             {
@@ -513,28 +640,86 @@ internal static partial class CliApp
                 };
             }
 
+            if (string.Equals(toolName, "open_solution", StringComparison.Ordinal))
+            {
+                return await OpenSolutionAsync(id, args, bridgeBinding).ConfigureAwait(false);
+            }
+
             var (command, commandArgs) = toolName switch
             {
                 "state" => ("state", string.Empty),
-                "errors" => ("errors", "--quick --wait-for-intellisense false"),
-                "warnings" => ("warnings", "--quick --wait-for-intellisense false"),
+                "ready" => ("ready", string.Empty),
+                "errors" => ("errors", BuildArgs(
+                    ("wait-for-intellisense", GetBoolean(args, "wait_for_intellisense", true) ? "true" : "false"),
+                    ("quick", GetBoolean(args, "quick", false) ? "true" : "false"),
+                    ("max", args?["max"]?.ToString()),
+                    ("code", args?["code"]?.GetValue<string>()),
+                    ("project", args?["project"]?.GetValue<string>()),
+                    ("path", args?["path"]?.GetValue<string>()),
+                    ("text", args?["text"]?.GetValue<string>()))),
+                "warnings" => ("warnings", BuildArgs(
+                    ("wait-for-intellisense", GetBoolean(args, "wait_for_intellisense", true) ? "true" : "false"),
+                    ("quick", GetBoolean(args, "quick", false) ? "true" : "false"),
+                    ("max", args?["max"]?.ToString()),
+                    ("code", args?["code"]?.GetValue<string>()),
+                    ("project", args?["project"]?.GetValue<string>()),
+                    ("path", args?["path"]?.GetValue<string>()),
+                    ("text", args?["text"]?.GetValue<string>()))),
                 "list_tabs" => ("list-tabs", string.Empty),
-                "open_file" => ("open-document", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("line", args?["line"]?.ToString()), ("column", args?["column"]?.ToString()))),
-                "find_files" => ("find-files", BuildArgs(("query", args?["query"]?.GetValue<string>()))),
+                "open_file" => ("open-document", BuildArgs(
+                    ("file", args?["file"]?.GetValue<string>()),
+                    ("line", args?["line"]?.ToString()),
+                    ("column", args?["column"]?.ToString()),
+                    ("allow-disk-fallback", GetBoolean(args, "allow_disk_fallback", true) ? "true" : "false"))),
+                "find_files" => ("find-files", BuildArgs(
+                    ("query", args?["query"]?.GetValue<string>()),
+                    ("path", args?["path"]?.GetValue<string>()),
+                    ("extensions", GetCsv(args?["extensions"] as JsonArray)),
+                    ("max-results", args?["max_results"]?.ToString()),
+                    ("include-non-project", GetBoolean(args, "include_non_project", true) ? "true" : "false"))),
                 "search_symbols" => ("search-symbols", BuildArgs(("query", args?["query"]?.GetValue<string>()), ("kind", args?["kind"]?.GetValue<string>()))),
+                "count_references" => ("count-references", BuildArgs(
+                    ("file", args?["file"]?.GetValue<string>()),
+                    ("line", args?["line"]?.ToString()),
+                    ("column", args?["column"]?.ToString()),
+                    ("activate-window", GetBoolean(args, "activate_window", true) ? "true" : "false"),
+                    ("timeout-ms", args?["timeout_ms"]?.ToString()))),
                 "quick_info" => ("quick-info", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("line", args?["line"]?.ToString()), ("column", args?["column"]?.ToString()))),
                 "apply_diff" => ("apply-diff", BuildArgs(("patch-text-base64", Convert.ToBase64String(Encoding.UTF8.GetBytes(args?["patch"]?.GetValue<string>() ?? string.Empty))), ("open-changed-files", "true"), ("save-changed-files", "true"))),
+                "debug_threads" => ("debug-threads", string.Empty),
+                "debug_stack" => ("debug-stack", BuildArgs(("thread-id", args?["thread_id"]?.ToString()), ("max-frames", args?["max_frames"]?.ToString()))),
+                "debug_locals" => ("debug-locals", BuildArgs(("max", args?["max"]?.ToString()))),
+                "debug_modules" => ("debug-modules", string.Empty),
+                "debug_watch" => ("debug-watch", BuildArgs(("expression", args?["expression"]?.GetValue<string>()), ("timeout-ms", args?["timeout_ms"]?.ToString()))),
+                "debug_exceptions" => ("debug-exceptions", string.Empty),
+                "diagnostics_snapshot" => ("diagnostics-snapshot", BuildArgs(
+                    ("wait-for-intellisense", GetBoolean(args, "wait_for_intellisense", true) ? "true" : "false"),
+                    ("quick", GetBoolean(args, "quick", false) ? "true" : "false"),
+                    ("max", args?["max"]?.ToString()))),
+                "build_configurations" => ("build-configurations", string.Empty),
+                "set_build_configuration" => ("set-build-configuration", BuildArgs(("configuration", args?["configuration"]?.GetValue<string>()), ("platform", args?["platform"]?.GetValue<string>()))),
                 "find_text" => ("find-text", BuildArgs(("query", args?["query"]?.GetValue<string>()), ("path", args?["path"]?.GetValue<string>()), ("scope", args?["scope"]?.GetValue<string>()), ("match-case", args?["match_case"]?.GetValue<bool>() == true ? "true" : null), ("whole-word", args?["whole_word"]?.GetValue<bool>() == true ? "true" : null))),
                 "read_file" => ("document-slice", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("start-line", args?["start_line"]?.ToString()), ("end-line", args?["end_line"]?.ToString()), ("line", args?["line"]?.ToString()), ("context-before", args?["context_before"]?.ToString()), ("context-after", args?["context_after"]?.ToString()))),
                 "find_references" => ("find-references", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("line", args?["line"]?.ToString()), ("column", args?["column"]?.ToString()))),
                 "peek_definition" => ("peek-definition", BuildArgs(("file", args?["file"]?.GetValue<string>()), ("line", args?["line"]?.ToString()), ("column", args?["column"]?.ToString()))),
                 "file_outline" => ("file-outline", BuildArgs(("file", args?["file"]?.GetValue<string>()))),
-                "build" => ("build", BuildArgs(("configuration", args?["configuration"]?.GetValue<string>()))),
-                "open_solution" => ("open-solution", BuildArgs(("solution", args?["solution"]?.GetValue<string>()))),
+                "build" => ("build", BuildArgs(("configuration", args?["configuration"]?.GetValue<string>()), ("platform", args?["platform"]?.GetValue<string>()))),
                 _ => throw new McpRequestException(id, -32602, $"Unknown MCP tool: {toolName}"),
             };
 
             var response = await SendBridgeAsync(id, bridgeBinding, command, commandArgs).ConfigureAwait(false);
+
+            if (string.Equals(toolName, "apply_diff", StringComparison.Ordinal) && GetBoolean(args, "post_check", false))
+            {
+                var ready = await SendBridgeAsync(id, bridgeBinding, "ready", string.Empty).ConfigureAwait(false);
+                var errors = await SendBridgeAsync(id, bridgeBinding, "errors", "--wait-for-intellisense true").ConfigureAwait(false);
+                response["postCheck"] = new JsonObject
+                {
+                    ["ready"] = ready,
+                    ["errors"] = errors,
+                };
+            }
+
             return new JsonObject
             {
                 ["content"] = new JsonArray
@@ -550,9 +735,175 @@ internal static partial class CliApp
             };
         }
 
+        private static JsonNode ToolHelp(JsonNode? id, string? toolName)
+        {
+            var tools = ListTools()
+                .OfType<JsonObject>()
+                .ToArray();
+
+            if (!string.IsNullOrWhiteSpace(toolName))
+            {
+                var match = tools.FirstOrDefault(tool =>
+                    string.Equals(tool["name"]?.GetValue<string>(), toolName, StringComparison.Ordinal));
+                if (match is null)
+                {
+                    throw new McpRequestException(id, -32602, $"Unknown MCP tool: {toolName}");
+                }
+
+                var item = BuildToolHelpEntry(match);
+                var result = new JsonObject
+                {
+                    ["count"] = 1,
+                    ["items"] = new JsonArray { item },
+                };
+                return WrapToolResult(result, isError: false);
+            }
+
+            var entries = new JsonArray();
+            foreach (var tool in tools.OrderBy(item => item["name"]?.GetValue<string>(), StringComparer.Ordinal))
+            {
+                entries.Add(BuildToolHelpEntry(tool));
+            }
+
+            var catalog = new JsonObject
+            {
+                ["count"] = entries.Count,
+                ["items"] = entries,
+            };
+
+            return WrapToolResult(catalog, isError: false);
+        }
+
+        private static JsonObject BuildToolHelpEntry(JsonObject tool)
+        {
+            var name = tool["name"]?.GetValue<string>() ?? string.Empty;
+            var inputSchema = tool["inputSchema"] as JsonObject ?? EmptySchema();
+            return new JsonObject
+            {
+                ["name"] = name,
+                ["description"] = tool["description"]?.GetValue<string>() ?? string.Empty,
+                ["inputSchema"] = inputSchema.DeepClone(),
+                ["example"] = GetToolExample(name, inputSchema),
+            };
+        }
+
+        private static JsonNode WrapToolResult(JsonNode structuredContent, bool isError)
+        {
+            return new JsonObject
+            {
+                ["content"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "text",
+                        ["text"] = structuredContent.ToJsonString(JsonOptions),
+                    },
+                },
+                ["isError"] = isError,
+                ["structuredContent"] = structuredContent.DeepClone(),
+            };
+        }
+
+        private static string GetToolExample(string name, JsonObject inputSchema)
+        {
+            var overrideExample = name switch
+            {
+                "bind_solution" => "{ \"solution\": \"VsIdeBridge.sln\" }",
+                "open_solution" => "{ \"solution\": \"C:\\\\repo\\\\VsIdeBridge.sln\", \"wait_for_ready\": true }",
+                "open_file" => "{ \"file\": \"src\\\\VsIdeBridgeCli\\\\Program.cs\", \"line\": 1 }",
+                "find_files" => "{ \"query\": \"CMakeLists.txt\", \"include_non_project\": true }",
+                "errors" => "{ \"wait_for_intellisense\": true, \"quick\": false }",
+                "warnings" => "{ \"wait_for_intellisense\": true, \"quick\": false }",
+                "apply_diff" => "{ \"patch\": \"*** Begin Patch\\n*** End Patch\\n\", \"post_check\": true }",
+                "debug_watch" => "{ \"expression\": \"count\", \"timeout_ms\": 1000 }",
+                "set_build_configuration" => "{ \"configuration\": \"Debug\", \"platform\": \"x64\" }",
+                "count_references" => "{ \"file\": \"src\\\\foo.cpp\", \"line\": 42, \"column\": 13 }",
+                _ => string.Empty,
+            };
+
+            if (!string.IsNullOrWhiteSpace(overrideExample))
+            {
+                return overrideExample;
+            }
+
+            var example = new JsonObject();
+            var requiredNames = inputSchema["required"] as JsonArray ?? new JsonArray();
+            var properties = inputSchema["properties"] as JsonObject ?? new JsonObject();
+            foreach (var required in requiredNames.OfType<JsonNode>())
+            {
+                var nameToken = required.GetValue<string>();
+                var propertySchema = properties[nameToken] as JsonObject;
+                var type = propertySchema?["type"]?.GetValue<string>() ?? "string";
+                example[nameToken] = type switch
+                {
+                    "integer" => 1,
+                    "boolean" => true,
+                    "array" => new JsonArray("value"),
+                    _ => "value",
+                };
+            }
+
+            return example.ToJsonString(JsonOptions);
+        }
+
+        private static async Task<JsonNode> BridgeHealthAsync(JsonNode? id, BridgeBinding bridgeBinding)
+        {
+            var sw = Stopwatch.StartNew();
+            var state = await SendBridgeAsync(id, bridgeBinding, "state", string.Empty).ConfigureAwait(false);
+            var ready = await SendBridgeAsync(id, bridgeBinding, "ready", string.Empty).ConfigureAwait(false);
+            sw.Stop();
+
+            var discovery = bridgeBinding.CurrentDiscovery;
+            var result = new JsonObject
+            {
+                ["success"] = ResponseFormatter.IsSuccess(state),
+                ["binding"] = discovery is null ? null : DiscoveryToJson(discovery),
+                ["selector"] = SelectorToJson(bridgeBinding.CurrentSelector),
+                ["roundTripMs"] = Math.Round(sw.Elapsed.TotalMilliseconds, 1),
+                ["state"] = state,
+                ["lastReady"] = ready,
+            };
+
+            return WrapToolResult(result, isError: false);
+        }
+
+        private static async Task<JsonNode> OpenSolutionAsync(JsonNode? id, JsonObject? args, BridgeBinding bridgeBinding)
+        {
+            var solution = args?["solution"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(solution))
+            {
+                throw new McpRequestException(id, -32602, "open_solution requires a non-empty solution path.");
+            }
+
+            var waitForReady = GetBoolean(args, "wait_for_ready", true);
+            var open = await SendBridgeAsync(id, bridgeBinding, "open-solution", BuildArgs(("solution", solution))).ConfigureAwait(false);
+
+            JsonObject? ready = null;
+            JsonObject? state = null;
+            if (ResponseFormatter.IsSuccess(open))
+            {
+                bridgeBinding.PreferSolution(solution);
+                if (waitForReady)
+                {
+                    ready = await SendBridgeAsync(id, bridgeBinding, "ready", string.Empty).ConfigureAwait(false);
+                }
+
+                state = await SendBridgeAsync(id, bridgeBinding, "state", string.Empty).ConfigureAwait(false);
+            }
+
+            var result = new JsonObject
+            {
+                ["open"] = open,
+                ["ready"] = ready,
+                ["state"] = state,
+            };
+
+            return WrapToolResult(result, isError: !ResponseFormatter.IsSuccess(open));
+        }
+
         private static async Task<JsonNode> ListInstancesAsync(BridgeBinding bridgeBinding)
         {
-            var instances = await PipeDiscovery.ListAsync(verbose: false).ConfigureAwait(false);
+            var instances = await PipeDiscovery.ListAsync(verbose: false, bridgeBinding.DiscoveryMode).ConfigureAwait(false);
             var boundInstanceId = bridgeBinding.CurrentDiscovery?.InstanceId;
             var items = new JsonArray();
             foreach (var instance in instances.OrderByDescending(item => item.LastWriteTimeUtc))
@@ -584,13 +935,15 @@ internal static partial class CliApp
             };
         }
 
-        private static JsonArray ListResources() => new()
-        {
+        private static JsonArray ListResources() =>
+        [
             Resource("bridge://current-solution", "Current solution"),
             Resource("bridge://active-document", "Active document"),
             Resource("bridge://open-tabs", "Open tabs"),
             Resource("bridge://error-list-snapshot", "Error list snapshot"),
-        };
+        ];
+
+        private static JsonArray ListResourceTemplates() => [];
 
         private static JsonObject Resource(string uri, string name) => new()
         {
@@ -625,15 +978,15 @@ internal static partial class CliApp
             };
         }
 
-        private static JsonArray ListPrompts() => new()
-        {
+        private static JsonArray ListPrompts() =>
+        [
             Prompt("help", "Show bridge and MCP usage guidance."),
             Prompt("fix_current_errors", "Gather errors and propose patch flow."),
             Prompt("open_solution_and_wait_ready", "Run ensure then ready flow."),
             Prompt("git_review_before_commit", "Review status, diff, and log before committing."),
             Prompt("git_sync_with_remote", "Fetch, inspect divergence, then pull or push safely."),
             Prompt("github_issue_triage", "Search open issues, inspect details, and close resolved items."),
-        };
+        ];
 
         private static JsonObject Prompt(string name, string description) => new()
         {
@@ -647,9 +1000,9 @@ internal static partial class CliApp
             var name = p?["name"]?.GetValue<string>() ?? throw new McpRequestException(id, -32602, "prompts/get missing name.");
             var text = name switch
             {
-                "help" => "Key tools: bind_solution or bind_instance to connect, open_solution to load a .sln, state to inspect VS state. Navigation: find_files, find_text, open_file, search_symbols, quick_info, read_file, find_references, peek_definition, file_outline. Editing: apply_diff. Diagnostics: errors, warnings, build. Git: git_status, git_diff_unstaged, git_diff_staged, git_log, git_add, git_commit, git_push, git_pull. GitHub: github_issue_search, github_issue_close.",
+                "help" => "Key tools: bind_solution or bind_instance to connect, open_solution to load a .sln, state/ready/bridge_health for status. Navigation: find_files, find_text, open_file, search_symbols, count_references, quick_info, read_file, find_references, peek_definition, file_outline. Editing: apply_diff (optionally post_check). Diagnostics: errors, warnings, diagnostics_snapshot, build, build_configurations, set_build_configuration. Debug: debug_threads, debug_stack, debug_locals, debug_modules, debug_watch, debug_exceptions. Use tool_help for per-tool schemas and examples.",
                 "fix_current_errors" => "Bind to the right solution first, call errors to list problems. Use read_file or find_text to inspect code, quick_info and find_references for context, then apply_diff to fix.",
-                "open_solution_and_wait_ready" => "Call open_solution with the absolute .sln path. Then call state to confirm the solution loaded.",
+                "open_solution_and_wait_ready" => "Call open_solution with the absolute .sln path and wait_for_ready=true (default). Then call state or bridge_health.",
                 "git_review_before_commit" => "Call git_status, git_diff_unstaged, git_diff_staged, git_log, then git_add and git_commit when ready.",
                 "git_sync_with_remote" => "Call git_fetch, git_status, and git_log first. Then use git_pull when behind or git_push when ahead.",
                 "github_issue_triage" => "Use github_issue_search with state=open, review candidates, then use github_issue_close with issue_number and optional comment.",
@@ -684,6 +1037,7 @@ internal static partial class CliApp
                 ["pipeName"] = discovery.PipeName,
                 ["solutionPath"] = discovery.SolutionPath,
                 ["solutionName"] = discovery.SolutionName,
+                ["source"] = discovery.Source,
                 ["startedAtUtc"] = discovery.StartedAtUtc,
                 ["discoveryFile"] = discovery.DiscoveryFile,
                 ["lastWriteTimeUtc"] = discovery.LastWriteTimeUtc.ToString("O"),
@@ -710,6 +1064,33 @@ internal static partial class CliApp
             }
 
             return builder.Build();
+        }
+
+        private static bool GetBoolean(JsonObject? args, string name, bool defaultValue)
+        {
+            return args?[name]?.GetValue<bool?>() ?? defaultValue;
+        }
+
+        private static string? GetCsv(JsonArray? values)
+        {
+            if (values is null || values.Count == 0)
+            {
+                return null;
+            }
+
+            var items = values
+                .OfType<JsonNode>()
+                .Select(item => item.GetValue<string>())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (items.Length == 0)
+            {
+                return null;
+            }
+
+            return string.Join(",", items);
         }
 
         private static JsonObject EmptySchema() => new()
@@ -998,9 +1379,9 @@ internal static partial class CliApp
 
         private static List<string> GetOptionalPaths(JsonObject? args, string name)
         {
-            if (args?[name] is not JsonArray array)
-                return [];
-            return array.OfType<JsonNode>().Select(node => node.GetValue<string>()).Where(path => !string.IsNullOrWhiteSpace(path)).ToList();
+            return args?[name] is JsonArray array
+                ? [.. array.OfType<JsonNode>().Select(node => node.GetValue<string>()).Where(path => !string.IsNullOrWhiteSpace(path))]
+                : [];
         }
 
         private static string JoinGitPaths(IEnumerable<string> paths)
@@ -1192,12 +1573,8 @@ internal static partial class CliApp
                 return null;
             }
 
-            var lengthLine = header.Split('\n').FirstOrDefault(line => line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
-            if (lengthLine is null)
-            {
-                throw new McpRequestException(null, -32600, "MCP request missing Content-Length header.");
-            }
-
+            var lengthLine = header.Split('\n').FirstOrDefault(line => line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                ?? throw new McpRequestException(null, -32600, "MCP request missing Content-Length header.");
             if (!int.TryParse(lengthLine.Split(':', 2)[1].Trim(), out var length) || length < 0)
             {
                 throw new McpRequestException(null, -32600, "MCP request has invalid Content-Length.");
@@ -1321,7 +1698,7 @@ internal static partial class CliApp
             lastFour.Enqueue(firstByte);
             while (true)
             {
-                if (lastFour.Count == 4 && lastFour.SequenceEqual(new byte[] { (byte)'\r', (byte)'\n', (byte)'\r', (byte)'\n' }))
+                if (lastFour.Count == 4 && lastFour.SequenceEqual(HeaderTerminator))
                 {
                     McpTrace($"ReadHeaderAsync: got CRLF header after {bytes.Count} bytes");
                     return Encoding.ASCII.GetString([.. bytes]);
@@ -1370,18 +1747,10 @@ internal static partial class CliApp
             await output.FlushAsync().ConfigureAwait(false);
         }
 
-        private sealed class McpRequestException : Exception
+        private sealed class McpRequestException(JsonNode? id, int code, string message) : Exception(message)
         {
-            public McpRequestException(JsonNode? id, int code, string message)
-                : base(message)
-            {
-                Id = id;
-                Code = code;
-            }
-
-            public JsonNode? Id { get; }
-
-            public int Code { get; }
+            public JsonNode? Id { get; } = id;
+            public int Code { get; } = code;
         }
     }
 }

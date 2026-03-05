@@ -87,7 +87,7 @@ internal sealed class BridgeEditHighlightTaggerProvider : IViewTaggerProvider
 
         private void OnHighlightsChanged(object? sender, SnapshotSpanEventArgs e)
         {
-            if (e.SnapshotSpan.Snapshot.TextBuffer == _buffer)
+            if (e.Span.Snapshot.TextBuffer == _buffer)
             {
                 TagsChanged?.Invoke(this, e);
             }

@@ -82,23 +82,56 @@ internal sealed class SearchService
         vsCMElement.vsCMElementVariable,
     };
 
-    public async Task<JObject> FindFilesAsync(IdeCommandContext context, string query)
+    public async Task<JObject> FindFilesAsync(
+        IdeCommandContext context,
+        string query,
+        string? pathFilter,
+        IReadOnlyCollection<string> extensions,
+        int maxResults,
+        bool includeNonProject)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
-        var matches = new JArray(
-            EnumerateSolutionFiles(context.Dte)
-                .Where(item => item.Path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                               Path.GetFileName(item.Path).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
-                .Select(item => new JObject
+        var merged = new Dictionary<string, SolutionFileLocator.Match>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in SolutionFileLocator.FindMatches(context.Dte, query, pathFilter, extensions))
+        {
+            merged[item.Path] = item;
+        }
+
+        if (includeNonProject)
+        {
+            foreach (var item in SolutionFileLocator.FindDiskMatches(context.Dte, query, pathFilter, extensions, Math.Max(100, maxResults * 2)))
+            {
+                if (!merged.TryGetValue(item.Path, out var existing) || item.Score > existing.Score)
                 {
-                    ["path"] = item.Path,
-                    ["project"] = item.ProjectUniqueName,
-                }));
+                    merged[item.Path] = item;
+                }
+            }
+        }
+
+        var items = merged.Values
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Path.Length)
+            .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Max(1, maxResults))
+            .ToArray();
+
+        var matches = new JArray(items.Select(item => new JObject
+        {
+            ["path"] = item.Path,
+            ["name"] = Path.GetFileName(item.Path),
+            ["project"] = item.ProjectUniqueName,
+            ["score"] = item.Score,
+            ["source"] = item.Source,
+        }));
 
         return new JObject
         {
             ["query"] = query,
+            ["pathFilter"] = pathFilter ?? string.Empty,
+            ["extensions"] = new JArray(extensions.OrderBy(item => item, StringComparer.OrdinalIgnoreCase)),
+            ["includeNonProject"] = includeNonProject,
             ["count"] = matches.Count,
             ["matches"] = matches,
         };

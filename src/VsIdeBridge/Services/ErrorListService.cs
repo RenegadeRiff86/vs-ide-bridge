@@ -49,6 +49,7 @@ internal sealed class ErrorListService
 {
     private const int StableSampleCount = 3;
     private const int PopulationPollIntervalMilliseconds = 2000;
+    private const int DefaultWaitTimeoutMilliseconds = 90_000;
 
     private static readonly string[] BuildOutputPaneNames = { "Build", "Build Order" };
     private static readonly Regex ExplicitCodePattern = new(
@@ -150,13 +151,13 @@ internal sealed class ErrorListService
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
         EnsureErrorListWindow(context.Dte);
 
-        var timeout = timeoutMilliseconds > 0 ? timeoutMilliseconds : 90000;
+        var timeout = timeoutMilliseconds > 0 ? timeoutMilliseconds : DefaultWaitTimeoutMilliseconds;
         var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeout);
         var lastRows = Array.Empty<JObject>();
         int? lastCount = null;
         var stableSamples = 0;
 
-        while (true)
+        while (DateTimeOffset.UtcNow < deadline)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
 
@@ -191,14 +192,11 @@ internal sealed class ErrorListService
                 }
             }
 
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                return lastRows;
-            }
-
             await Task.Delay(PopulationPollIntervalMilliseconds, context.CancellationToken).ConfigureAwait(false);
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
         }
+
+        return lastRows;
     }
 
     private static IReadOnlyList<JObject> ReadRows(DTE2 dte)

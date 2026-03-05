@@ -1,6 +1,8 @@
 using System;
 using System.ComponentModel.Design;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
@@ -52,7 +54,21 @@ internal static class SearchNavigationCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             var query = args.GetRequiredString("query");
-            var data = await context.Runtime.SearchService.FindFilesAsync(context, query).ConfigureAwait(true);
+            var rawExtensions = args.GetString("extensions", string.Empty) ?? string.Empty;
+            var extensions = rawExtensions
+                .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(item => item.Trim())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var data = await context.Runtime.SearchService.FindFilesAsync(
+                context,
+                query,
+                args.GetString("path"),
+                extensions,
+                args.GetInt32("max-results", 200),
+                args.GetBoolean("include-non-project", true)).ConfigureAwait(true);
             return new CommandExecutionResult($"Found {data["count"]} file(s).", data);
         }
     }
@@ -72,7 +88,8 @@ internal static class SearchNavigationCommands
                 context.Dte,
                 args.GetRequiredString("file"),
                 args.GetInt32("line", 1),
-                args.GetInt32("column", 1)).ConfigureAwait(true);
+                args.GetInt32("column", 1),
+                args.GetBoolean("allow-disk-fallback", true)).ConfigureAwait(true);
 
             return new CommandExecutionResult("Document activated.", data);
         }
@@ -192,6 +209,27 @@ internal static class SearchNavigationCommands
         }
     }
 
+    internal sealed class IdeSaveDocumentCommand : IdeCommandBase
+    {
+        public IdeSaveDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0232)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeSaveDocument";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var saveAll = args.GetBoolean("all", false);
+            var filePath = args.GetString("file");
+            var data = await context.Runtime.DocumentService
+                .SaveDocumentAsync(context.Dte, filePath, saveAll)
+                .ConfigureAwait(true);
+            var count = data["count"]?.Value<int>() ?? 0;
+            return new CommandExecutionResult(saveAll ? $"Saved all {count} document(s)." : $"Saved {count} document(s).", data);
+        }
+    }
+
     internal sealed class IdeActivateWindowCommand : IdeCommandBase
     {
         public IdeActivateWindowCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
@@ -280,6 +318,55 @@ internal static class SearchNavigationCommands
                 .ConfigureAwait(true);
 
             return new CommandExecutionResult("Find All References executed.", data);
+        }
+    }
+
+    internal sealed class IdeCountReferencesCommand : IdeCommandBase
+    {
+        private static readonly string[] CandidateCommands = { "Edit.FindAllReferences" };
+        private static readonly Regex CountPattern = new(@"\b(?<count>\d+)\b", RegexOptions.Compiled);
+
+        public IdeCountReferencesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x023C)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeCountReferences";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.VsCommandService.ExecuteSymbolCommandAsync(
+                    context.Dte,
+                    context.Runtime.DocumentService,
+                    context.Runtime.WindowService,
+                    CandidateCommands,
+                    args.GetString("file"),
+                    args.GetString("document"),
+                    args.GetNullableInt32("line"),
+                    args.GetNullableInt32("column"),
+                    args.GetBoolean("select-word", false),
+                    "references",
+                    args.GetBoolean("activate-window", true),
+                    args.GetInt32("timeout-ms", 5000))
+                .ConfigureAwait(true);
+
+            var caption = data["resultWindow"]?["caption"]?.ToString() ?? string.Empty;
+            var match = CountPattern.Match(caption);
+            if (match.Success && int.TryParse(match.Groups["count"].Value, out var count))
+            {
+                data["countKnown"] = true;
+                data["count"] = count;
+            }
+            else
+            {
+                data["countKnown"] = false;
+                data["count"] = null;
+                data["reason"] = string.IsNullOrWhiteSpace(caption)
+                    ? "Could not determine reference count from the references tool window."
+                    : $"Could not parse an exact count from window caption '{caption}'.";
+            }
+
+            return new CommandExecutionResult("Reference count request completed.", data);
         }
     }
 

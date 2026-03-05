@@ -14,6 +14,7 @@ internal sealed class FailureContextService
     private const int SymbolMaxDepth = 4;
     private const int MaxErrorSymbolRows = 8;
     private const int MaxRelevantSymbolsPerRow = 5;
+    private const int ErrorListTimeoutMilliseconds = 1_500;
 
     public async Task<JObject> CaptureAsync(IdeCommandContext? context)
     {
@@ -50,7 +51,7 @@ internal sealed class FailureContextService
         try
         {
             errorList = await context.Runtime.ErrorListService
-                .GetErrorListAsync(context, waitForIntellisense: false, timeoutMilliseconds: 1500, quickSnapshot: true)
+                .GetErrorListAsync(context, waitForIntellisense: false, timeoutMilliseconds: ErrorListTimeoutMilliseconds, quickSnapshot: true)
                 .ConfigureAwait(true);
             data["errorList"] = errorList;
         }

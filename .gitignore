@@ -6,3 +6,5 @@ src/VsIdeBridge/bin/
 src/VsIdeBridge/obj/
 src/VsIdeBridgeCli/bin/
 src/VsIdeBridgeCli/obj/
+tests/**/bin/
+tests/**/obj/

@@ -163,6 +163,187 @@ internal static class DebugBuildCommands
         }
     }
 
+    internal sealed class IdeDebugThreadsCommand : IdeCommandBase
+    {
+        public IdeDebugThreadsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0233)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeDebugThreads";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DebuggerService.GetThreadsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult($"Captured {data["count"]} debugger thread(s).", data);
+        }
+    }
+
+    internal sealed class IdeDebugStackCommand : IdeCommandBase
+    {
+        public IdeDebugStackCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0234)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeDebugStack";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DebuggerService.GetStackAsync(
+                context.Dte,
+                args.GetNullableInt32("thread-id"),
+                args.GetInt32("max-frames", 100)).ConfigureAwait(true);
+            return new CommandExecutionResult($"Captured {data["count"]} stack frame(s).", data);
+        }
+    }
+
+    internal sealed class IdeDebugLocalsCommand : IdeCommandBase
+    {
+        public IdeDebugLocalsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0235)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeDebugLocals";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DebuggerService.GetLocalsAsync(
+                context.Dte,
+                args.GetInt32("max", 200)).ConfigureAwait(true);
+            return new CommandExecutionResult($"Captured {data["count"]} local variable(s).", data);
+        }
+    }
+
+    internal sealed class IdeDebugModulesCommand : IdeCommandBase
+    {
+        public IdeDebugModulesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0236)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeDebugModules";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DebuggerService.GetModulesAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult($"Captured module snapshot for {data["count"]} process(es).", data);
+        }
+    }
+
+    internal sealed class IdeDebugWatchCommand : IdeCommandBase
+    {
+        public IdeDebugWatchCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0237)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeDebugWatch";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DebuggerService.EvaluateWatchAsync(
+                context.Dte,
+                args.GetRequiredString("expression"),
+                args.GetInt32("timeout-ms", 1000)).ConfigureAwait(true);
+            return new CommandExecutionResult("Debugger watch expression evaluated.", data);
+        }
+    }
+
+    internal sealed class IdeDebugExceptionsCommand : IdeCommandBase
+    {
+        public IdeDebugExceptionsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0238)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeDebugExceptions";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.DebuggerService.GetExceptionsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult("Debugger exception settings snapshot captured.", data);
+        }
+    }
+
+    internal sealed class IdeDiagnosticsSnapshotCommand : IdeCommandBase
+    {
+        public IdeDiagnosticsSnapshotCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0239)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeDiagnosticsSnapshot";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var timeout = args.GetInt32("timeout-ms", 120000);
+            var waitForIntellisense = args.GetBoolean("wait-for-intellisense", true);
+            var max = args.GetNullableInt32("max");
+
+            var errors = await context.Runtime.ErrorListService.GetErrorListAsync(
+                context,
+                waitForIntellisense,
+                timeout,
+                args.GetBoolean("quick", false),
+                new ErrorListQuery { Severity = "error", Max = max }).ConfigureAwait(true);
+
+            var warnings = await context.Runtime.ErrorListService.GetErrorListAsync(
+                context,
+                false,
+                timeout,
+                args.GetBoolean("quick", false),
+                new ErrorListQuery { Severity = "warning", Max = max }).ConfigureAwait(true);
+
+            var data = new JObject
+            {
+                ["state"] = await context.Runtime.IdeStateService.GetStateAsync(context.Dte).ConfigureAwait(true),
+                ["debug"] = await context.Runtime.DebuggerService.GetStateAsync(context.Dte).ConfigureAwait(true),
+                ["build"] = await context.Runtime.BuildService.GetBuildStateAsync(context.Dte).ConfigureAwait(true),
+                ["errors"] = errors,
+                ["warnings"] = warnings,
+            };
+
+            return new CommandExecutionResult("Diagnostics snapshot captured.", data);
+        }
+    }
+
+    internal sealed class IdeBuildConfigurationsCommand : IdeCommandBase
+    {
+        public IdeBuildConfigurationsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x023A)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeBuildConfigurations";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.BuildService.ListConfigurationsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult($"Captured {data["count"]} build configuration(s).", data);
+        }
+    }
+
+    internal sealed class IdeSetBuildConfigurationCommand : IdeCommandBase
+    {
+        public IdeSetBuildConfigurationCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x023B)
+        {
+        }
+
+        protected override string CanonicalName => "Tools.IdeSetBuildConfiguration";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var data = await context.Runtime.BuildService.SetConfigurationAsync(
+                context.Dte,
+                args.GetRequiredString("configuration"),
+                args.GetString("platform")).ConfigureAwait(true);
+            return new CommandExecutionResult("Build configuration activated.", data);
+        }
+    }
+
     internal sealed class IdeBuildSolutionCommand : IdeCommandBase
     {
         public IdeBuildSolutionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
