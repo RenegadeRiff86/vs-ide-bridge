@@ -957,8 +957,8 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         var topMatches = allMatches
             .Where(item => item.Score == topScore)
             .ToArray();
-        var secondScore = allMatches.Length > topMatches.Length ? allMatches[topMatches.Length].Score : int.MinValue;
-        var clearLead = topScore - secondScore >= 50;
+        var secondScore = allMatches.Length > topMatches.Length ? (int?)allMatches[topMatches.Length].Score : null;
+        var clearLead = secondScore is null || topScore - secondScore.Value >= 50;
 
         if (topMatches.Length == 1 && topScore >= 900 && clearLead)
         {

@@ -136,7 +136,7 @@ internal static partial class CliApp
             private async Task<JsonObject> SendCoreAsync(string command, string args)
             {
                 var discovery = await GetDiscoveryAsync().ConfigureAwait(false);
-                await using var client = new PipeClient(discovery.PipeName, _options.GetInt32("timeout-ms", 10_000));
+                await using var client = new PipeClient(discovery.PipeName, _options.GetInt32("timeout-ms", 130_000));
                 var request = new JsonObject
                 {
                     ["id"] = Guid.NewGuid().ToString("N")[..8],
@@ -1027,6 +1027,8 @@ internal static partial class CliApp
             }
 
             var waitForReady = GetBoolean(args, "wait_for_ready", true);
+            // Clear solution hint before sending so instance lookup succeeds even when VS has a different solution open.
+            bridgeBinding.PreferSolution(null);
             var open = await SendBridgeAsync(id, bridgeBinding, "open-solution", BuildArgs(("solution", solution))).ConfigureAwait(false);
 
             JsonObject? ready = null;
