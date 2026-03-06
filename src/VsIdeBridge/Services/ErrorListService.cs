@@ -63,7 +63,7 @@ internal sealed class ErrorListService(ReadinessService readinessService)
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex StringLiteralPattern = new("\"([^\"\\r\\n]{4,})\"", RegexOptions.Compiled);
     private static readonly Regex NumberLiteralPattern = new(@"(?<![A-Za-z0-9_\.])(?<value>-?\d+(?:\.\d+)?)\b", RegexOptions.Compiled);
-    private static readonly Regex SuspiciousRoundDownPattern = new(@"Math\s*\.\s*(?:Floor|Truncate)\s*\(", RegexOptions.Compiled);
+    private static readonly Regex SuspiciousRoundDownPattern = new(@"Math\s*\.\s*(?<op>Floor|Truncate)\s*\(", RegexOptions.Compiled);
     private static readonly Regex SuppressionIntentPattern = new(@"\b(?:fix|silence|suppress|workaround|appease)\b.{0,30}\b(?:error|warning|lint|analyzer)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private readonly ReadinessService _readinessService = readinessService;
@@ -109,7 +109,7 @@ internal sealed class ErrorListService(ReadinessService readinessService)
             }
         }
 
-        var bestPracticeRows = AnalyzeBestPracticeFindings(rows);
+        var bestPracticeRows = await Task.Run(() => AnalyzeBestPracticeFindings(rows), context.CancellationToken).ConfigureAwait(false);
         if (bestPracticeRows.Count > 0)
         {
             rows = rows.Concat(bestPracticeRows).ToArray();
@@ -228,14 +228,15 @@ internal sealed class ErrorListService(ReadinessService readinessService)
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (SuspiciousRoundDownPattern.IsMatch(line) && SuppressionIntentPattern.IsMatch(line))
+            var roundDownMatch = SuspiciousRoundDownPattern.Match(line);
+            if (roundDownMatch.Success && SuppressionIntentPattern.IsMatch(line))
             {
                 yield return CreateBestPracticeRow(
                     code: "BP1003",
                     message: "Possible error suppression via rounding down detected. Investigate root cause instead of forcing Math.Floor/Math.Truncate.",
                     file: file,
                     line: i + 1,
-                    symbol: "Math.Floor");
+                    symbol: $"Math.{roundDownMatch.Groups["op"].Value}");
                 yield break;
             }
         }
@@ -245,7 +246,7 @@ internal sealed class ErrorListService(ReadinessService readinessService)
     {
         return new JObject
         {
-            ["severity"] = "Error",
+            ["severity"] = "Message",
             ["code"] = code,
             ["codeFamily"] = "best-practice",
             ["tool"] = "best-practice",
