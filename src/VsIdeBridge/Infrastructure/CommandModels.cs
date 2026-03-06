@@ -2,20 +2,13 @@ using Newtonsoft.Json.Linq;
 
 namespace VsIdeBridge.Infrastructure;
 
-internal sealed class CommandExecutionResult
+internal sealed class CommandExecutionResult(string summary, JToken? data = null, JArray? warnings = null)
 {
-    public CommandExecutionResult(string summary, JToken? data = null, JArray? warnings = null)
-    {
-        Summary = summary;
-        Data = data ?? new JObject();
-        Warnings = warnings ?? new JArray();
-    }
+    public string Summary { get; } = summary;
 
-    public string Summary { get; }
+    public JToken Data { get; } = data ?? new JObject();
 
-    public JToken Data { get; }
-
-    public JArray Warnings { get; }
+    public JArray Warnings { get; } = warnings ?? [];
 }
 
 internal sealed class CommandEnvelope
@@ -34,7 +27,7 @@ internal sealed class CommandEnvelope
 
     public string Summary { get; set; } = string.Empty;
 
-    public JArray Warnings { get; set; } = new JArray();
+    public JArray Warnings { get; set; } = [];
 
     public object? Error { get; set; }
 

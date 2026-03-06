@@ -1,28 +1,18 @@
-using System.Threading;
 using EnvDTE80;
-using Microsoft.VisualStudio.Shell;
+using System.Threading;
 using VsIdeBridge.Services;
 
 namespace VsIdeBridge.Infrastructure;
 
-internal sealed class IdeCommandContext
+internal sealed class IdeCommandContext(VsIdeBridgePackage package, DTE2 dte, OutputPaneLogger logger, IdeBridgeRuntime runtime, CancellationToken cancellationToken)
 {
-    public IdeCommandContext(VsIdeBridgePackage package, DTE2 dte, OutputPaneLogger logger, IdeBridgeRuntime runtime, CancellationToken cancellationToken)
-    {
-        Package = package;
-        Dte = dte;
-        Logger = logger;
-        Runtime = runtime;
-        CancellationToken = cancellationToken;
-    }
+    public VsIdeBridgePackage Package { get; } = package;
 
-    public VsIdeBridgePackage Package { get; }
+    public DTE2 Dte { get; } = dte;
 
-    public DTE2 Dte { get; }
+    public OutputPaneLogger Logger { get; } = logger;
 
-    public OutputPaneLogger Logger { get; }
+    public IdeBridgeRuntime Runtime { get; } = runtime;
 
-    public IdeBridgeRuntime Runtime { get; }
-
-    public CancellationToken CancellationToken { get; }
+    public CancellationToken CancellationToken { get; } = cancellationToken;
 }

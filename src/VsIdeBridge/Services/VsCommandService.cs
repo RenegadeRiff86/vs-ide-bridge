@@ -1,11 +1,11 @@
-using System;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -206,11 +206,9 @@ internal sealed class VsCommandService
     {
         if (bindings is object[] items)
         {
-            return items.Select(item => item?.ToString() ?? string.Empty)
-                .Where(item => !string.IsNullOrWhiteSpace(item))
-                .ToArray();
+            return [.. items.Select(item => item?.ToString() ?? string.Empty).Where(item => !string.IsNullOrWhiteSpace(item))];
         }
 
-        return Array.Empty<string>();
+        return [];
     }
 }

@@ -171,13 +171,19 @@ Optional parameters:
 
 ## Command Surface
 
-The tables below list the preferred simple pipe names. The live `catalog` command also returns the legacy `Tools.Ide*` names for compatibility.
+The tables below list the preferred simple pipe names. The live `catalog` command returns a standardized payload for LLM callers:
+
+- `schemaVersion` and `generatedAtUtc` at the top level
+- `catalog.commands[]` as the canonical list
+- per-command fields: `name`, `canonicalName`, `description`, `example`, `aliases`
+
+Compatibility fields (`commands[]`, `legacyCommands[]`, `commandDetails[]`) are still emitted.
 
 ### Core
 
 | Command | Description |
 |---------|-------------|
-| `help` | List all registered commands |
+| `help` | List all registered commands (`catalog` is an alias) |
 | `state` | Snapshot of IDE state (solution path, active document, etc.) |
 | `ready` | Block until IntelliSense is available |
 | `open-solution` | Open a solution file |
@@ -561,13 +567,38 @@ src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe mcp-server --instance <ins
 Exposed MCP tools use simple names:
 
 - `state`
+- `ready`
+- `tool_help`
+- `help` (alias of `tool_help`)
+- `bridge_health`
+- `list_instances`
+- `bind_instance`
+- `bind_solution`
 - `errors`
 - `warnings`
 - `list_tabs`
 - `open_file`
+- `find_files`
+- `find_text`
+- `read_file`
 - `search_symbols`
+- `count_references`
+- `find_references`
+- `peek_definition`
+- `file_outline`
 - `quick_info`
 - `apply_diff`
+- `debug_threads`
+- `debug_stack`
+- `debug_locals`
+- `debug_modules`
+- `debug_watch`
+- `debug_exceptions`
+- `diagnostics_snapshot`
+- `build_configurations`
+- `set_build_configuration`
+- `build`
+- `open_solution`
 - `git_status`
 - `git_current_branch`
 - `git_remote_list`
@@ -592,6 +623,8 @@ Exposed MCP tools use simple names:
 - `git_push`
 - `github_issue_search`
 - `github_issue_close`
+
+Use `tool_help` to retrieve descriptions, schemas, examples, and bridge command metadata (`bridgeCommand`, `bridgeExample`) for every MCP tool in one call.
 
 Exposed MCP resources:
 

@@ -1,19 +1,37 @@
+using EnvDTE;
+using EnvDTE80;
+using Microsoft.VisualStudio.Shell;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using EnvDTE;
-using EnvDTE80;
-using Microsoft.VisualStudio.Shell;
-using Newtonsoft.Json.Linq;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
 
 internal sealed class PatchService
 {
+    private static readonly string[] HunkBoundaryPrefixes =
+    [
+        "@@ ",
+        "--- ",
+        "diff --git ",
+        "index ",
+        "Index: ",
+        "new file mode ",
+        "deleted file mode ",
+        "old mode ",
+        "new mode ",
+        "similarity index ",
+        "rename from ",
+        "rename to ",
+        "Binary files ",
+        "GIT binary patch",
+    ];
+
     private sealed class ChangedRange
     {
         public int StartLine { get; set; }
@@ -27,7 +45,7 @@ internal sealed class PatchService
 
         public string NewPath { get; set; } = string.Empty;
 
-        public List<Hunk> Hunks { get; set; } = new List<Hunk>();
+        public List<Hunk> Hunks { get; set; } = [];
     }
 
     private sealed class Hunk
@@ -40,7 +58,7 @@ internal sealed class PatchService
 
         public int NewCount { get; set; }
 
-        public List<HunkLine> Lines { get; set; } = new List<HunkLine>();
+        public List<HunkLine> Lines { get; set; } = [];
     }
 
     private sealed class HunkLine
@@ -58,9 +76,9 @@ internal sealed class PatchService
 
         public bool DeleteFile { get; set; }
 
-        public List<ChangedRange> ChangedRanges { get; set; } = new List<ChangedRange>();
+        public List<ChangedRange> ChangedRanges { get; set; } = [];
 
-        public List<int> DeletedLineMarkers { get; set; } = new List<int>();
+        public List<int> DeletedLineMarkers { get; set; } = [];
     }
 
     public async Task<JObject> ApplyUnifiedDiffAsync(
@@ -95,7 +113,7 @@ internal sealed class PatchService
         else
         {
             patchSource = "inline-base64";
-            patchText = patchText ?? string.Empty;
+            patchText ??= string.Empty;
         }
 
         var filePatches = ParseUnifiedDiff(patchText);
@@ -141,7 +159,7 @@ internal sealed class PatchService
                     result.FirstChangedLine,
                     1,
                     saveChangedFiles,
-                    result.ChangedRanges.Select(range => (range.StartLine, range.EndLine)).ToArray(),
+                    [.. result.ChangedRanges.Select(range => (range.StartLine, range.EndLine))],
                     result.DeletedLineMarkers).ConfigureAwait(true);
                 filesToFocus.Add((target.Path, result.ChangedRanges));
 
@@ -530,7 +548,7 @@ internal sealed class PatchService
         }
 
         var deleteFile = patch.NewPath == "/dev/null";
-        var content = JoinLines(resultLines, newline, deleteFile ? false : hadFinalNewline || patch.OldPath == "/dev/null");
+        var content = JoinLines(resultLines, newline, !deleteFile && (hadFinalNewline || patch.OldPath == "/dev/null"));
         return new ApplyFilePatchResult
         {
             Content = content,
@@ -582,7 +600,7 @@ internal sealed class PatchService
                 {
                     OldPath = oldPath,
                     NewPath = newPath,
-                    Hunks = new List<Hunk>(),
+                    Hunks = [],
                 };
                 patches.Add(currentFile);
                 lineIndex++;
@@ -601,7 +619,7 @@ internal sealed class PatchService
                 while (lineIndex < lines.Length)
                 {
                     var hunkLine = lines[lineIndex];
-                    if (hunkLine.StartsWith("@@ ", StringComparison.Ordinal) || hunkLine.StartsWith("--- ", StringComparison.Ordinal))
+                    if (IsHunkBoundaryLine(hunkLine))
                     {
                         break;
                     }
@@ -646,6 +664,19 @@ internal sealed class PatchService
         return patches;
     }
 
+    private static bool IsHunkBoundaryLine(string line)
+    {
+        foreach (var prefix in HunkBoundaryPrefixes)
+        {
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static Hunk ParseHunkHeader(string line)
     {
         var match = Regex.Match(line, @"^@@ -(?<oldStart>\d+)(,(?<oldCount>\d+))? \+(?<newStart>\d+)(,(?<newCount>\d+))? @@");
@@ -660,7 +691,7 @@ internal sealed class PatchService
             OriginalCount = ParseHunkCount(match.Groups["oldCount"].Value),
             NewStart = int.Parse(match.Groups["newStart"].Value),
             NewCount = ParseHunkCount(match.Groups["newCount"].Value),
-            Lines = new List<HunkLine>(),
+            Lines = [],
         };
     }
 
@@ -699,7 +730,7 @@ internal sealed class PatchService
             normalized = normalized.Substring(0, normalized.Length - 1);
         }
 
-        return normalized.Length == 0 ? new List<string>() : normalized.Split('\n').ToList();
+        return normalized.Length == 0 ? [] : [.. normalized.Split('\n')];
     }
 
     private static string JoinLines(IReadOnlyList<string> lines, string newline, bool includeTrailingNewline)

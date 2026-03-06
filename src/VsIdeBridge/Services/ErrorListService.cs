@@ -1,15 +1,15 @@
+using EnvDTE;
+using EnvDTE80;
+using Microsoft.VisualStudio.Shell;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using EnvDTE;
-using EnvDTE80;
-using Microsoft.VisualStudio.Shell;
-using Newtonsoft.Json.Linq;
-using System.Runtime.InteropServices;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -40,17 +40,18 @@ internal sealed class ErrorListQuery
             ["path"] = Path ?? string.Empty,
             ["text"] = Text ?? string.Empty,
             ["groupBy"] = GroupBy ?? string.Empty,
-            ["max"] = Max.HasValue ? Max.Value : JValue.CreateNull(),
+            ["max"] = (JToken?)Max ?? JValue.CreateNull(),
         };
     }
 }
 
-internal sealed class ErrorListService
+internal sealed class ErrorListService(ReadinessService readinessService)
 {
     private const int StableSampleCount = 3;
     private const int PopulationPollIntervalMilliseconds = 2000;
+    private const int DefaultWaitTimeoutMilliseconds = 90_000;
 
-    private static readonly string[] BuildOutputPaneNames = { "Build", "Build Order" };
+    private static readonly string[] BuildOutputPaneNames = ["Build", "Build Order"];
     private static readonly Regex ExplicitCodePattern = new(
         @"\b(?:LINK|LNK|MSB|VCR|E|C)\d+\b|\blnt-[a-z0-9-]+\b|\bInt-make\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -61,12 +62,7 @@ internal sealed class ErrorListService
         @"^(?<project>.+?)\s*>\s*(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-Za-z0-9-]*)\s*:\s*(?<message>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private readonly ReadinessService _readinessService;
-
-    public ErrorListService(ReadinessService readinessService)
-    {
-        _readinessService = readinessService;
-    }
+    private readonly ReadinessService _readinessService = readinessService;
 
     public async Task<JObject> GetErrorListAsync(
         IdeCommandContext context,
@@ -91,7 +87,7 @@ internal sealed class ErrorListService
             }
             catch (InvalidOperationException)
             {
-                rows = Array.Empty<JObject>();
+                rows = [];
             }
 
             if (rows.Count == 0)
@@ -101,7 +97,7 @@ internal sealed class ErrorListService
         }
         else
         {
-            rows = await WaitForRowsAsync(context, timeoutMilliseconds).ConfigureAwait(true);
+            rows = await WaitForRowsAsync(context, timeoutMilliseconds, intellisenseReady: waitForIntellisense).ConfigureAwait(true);
             if (rows.Count == 0)
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
@@ -112,13 +108,13 @@ internal sealed class ErrorListService
         var severityCounts = CreateSeverityCounts();
         foreach (var row in filteredRows)
         {
-            severityCounts[(string)row["severity"]!] += 1;
+            severityCounts[(string)row["severity"]!]++;
         }
 
         var totalSeverityCounts = CreateSeverityCounts();
         foreach (var row in rows)
         {
-            totalSeverityCounts[(string)row["severity"]!] += 1;
+            totalSeverityCounts[(string)row["severity"]!]++;
         }
 
         return new JObject
@@ -129,7 +125,7 @@ internal sealed class ErrorListService
             ["totalSeverityCounts"] = JObject.FromObject(totalSeverityCounts),
             ["hasErrors"] = severityCounts["Error"] > 0,
             ["hasWarnings"] = severityCounts["Warning"] > 0,
-            ["filter"] = query?.ToJson() ?? new JObject(),
+            ["filter"] = query?.ToJson() ?? [],
             ["rows"] = new JArray(filteredRows),
             ["groups"] = BuildGroups(filteredRows, query?.GroupBy),
         };
@@ -145,18 +141,20 @@ internal sealed class ErrorListService
         };
     }
 
-    private async Task<IReadOnlyList<JObject>> WaitForRowsAsync(IdeCommandContext context, int timeoutMilliseconds)
+    private async Task<IReadOnlyList<JObject>> WaitForRowsAsync(IdeCommandContext context, int timeoutMilliseconds, bool intellisenseReady = false)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
         EnsureErrorListWindow(context.Dte);
 
-        var timeout = timeoutMilliseconds > 0 ? timeoutMilliseconds : 90000;
+        var timeout = timeoutMilliseconds > 0 ? timeoutMilliseconds : DefaultWaitTimeoutMilliseconds;
         var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeout);
         var lastRows = Array.Empty<JObject>();
         int? lastCount = null;
         var stableSamples = 0;
+        // When IntelliSense has already confirmed ready, one stable read is sufficient.
+        var requiredStableSamples = intellisenseReady ? 1 : StableSampleCount;
 
-        while (true)
+        while (DateTimeOffset.UtcNow < deadline)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
 
@@ -182,23 +180,20 @@ internal sealed class ErrorListService
                     stableSamples++;
                 }
 
-                lastRows = rows.ToArray();
+                lastRows = [.. rows];
                 // A clean solution should return promptly once the Error List is stable,
                 // instead of waiting out the full timeout for a non-zero row count.
-                if (stableSamples >= StableSampleCount)
+                if (stableSamples >= requiredStableSamples)
                 {
                     return rows;
                 }
             }
 
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                return lastRows;
-            }
-
             await Task.Delay(PopulationPollIntervalMilliseconds, context.CancellationToken).ConfigureAwait(false);
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
         }
+
+        return lastRows;
     }
 
     private static IReadOnlyList<JObject> ReadRows(DTE2 dte)
@@ -244,13 +239,13 @@ internal sealed class ErrorListService
         var pane = TryGetBuildOutputPane(dte);
         if (pane is null)
         {
-            return Array.Empty<JObject>();
+            return [];
         }
 
         var text = TryReadBuildOutputText(dte, pane);
         if (string.IsNullOrWhiteSpace(text))
         {
-            return Array.Empty<JObject>();
+            return [];
         }
 
         var rows = new List<JObject>();
@@ -413,7 +408,21 @@ internal sealed class ErrorListService
 
     private static string NormalizeFilePath(string value)
     {
-        return string.IsNullOrWhiteSpace(value) ? string.Empty : PathNormalization.NormalizeFilePath(value);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return PathNormalization.NormalizeFilePath(value);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Build output can include non-path tokens in the file column; keep the raw value
+            // so diagnostics still flow without failing the entire error-list request.
+            return value;
+        }
     }
 
     private static int ParseOptionalInt(string value)
@@ -600,7 +609,7 @@ internal sealed class ErrorListService
             }
         }
 
-        return symbols.Take(8).ToArray();
+        return [.. symbols.Take(8)];
     }
 
     private static bool LooksLikeSymbol(string value)
@@ -659,12 +668,12 @@ internal sealed class ErrorListService
                 .IndexOf(query.Text, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        if (query.Max.HasValue && query.Max.Value > 0)
+        if (query.Max > 0)
         {
             filtered = filtered.Take(query.Max.Value);
         }
 
-        return filtered.ToArray();
+        return [.. filtered];
     }
 
     private static string NormalizeSeverity(string? severity)
@@ -682,7 +691,7 @@ internal sealed class ErrorListService
     {
         if (string.IsNullOrWhiteSpace(groupBy))
         {
-            return new JArray();
+            return [];
         }
 
         var groupKey = groupBy!;
@@ -692,12 +701,12 @@ internal sealed class ErrorListService
             "file" => row => (string?)row["file"] ?? string.Empty,
             "project" => row => (string?)row["project"] ?? string.Empty,
             "tool" => row => (string?)row["tool"] ?? string.Empty,
-            _ => row => string.Empty,
+            _ => static _ => string.Empty,
         };
 
         if (groupKey is not ("code" or "file" or "project" or "tool"))
         {
-            return new JArray();
+            return [];
         }
 
         return new JArray(rows

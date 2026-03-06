@@ -1,21 +1,20 @@
-using System;
-using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
 
-internal sealed class BuildService
+internal sealed class BuildService(ReadinessService readinessService)
 {
-    private readonly ReadinessService _readinessService;
+    private const int DefaultBuildTimeoutMilliseconds = 600_000;
+    private const int BuildPollIntervalMilliseconds = 500;
 
-    public BuildService(ReadinessService readinessService)
-    {
-        _readinessService = readinessService;
-    }
+    private readonly ReadinessService _readinessService = readinessService;
 
     public async Task<JObject> BuildSolutionAsync(IdeCommandContext context, int timeoutMilliseconds, string? configuration, string? platform)
     {
@@ -36,9 +35,10 @@ internal sealed class BuildService
         TryActivateConfiguration(solutionBuild, configuration, platform);
 
         var startedAt = DateTimeOffset.UtcNow;
+        await context.Logger.LogAsync($"IDE Bridge: build starting ({dte.Solution.FullName})", context.CancellationToken).ConfigureAwait(true);
         solutionBuild.Build(true);
 
-        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMilliseconds <= 0 ? 600000 : timeoutMilliseconds);
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeoutMilliseconds <= 0 ? DefaultBuildTimeoutMilliseconds : timeoutMilliseconds);
         while (solutionBuild.BuildState == vsBuildState.vsBuildStateInProgress)
         {
             if (DateTimeOffset.UtcNow >= deadline)
@@ -46,9 +46,15 @@ internal sealed class BuildService
                 throw new CommandErrorException("timeout", "Timed out waiting for the build to finish.");
             }
 
-            await Task.Delay(500, context.CancellationToken).ConfigureAwait(false);
+            await Task.Delay(BuildPollIntervalMilliseconds, context.CancellationToken).ConfigureAwait(false);
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
         }
+
+        var elapsed = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds;
+        var succeeded = solutionBuild.LastBuildInfo == 0;
+        await context.Logger.LogAsync(
+            $"IDE Bridge: build {(succeeded ? "succeeded" : "failed")} in {elapsed:0}ms",
+            context.CancellationToken).ConfigureAwait(true);
 
         return new JObject
         {
@@ -58,6 +64,109 @@ internal sealed class BuildService
             ["lastBuildInfo"] = solutionBuild.LastBuildInfo,
             ["succeeded"] = solutionBuild.LastBuildInfo == 0,
             ["elapsedMilliseconds"] = (DateTimeOffset.UtcNow - startedAt).TotalMilliseconds,
+        };
+    }
+
+    public async Task<JObject> GetBuildStateAsync(DTE2 dte)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        if (dte.Solution is null || !dte.Solution.IsOpen)
+        {
+            throw new CommandErrorException("solution_not_open", "No solution is open.");
+        }
+
+        var solutionBuild = dte.Solution.SolutionBuild;
+        var lastBuildInfoKnown = true;
+        var lastBuildInfoValue = 0;
+        string? lastBuildInfoReason = null;
+
+        try
+        {
+            lastBuildInfoValue = solutionBuild.LastBuildInfo;
+        }
+        catch (COMException ex)
+        {
+            lastBuildInfoKnown = false;
+            lastBuildInfoReason = ex.Message;
+        }
+
+        var data = new JObject
+        {
+            ["solutionPath"] = dte.Solution.FullName,
+            ["activeConfiguration"] = solutionBuild.ActiveConfiguration?.Name ?? string.Empty,
+            ["activePlatform"] = (solutionBuild.ActiveConfiguration as SolutionConfiguration2)?.PlatformName ?? string.Empty,
+            ["buildState"] = solutionBuild.BuildState.ToString(),
+            ["lastBuildInfoKnown"] = lastBuildInfoKnown,
+            ["lastBuildInfo"] = lastBuildInfoKnown ? lastBuildInfoValue : JValue.CreateNull(),
+        };
+
+        if (!string.IsNullOrWhiteSpace(lastBuildInfoReason))
+        {
+            data["lastBuildInfoReason"] = lastBuildInfoReason;
+        }
+
+        return data;
+    }
+
+    public async Task<JObject> ListConfigurationsAsync(DTE2 dte)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        if (dte.Solution is null || !dte.Solution.IsOpen)
+        {
+            throw new CommandErrorException("solution_not_open", "No solution is open.");
+        }
+
+        var solutionBuild = dte.Solution.SolutionBuild;
+        var activeConfiguration = solutionBuild.ActiveConfiguration?.Name ?? string.Empty;
+        var activePlatform = (solutionBuild.ActiveConfiguration as SolutionConfiguration2)?.PlatformName ?? string.Empty;
+        var items = new JArray();
+
+        foreach (SolutionConfiguration2 item in solutionBuild.SolutionConfigurations)
+        {
+            items.Add(new JObject
+            {
+                ["name"] = item.Name ?? string.Empty,
+                ["platform"] = item.PlatformName ?? string.Empty,
+                ["isActive"] = string.Equals(item.Name, activeConfiguration, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(item.PlatformName ?? string.Empty, activePlatform, StringComparison.OrdinalIgnoreCase),
+            });
+        }
+
+        return new JObject
+        {
+            ["solutionPath"] = dte.Solution.FullName,
+            ["activeConfiguration"] = activeConfiguration,
+            ["activePlatform"] = activePlatform,
+            ["count"] = items.Count,
+            ["items"] = items,
+        };
+    }
+
+    public async Task<JObject> SetConfigurationAsync(DTE2 dte, string configuration, string? platform)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        if (dte.Solution is null || !dte.Solution.IsOpen)
+        {
+            throw new CommandErrorException("solution_not_open", "No solution is open.");
+        }
+
+        var solutionBuild = dte.Solution.SolutionBuild;
+        var activated = TryActivateConfiguration(solutionBuild, configuration, platform, requireMatch: true);
+        if (!activated)
+        {
+            throw new CommandErrorException(
+                "build_configuration_not_found",
+                $"Configuration '{configuration}' with platform '{platform ?? "<any>"}' was not found.");
+        }
+
+        return new JObject
+        {
+            ["solutionPath"] = dte.Solution.FullName,
+            ["activeConfiguration"] = solutionBuild.ActiveConfiguration?.Name ?? string.Empty,
+            ["activePlatform"] = (solutionBuild.ActiveConfiguration as SolutionConfiguration2)?.PlatformName ?? string.Empty,
         };
     }
 
@@ -72,13 +181,13 @@ internal sealed class BuildService
         return build;
     }
 
-    private static void TryActivateConfiguration(SolutionBuild solutionBuild, string? configuration, string? platform)
+    private static bool TryActivateConfiguration(SolutionBuild solutionBuild, string? configuration, string? platform, bool requireMatch = false)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
         if (string.IsNullOrWhiteSpace(configuration) && string.IsNullOrWhiteSpace(platform))
         {
-            return;
+            return true;
         }
 
         foreach (SolutionConfiguration2 item in solutionBuild.SolutionConfigurations)
@@ -96,7 +205,9 @@ internal sealed class BuildService
             }
 
             item.Activate();
-            return;
+            return true;
         }
+
+        return !requireMatch;
     }
 }

@@ -1,9 +1,9 @@
+using Microsoft.VisualStudio.Shell;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio.Shell;
-using Newtonsoft.Json.Linq;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -14,19 +14,19 @@ internal sealed class FailureContextService
     private const int SymbolMaxDepth = 4;
     private const int MaxErrorSymbolRows = 8;
     private const int MaxRelevantSymbolsPerRow = 5;
+    private const int ErrorListTimeoutMilliseconds = 1_500;
 
     public async Task<JObject> CaptureAsync(IdeCommandContext? context)
     {
         if (context is null)
         {
-            return new JObject();
+            return [];
         }
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
         var data = new JObject();
         JObject? state = null;
-        JObject? openTabs = null;
         JObject? errorList = null;
 
         try
@@ -40,7 +40,7 @@ internal sealed class FailureContextService
 
         try
         {
-            openTabs = await context.Runtime.DocumentService.ListOpenTabsAsync(context.Dte).ConfigureAwait(true);
+            JObject? openTabs = await context.Runtime.DocumentService.ListOpenTabsAsync(context.Dte).ConfigureAwait(true);
             data["openTabs"] = openTabs;
         }
         catch
@@ -50,7 +50,7 @@ internal sealed class FailureContextService
         try
         {
             errorList = await context.Runtime.ErrorListService
-                .GetErrorListAsync(context, waitForIntellisense: false, timeoutMilliseconds: 1500, quickSnapshot: true)
+                .GetErrorListAsync(context, waitForIntellisense: false, timeoutMilliseconds: ErrorListTimeoutMilliseconds, quickSnapshot: true)
                 .ConfigureAwait(true);
             data["errorList"] = errorList;
         }
@@ -142,7 +142,7 @@ internal sealed class FailureContextService
     {
         if (outline["symbols"] is not JArray symbols)
         {
-            return new JArray();
+            return [];
         }
 
         var containing = symbols
@@ -250,9 +250,8 @@ internal sealed class FailureContextService
             }
         }
 
-        return files
+        return [.. files
             .Where(file => !string.IsNullOrWhiteSpace(file))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 }

@@ -1,6 +1,5 @@
-using System.ComponentModel.Design;
-using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Services;
 
@@ -8,13 +7,8 @@ namespace VsIdeBridge.Commands;
 
 internal static class BreakpointCommands
 {
-    internal sealed class IdeSetBreakpointCommand : IdeCommandBase
+    internal sealed class IdeSetBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0206)
     {
-        public IdeSetBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0206)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeSetBreakpoint";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -47,13 +41,8 @@ internal static class BreakpointCommands
         }
     }
 
-    internal sealed class IdeListBreakpointsCommand : IdeCommandBase
+    internal sealed class IdeListBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0207)
     {
-        public IdeListBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0207)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeListBreakpoints";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -63,13 +52,8 @@ internal static class BreakpointCommands
         }
     }
 
-    internal sealed class IdeRemoveBreakpointCommand : IdeCommandBase
+    internal sealed class IdeRemoveBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0208)
     {
-        public IdeRemoveBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0208)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeRemoveBreakpoint";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -83,13 +67,8 @@ internal static class BreakpointCommands
         }
     }
 
-    internal sealed class IdeClearAllBreakpointsCommand : IdeCommandBase
+    internal sealed class IdeClearAllBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0209)
     {
-        public IdeClearAllBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0209)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeClearAllBreakpoints";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -99,13 +78,8 @@ internal static class BreakpointCommands
         }
     }
 
-    internal sealed class IdeEnableBreakpointCommand : IdeCommandBase
+    internal sealed class IdeEnableBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0229)
     {
-        public IdeEnableBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0229)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeEnableBreakpoint";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -119,13 +93,8 @@ internal static class BreakpointCommands
         }
     }
 
-    internal sealed class IdeDisableBreakpointCommand : IdeCommandBase
+    internal sealed class IdeDisableBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x022A)
     {
-        public IdeDisableBreakpointCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x022A)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeDisableBreakpoint";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -139,13 +108,8 @@ internal static class BreakpointCommands
         }
     }
 
-    internal sealed class IdeEnableAllBreakpointsCommand : IdeCommandBase
+    internal sealed class IdeEnableAllBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x022B)
     {
-        public IdeEnableAllBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x022B)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeEnableAllBreakpoints";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -155,13 +119,8 @@ internal static class BreakpointCommands
         }
     }
 
-    internal sealed class IdeDisableAllBreakpointsCommand : IdeCommandBase
+    internal sealed class IdeDisableAllBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x022C)
     {
-        public IdeDisableAllBreakpointsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x022C)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeDisableAllBreakpoints";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)

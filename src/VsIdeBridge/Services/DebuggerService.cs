@@ -1,10 +1,9 @@
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System.Collections;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using Stopwatch = System.Diagnostics.Stopwatch;
 
@@ -12,6 +11,9 @@ namespace VsIdeBridge.Services;
 
 internal sealed class DebuggerService
 {
+    private const int DefaultBreakWaitTimeoutMilliseconds = 10_000;
+    private const int DebuggerPollIntervalMilliseconds = 100;
+
     public async Task<JObject> GetStateAsync(DTE2 dte)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -44,6 +46,245 @@ internal sealed class DebuggerService
         return data;
     }
 
+    public async Task<JObject> GetThreadsAsync(DTE2 dte)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var debugger = dte.Debugger;
+        var threads = GetThreadSummaries(debugger.CurrentProgram);
+        return new JObject
+        {
+            ["mode"] = debugger.CurrentMode.ToString(),
+            ["count"] = threads.Count,
+            ["threads"] = threads,
+        };
+    }
+
+    public async Task<JObject> GetStackAsync(DTE2 dte, int? threadId, int maxFrames)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var debugger = dte.Debugger;
+        if (debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
+        {
+            throw new CommandErrorException("not_in_break_mode", "Debugger is not currently in break mode.");
+        }
+
+        var frames = new JArray();
+        var targetThread = ResolveThread(debugger.CurrentProgram, threadId) ?? throw new CommandErrorException("thread_not_found", $"Thread '{threadId}' was not found in the current debug program.");
+        var limit = maxFrames <= 0 ? 100 : maxFrames;
+        var collected = 0;
+        foreach (StackFrame frame in targetThread.StackFrames)
+        {
+            if (collected >= limit)
+            {
+                break;
+            }
+
+            var frameInfo = new JObject
+            {
+                ["function"] = frame.FunctionName ?? string.Empty,
+                ["language"] = frame.Language ?? string.Empty,
+            };
+
+            try
+            {
+                var lineValue = frame.GetType().GetProperty("LineNumber")?.GetValue(frame);
+                if (lineValue is int lineNumber)
+                {
+                    frameInfo["line"] = lineNumber;
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var fileValue = frame.GetType().GetProperty("FileName")?.GetValue(frame)?.ToString();
+                if (!string.IsNullOrWhiteSpace(fileValue))
+                {
+                    frameInfo["file"] = fileValue;
+                }
+            }
+            catch
+            {
+            }
+
+            frames.Add(frameInfo);
+            collected++;
+        }
+
+        return new JObject
+        {
+            ["mode"] = debugger.CurrentMode.ToString(),
+            ["threadId"] = targetThread.ID,
+            ["count"] = frames.Count,
+            ["frames"] = frames,
+        };
+    }
+
+    public async Task<JObject> GetLocalsAsync(DTE2 dte, int maxItems)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var debugger = dte.Debugger;
+        if (debugger.CurrentMode != dbgDebugMode.dbgBreakMode || debugger.CurrentStackFrame is not StackFrame frame)
+        {
+            throw new CommandErrorException("not_in_break_mode", "Debugger is not currently in break mode.");
+        }
+
+        var locals = new JArray();
+        var limit = maxItems <= 0 ? 200 : maxItems;
+        var count = 0;
+
+        try
+        {
+            foreach (Expression expression in frame.Locals)
+            {
+                if (count >= limit)
+                {
+                    break;
+                }
+
+                locals.Add(SerializeExpression(expression));
+                count++;
+            }
+        }
+        catch (System.Exception ex)
+        {
+            return new JObject
+            {
+                ["mode"] = debugger.CurrentMode.ToString(),
+                ["count"] = locals.Count,
+                ["locals"] = locals,
+                ["warning"] = $"Failed to enumerate all locals: {ex.Message}",
+            };
+        }
+
+        return new JObject
+        {
+            ["mode"] = debugger.CurrentMode.ToString(),
+            ["count"] = locals.Count,
+            ["locals"] = locals,
+        };
+    }
+
+    public async Task<JObject> GetModulesAsync(DTE2 dte)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var debugger = dte.Debugger;
+        var modules = new JArray();
+        var unsupportedReason = string.Empty;
+
+        foreach (Process process in debugger.DebuggedProcesses)
+        {
+            var processInfo = new JObject
+            {
+                ["name"] = process.Name ?? string.Empty,
+                ["id"] = process.ProcessID,
+                ["modules"] = new JArray(),
+            };
+
+            try
+            {
+                var modulesProperty = process.GetType().GetProperty("Modules");
+                if (modulesProperty?.GetValue(process) is IEnumerable items)
+                {
+                    var moduleItems = (JArray)processInfo["modules"]!;
+                    foreach (var item in items)
+                    {
+                        var module = new JObject
+                        {
+                            ["name"] = item?.GetType().GetProperty("Name")?.GetValue(item)?.ToString() ?? string.Empty,
+                            ["path"] = item?.GetType().GetProperty("Path")?.GetValue(item)?.ToString() ?? string.Empty,
+                        };
+                        moduleItems.Add(module);
+                    }
+                }
+                else
+                {
+                    unsupportedReason = "The active debugger engine does not expose modules via EnvDTE automation.";
+                }
+            }
+            catch (System.Exception ex)
+            {
+                unsupportedReason = ex.Message;
+            }
+
+            modules.Add(processInfo);
+        }
+
+        return new JObject
+        {
+            ["mode"] = debugger.CurrentMode.ToString(),
+            ["count"] = modules.Count,
+            ["items"] = modules,
+            ["countKnown"] = string.IsNullOrWhiteSpace(unsupportedReason),
+            ["reason"] = unsupportedReason,
+        };
+    }
+
+    public async Task<JObject> EvaluateWatchAsync(DTE2 dte, string expression, int timeoutMs)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var debugger = dte.Debugger;
+        if (debugger.CurrentMode != dbgDebugMode.dbgBreakMode)
+        {
+            throw new CommandErrorException("not_in_break_mode", "Debugger is not currently in break mode.");
+        }
+
+        var timeout = timeoutMs <= 0 ? 1000 : timeoutMs;
+        var result = debugger.GetExpression(expression, true, timeout);
+
+        var data = SerializeExpression(result);
+        data["expression"] = expression;
+        data["timeoutMs"] = timeout;
+        return data;
+    }
+
+    public async Task<JObject> GetExceptionsAsync(DTE2 dte)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        var debugger = dte.Debugger;
+        var groups = new JArray();
+        string reason = string.Empty;
+
+        try
+        {
+            var property = debugger.GetType().GetProperty("ExceptionGroups");
+            if (property?.GetValue(debugger) is IEnumerable exceptionGroups)
+            {
+                foreach (var group in exceptionGroups)
+                {
+                    groups.Add(new JObject
+                    {
+                        ["name"] = group?.GetType().GetProperty("Name")?.GetValue(group)?.ToString() ?? string.Empty,
+                    });
+                }
+            }
+            else
+            {
+                reason = "Exception group automation is not supported by the active debugger engine.";
+            }
+        }
+        catch (System.Exception ex)
+        {
+            reason = ex.Message;
+        }
+
+        return new JObject
+        {
+            ["count"] = groups.Count,
+            ["groups"] = groups,
+            ["featureNotSupported"] = groups.Count == 0 && !string.IsNullOrWhiteSpace(reason),
+            ["reason"] = reason,
+        };
+    }
+
     public async Task<JObject> StartAsync(DTE2 dte, bool waitForBreak, int timeoutMs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -64,7 +305,7 @@ internal sealed class DebuggerService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         dte.Debugger.Break(false);
-        return await WaitForBreakOrDesignModeAsync(dte, 10000, throwOnTimeout: true).ConfigureAwait(true);
+        return await WaitForBreakOrDesignModeAsync(dte, DefaultBreakWaitTimeoutMilliseconds, throwOnTimeout: true).ConfigureAwait(true);
     }
 
     public async Task<JObject> ContinueAsync(DTE2 dte, bool waitForBreak, int timeoutMs)
@@ -145,6 +386,50 @@ internal sealed class DebuggerService
         return items;
     }
 
+    private static Thread? ResolveThread(Program? program, int? threadId)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (program is null)
+        {
+            return null;
+        }
+
+        foreach (Thread thread in program.Threads)
+        {
+            if (threadId is null || thread.ID == threadId.Value)
+            {
+                return thread;
+            }
+        }
+
+        return null;
+    }
+
+    private static JObject SerializeExpression(Expression expression)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var data = new JObject
+        {
+            ["name"] = expression.Name ?? string.Empty,
+            ["type"] = expression.Type ?? string.Empty,
+            ["value"] = expression.Value ?? string.Empty,
+            ["isValid"] = expression.IsValidValue,
+        };
+
+        try
+        {
+            data["dataMemberCount"] = expression.DataMembers?.Count ?? 0;
+        }
+        catch
+        {
+            data["dataMemberCount"] = 0;
+        }
+
+        return data;
+    }
+
     private static bool TryGetActiveSourceLocation(DTE2 dte, out string filePath, out int lineNumber, out int columnNumber)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -167,10 +452,10 @@ internal sealed class DebuggerService
 
     private async Task<JObject> WaitForBreakOrDesignModeAsync(DTE2 dte, int timeoutMs, bool throwOnTimeout)
     {
-        var timeout = timeoutMs <= 0 ? 10000 : timeoutMs;
+        var timeout = timeoutMs <= 0 ? DefaultBreakWaitTimeoutMilliseconds : timeoutMs;
         var stopwatch = Stopwatch.StartNew();
 
-        while (true)
+        while (stopwatch.ElapsedMilliseconds < timeout)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             var mode = dte.Debugger.CurrentMode;
@@ -183,21 +468,18 @@ internal sealed class DebuggerService
                 return data;
             }
 
-            if (stopwatch.ElapsedMilliseconds >= timeout)
-            {
-                if (throwOnTimeout)
-                {
-                    throw new CommandErrorException("timeout", $"Debugger did not reach break or design mode within {timeout} ms.");
-                }
-
-                var data = await GetStateAsync(dte).ConfigureAwait(true);
-                data["timeoutMs"] = timeout;
-                data["waitedForBreak"] = true;
-                data["timedOut"] = true;
-                return data;
-            }
-
-            await Task.Delay(100).ConfigureAwait(true);
+            await Task.Delay(DebuggerPollIntervalMilliseconds).ConfigureAwait(true);
         }
+
+        if (throwOnTimeout)
+        {
+            throw new CommandErrorException("timeout", $"Debugger did not reach break or design mode within {timeout} ms.");
+        }
+
+        var timedOutData = await GetStateAsync(dte).ConfigureAwait(true);
+        timedOutData["timeoutMs"] = timeout;
+        timedOutData["waitedForBreak"] = true;
+        timedOutData["timedOut"] = true;
+        return timedOutData;
     }
 }

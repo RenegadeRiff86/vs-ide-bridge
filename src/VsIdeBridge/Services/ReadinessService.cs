@@ -1,15 +1,16 @@
-using System;
-using System.Threading.Tasks;
 using Microsoft.VisualStudio.OperationProgress;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Newtonsoft.Json.Linq;
+using System;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
 
 internal sealed class ReadinessService
 {
+    private const int DefaultReadinessTimeoutMilliseconds = 120_000;
     private const int PollIntervalMilliseconds = 500;
     private const int StableStatusBarSampleCount = 2;
 
@@ -23,7 +24,8 @@ internal sealed class ReadinessService
         }
 
         var startedAt = DateTimeOffset.UtcNow;
-        var timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds <= 0 ? 120000 : timeoutMilliseconds);
+        await context.Logger.LogAsync("IDE Bridge: waiting for IntelliSense readiness", context.CancellationToken).ConfigureAwait(true);
+        var timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds <= 0 ? DefaultReadinessTimeoutMilliseconds : timeoutMilliseconds);
         var service = await context.Package.GetServiceAsync(typeof(SVsOperationProgressStatusService)).ConfigureAwait(true) as IVsOperationProgressStatusService;
         var stage = service?.GetStageStatusForSolutionLoad(CommonOperationProgressStageIds.Intellisense);
         var statusbar = await context.Package.GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) as IVsStatusbar;
@@ -66,6 +68,8 @@ internal sealed class ReadinessService
         {
             satisfiedBy = "timeout";
         }
+
+        await context.Logger.LogAsync($"IDE Bridge: IntelliSense ready (satisfiedBy={satisfiedBy})", context.CancellationToken).ConfigureAwait(true);
 
         return new JObject
         {

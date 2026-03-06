@@ -1,15 +1,15 @@
+using Microsoft.VisualStudio;
+using Microsoft.VisualStudio.Shell;
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.Shell;
 using VsIdeBridge.Services;
 
 namespace VsIdeBridge;
 
 [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-[InstalledProductRegistration("VS IDE Bridge", "Scriptable IDE control commands for Visual Studio.", "0.1.0")]
+[InstalledProductRegistration("VS IDE Bridge", "Scriptable IDE control commands for Visual Studio.", "2.0.0")]
 [ProvideMenuResource("Menus.ctmenu", 1)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
 [ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
@@ -29,12 +29,12 @@ public sealed class VsIdeBridgePackage : AsyncPackage
     {
         _runtime = await IdeBridgeRuntime.CreateAsync(this).ConfigureAwait(false);
         await CommandRegistrar.InitializeAsync(this, _runtime).ConfigureAwait(false);
+        _runtime.BridgeWatchdogService.Start();
 
         // Start named pipe server (best-effort; failure does not break DTE commands)
         try
         {
             _pipeServer = new PipeServerService(this, _runtime);
-            await JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
             _pipeServer.Start();
         }
         catch (Exception ex)
@@ -46,7 +46,10 @@ public sealed class VsIdeBridgePackage : AsyncPackage
     protected override void Dispose(bool disposing)
     {
         if (disposing)
+        {
             _pipeServer?.Dispose();
+            _runtime?.BridgeWatchdogService.Dispose();
+        }
         base.Dispose(disposing);
     }
 }

@@ -8,10 +8,10 @@ namespace VsIdeBridge.Infrastructure;
 internal static class ComRetryHelper
 {
     private static readonly int[] RetryableHResults =
-    {
+    [
         unchecked((int)0x80010001),
         unchecked((int)0x8001010A),
-    };
+    ];
 
     public static async Task<T> ExecuteAsync<T>(Func<T> func, CancellationToken cancellationToken, int attempts = 20, int delayMilliseconds = 250)
     {

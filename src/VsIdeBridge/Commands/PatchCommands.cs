@@ -1,9 +1,8 @@
-using System.ComponentModel.Design;
-using System.Text;
-using System.Threading.Tasks;
 using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
+using System.Text;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Services;
 
@@ -11,13 +10,8 @@ namespace VsIdeBridge.Commands;
 
 internal static class PatchCommands
 {
-    internal sealed class IdeApplyUnifiedDiffCommand : IdeCommandBase
+    internal sealed class IdeApplyUnifiedDiffCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0221)
     {
-        public IdeApplyUnifiedDiffCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0221)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeApplyUnifiedDiff";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -45,9 +39,7 @@ internal static class PatchCommands
                 }
             }
 
-            var openChangedFiles = args.Has("open-changed-files")
-                ? args.GetBoolean("open-changed-files", context.Runtime.UiSettings.GoToEditedParts)
-                : context.Runtime.UiSettings.GoToEditedParts;
+            var openChangedFiles = args.GetBoolean("open-changed-files", defaultValue: true);
 
             var data = await context.Runtime.PatchService.ApplyUnifiedDiffAsync(
                 context.Dte,

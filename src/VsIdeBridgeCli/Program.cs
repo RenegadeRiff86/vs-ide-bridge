@@ -1,29 +1,40 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.MemoryMappedFiles;
 using System.IO.Pipes;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using VsIdeBridge.Shared;
 
-if (!OperatingSystem.IsWindows())
-{
-    Console.Error.WriteLine("vs-ide-bridge is Windows-only.");
-    return 1;
-}
+namespace VsIdeBridgeCli;
 
-try
+internal static class Program
 {
-    return await CliApp.RunAsync(args);
-}
-catch (CliException ex)
-{
-    Console.Error.WriteLine($"ERROR: {ex.Message}");
-    return 1;
-}
-catch (Exception ex)
-{
-    Console.Error.WriteLine($"ERROR: {ex}");
-    return 1;
+    public static async Task<int> Main(string[] args)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Error.WriteLine("vs-ide-bridge is Windows-only.");
+            return 1;
+        }
+
+        try
+        {
+            return await CliApp.RunAsync(args);
+        }
+        catch (CliException ex)
+        {
+            Console.Error.WriteLine($"ERROR: {ex.Message}");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"ERROR: {ex}");
+            return 1;
+        }
+    }
 }
 
 internal static partial class CliApp
@@ -32,6 +43,60 @@ internal static partial class CliApp
     {
         WriteIndented = true,
     };
+
+    private static class Args
+    {
+        public const string ActivateWindow = "activate-window";
+        public const string AllowDiskFallback = "allow-disk-fallback";
+        public const string All = "all";
+        public const string BaseDirectory = "base-directory";
+        public const string Code = "code";
+        public const string Column = "column";
+        public const string Configuration = "configuration";
+        public const string ContextAfter = "context-after";
+        public const string ContextBefore = "context-before";
+        public const string ContextLines = "context-lines";
+        public const string Document = "document";
+        public const string EndLine = "end-line";
+        public const string Expression = "expression";
+        public const string Extensions = "extensions";
+        public const string File = "file";
+        public const string GroupBy = "group-by";
+        public const string IncludeNonProject = "include-non-project";
+        public const string Json = "json";
+        public const string JsonFile = "json-file";
+        public const string Kind = "kind";
+        public const string Line = "line";
+        public const string MatchCase = "match-case";
+        public const string Max = "max";
+        public const string MaxDepth = "max-depth";
+        public const string MaxFrames = "max-frames";
+        public const string MaxResults = "max-results";
+        public const string OpenChangedFiles = "open-changed-files";
+        public const string PatchFile = "patch-file";
+        public const string PatchTextBase64 = "patch-text-base64";
+        public const string Path = "path";
+        public const string Platform = "platform";
+        public const string Project = "project";
+        public const string Query = "query";
+        public const string Quick = "quick";
+        public const string Ranges = "ranges";
+        public const string RangesFile = "ranges-file";
+        public const string Regex = "regex";
+        public const string ResultsWindow = "results-window";
+        public const string RevealInEditor = "reveal-in-editor";
+        public const string Save = "save";
+        public const string SaveChangedFiles = "save-changed-files";
+        public const string Scope = "scope";
+        public const string SelectWord = "select-word";
+        public const string Severity = "severity";
+        public const string StartLine = "start-line";
+        public const string ThreadId = "thread-id";
+        public const string TimeoutMs = "timeout-ms";
+        public const string WaitForIntellisense = "wait-for-intellisense";
+        public const string WholeWord = "whole-word";
+        public const string Window = "window";
+    }
 
     public static async Task<int> RunAsync(string[] args)
     {
@@ -59,217 +124,253 @@ internal static partial class CliApp
         var options = CliOptions.Parse(remainingArgs);
         return verb switch
         {
-            "parse" => RunParseAsync(options),
+            "parse" => RunParse(options),
             "prompts" => RunPromptHelp(),
             "ensure" => await RunEnsureAsync(options),
             "current" => await RunCurrentAsync(options),
             "instances" => await RunInstancesAsync(options),
             "find-files" => await RunStructuredCommandAsync("find-files", options, static (builder, cli) =>
             {
-                builder.AddRequired("query", cli.GetValue("query"));
+                builder.AddRequired(Args.Query, cli.GetValue(Args.Query));
+                builder.Add(Args.Path, cli.GetValue(Args.Path));
+                builder.Add(Args.Extensions, cli.GetValue(Args.Extensions));
+                builder.Add(Args.MaxResults, cli.GetValue(Args.MaxResults));
+                builder.Add(Args.IncludeNonProject, cli.GetValue(Args.IncludeNonProject));
             }),
             "find-text" => await RunStructuredCommandAsync("find-text", options, static (builder, cli) =>
             {
-                builder.AddRequired("query", cli.GetValue("query"));
-                builder.Add("scope", cli.GetValue("scope"));
-                builder.Add("project", cli.GetValue("project"));
-                builder.Add("path", cli.GetValue("path"));
-                builder.Add("results-window", cli.GetValue("results-window"));
-                builder.AddFlag("match-case", cli.GetFlag("match-case"));
-                builder.AddFlag("whole-word", cli.GetFlag("whole-word"));
-                builder.AddFlag("regex", cli.GetFlag("regex"));
+                builder.AddRequired(Args.Query, cli.GetValue(Args.Query));
+                builder.Add(Args.Scope, cli.GetValue(Args.Scope));
+                builder.Add(Args.Project, cli.GetValue(Args.Project));
+                builder.Add(Args.Path, cli.GetValue(Args.Path));
+                builder.Add(Args.ResultsWindow, cli.GetValue(Args.ResultsWindow));
+                builder.AddFlag(Args.MatchCase, cli.GetFlag(Args.MatchCase));
+                builder.AddFlag(Args.WholeWord, cli.GetFlag(Args.WholeWord));
+                builder.AddFlag(Args.Regex, cli.GetFlag(Args.Regex));
             }),
             "open-document" => await RunStructuredCommandAsync("open-document", options, static (builder, cli) =>
             {
-                builder.AddRequired("file", cli.GetValue("file"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("column", cli.GetValue("column"));
+                builder.AddRequired(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
+                builder.Add(Args.AllowDiskFallback, cli.GetValue(Args.AllowDiskFallback));
             }),
             "list-documents" => await RunStructuredCommandAsync("list-documents", options, static (_, _) => { }),
             "list-tabs" => await RunStructuredCommandAsync("list-tabs", options, static (_, _) => { }),
-            "activate-document" => await RunStructuredCommandAsync("activate-document", options, static (builder, cli) =>
-            {
-                builder.AddRequired("query", cli.GetValue("query"));
-            }),
+            "activate-document" => await RunStructuredCommandAsync("activate-document", options, static (builder, cli) => builder.AddRequired(Args.Query, cli.GetValue(Args.Query))),
             "close-document" => await RunStructuredCommandAsync("close-document", options, static (builder, cli) =>
             {
-                builder.Add("query", cli.GetValue("query"));
-                builder.AddFlag("all", cli.GetFlag("all"));
-                builder.AddFlag("save", cli.GetFlag("save"));
+                builder.Add(Args.Query, cli.GetValue(Args.Query));
+                builder.AddFlag(Args.All, cli.GetFlag(Args.All));
+                builder.AddFlag(Args.Save, cli.GetFlag(Args.Save));
             }),
             "save-document" => await RunStructuredCommandAsync("save-document", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.AddFlag("all", cli.GetFlag("all"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.AddFlag(Args.All, cli.GetFlag(Args.All));
             }),
             "close-file" => await RunStructuredCommandAsync("close-file", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.Add("query", cli.GetValue("query"));
-                builder.AddFlag("save", cli.GetFlag("save"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Query, cli.GetValue(Args.Query));
+                builder.AddFlag(Args.Save, cli.GetFlag(Args.Save));
             }),
-            "close-others" => await RunStructuredCommandAsync("close-others", options, static (builder, cli) =>
-            {
-                builder.AddFlag("save", cli.GetFlag("save"));
-            }),
-            "list-windows" => await RunStructuredCommandAsync("list-windows", options, static (builder, cli) =>
-            {
-                builder.Add("query", cli.GetValue("query"));
-            }),
-            "activate-window" => await RunStructuredCommandAsync("activate-window", options, static (builder, cli) =>
-            {
-                builder.AddRequired("window", cli.GetValue("window"));
-            }),
+            "close-others" => await RunStructuredCommandAsync("close-others", options, static (builder, cli) => builder.AddFlag(Args.Save, cli.GetFlag(Args.Save))),
+            "list-windows" => await RunStructuredCommandAsync("list-windows", options, static (builder, cli) => builder.Add(Args.Query, cli.GetValue(Args.Query))),
+            "activate-window" => await RunStructuredCommandAsync("activate-window", options, static (builder, cli) => builder.AddRequired(Args.Window, cli.GetValue(Args.Window))),
             "apply-diff" => await RunStructuredCommandAsync("apply-diff", options, static (builder, cli) =>
             {
-                builder.Add("patch-file", cli.GetValue("patch-file"));
-                builder.Add("patch-text-base64", cli.GetValue("patch-text-base64"));
-                builder.Add("base-directory", cli.GetValue("base-directory"));
-                builder.AddFlag("open-changed-files", cli.GetFlag("open-changed-files"));
-                builder.AddFlag("save-changed-files", cli.GetFlag("save-changed-files"));
+                builder.Add(Args.PatchFile, cli.GetValue(Args.PatchFile));
+                builder.Add(Args.PatchTextBase64, cli.GetValue(Args.PatchTextBase64));
+                builder.Add(Args.BaseDirectory, cli.GetValue(Args.BaseDirectory));
+                var openChangedFiles = cli.GetFlag(Args.OpenChangedFiles)
+                    || cli.GetBoolean(Args.OpenChangedFiles, defaultValue: true);
+                builder.Add(Args.OpenChangedFiles, openChangedFiles ? "true" : "false");
+                builder.AddFlag(Args.SaveChangedFiles, cli.GetFlag(Args.SaveChangedFiles));
             }),
             "document-slice" => await RunStructuredCommandAsync("document-slice", options, static (builder, cli) =>
             {
-                builder.AddRequired("file", cli.GetValue("file"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("context-before", cli.GetValue("context-before"));
-                builder.Add("context-after", cli.GetValue("context-after"));
-                builder.Add("start-line", cli.GetValue("start-line"));
-                builder.Add("end-line", cli.GetValue("end-line"));
+                builder.AddRequired(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.ContextBefore, cli.GetValue(Args.ContextBefore));
+                builder.Add(Args.ContextAfter, cli.GetValue(Args.ContextAfter));
+                builder.Add(Args.StartLine, cli.GetValue(Args.StartLine));
+                builder.Add(Args.EndLine, cli.GetValue(Args.EndLine));
+                builder.Add(Args.RevealInEditor, cli.GetValue(Args.RevealInEditor));
             }),
             "search-symbols" => await RunStructuredCommandAsync("search-symbols", options, static (builder, cli) =>
             {
-                builder.AddRequired("query", cli.GetValue("query"));
-                builder.Add("kind", cli.GetValue("kind"));
-                builder.Add("scope", cli.GetValue("scope"));
-                builder.Add("path", cli.GetValue("path"));
-                builder.Add("max", cli.GetValue("max"));
-                builder.Add("project", cli.GetValue("project"));
-                builder.AddFlag("match-case", cli.GetFlag("match-case"));
+                builder.AddRequired(Args.Query, cli.GetValue(Args.Query));
+                builder.Add(Args.Kind, cli.GetValue(Args.Kind));
+                builder.Add(Args.Scope, cli.GetValue(Args.Scope));
+                builder.Add(Args.Path, cli.GetValue(Args.Path));
+                builder.Add(Args.Max, cli.GetValue(Args.Max));
+                builder.Add(Args.Project, cli.GetValue(Args.Project));
+                builder.AddFlag(Args.MatchCase, cli.GetFlag(Args.MatchCase));
             }),
             "goto-definition" => await RunStructuredCommandAsync("goto-definition", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.Add("document", cli.GetValue("document"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("column", cli.GetValue("column"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Document, cli.GetValue(Args.Document));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
             }),
             "peek-definition" => await RunStructuredCommandAsync("peek-definition", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.Add("document", cli.GetValue("document"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("column", cli.GetValue("column"));
-                builder.Add("context-lines", cli.GetValue("context-lines"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Document, cli.GetValue(Args.Document));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
+                builder.Add(Args.ContextLines, cli.GetValue(Args.ContextLines));
             }),
             "goto-implementation" => await RunStructuredCommandAsync("goto-implementation", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.Add("document", cli.GetValue("document"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("column", cli.GetValue("column"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Document, cli.GetValue(Args.Document));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
             }),
             "find-references" => await RunStructuredCommandAsync("find-references", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.Add("document", cli.GetValue("document"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("column", cli.GetValue("column"));
-                builder.Add("timeout-ms", cli.GetValue("timeout-ms"));
-                builder.AddFlag("select-word", cli.GetFlag("select-word"));
-                builder.AddFlag("activate-window", cli.GetFlag("activate-window"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Document, cli.GetValue(Args.Document));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+                builder.AddFlag(Args.SelectWord, cli.GetFlag(Args.SelectWord));
+                builder.AddFlag(Args.ActivateWindow, cli.GetFlag(Args.ActivateWindow));
+            }),
+            "count-references" => await RunStructuredCommandAsync("count-references", options, static (builder, cli) =>
+            {
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Document, cli.GetValue(Args.Document));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+                builder.AddFlag(Args.SelectWord, cli.GetFlag(Args.SelectWord));
+                builder.AddFlag(Args.ActivateWindow, cli.GetFlag(Args.ActivateWindow));
             }),
             "call-hierarchy" => await RunStructuredCommandAsync("call-hierarchy", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.Add("document", cli.GetValue("document"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("column", cli.GetValue("column"));
-                builder.Add("timeout-ms", cli.GetValue("timeout-ms"));
-                builder.AddFlag("select-word", cli.GetFlag("select-word"));
-                builder.AddFlag("activate-window", cli.GetFlag("activate-window"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Document, cli.GetValue(Args.Document));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+                builder.AddFlag(Args.SelectWord, cli.GetFlag(Args.SelectWord));
+                builder.AddFlag(Args.ActivateWindow, cli.GetFlag(Args.ActivateWindow));
             }),
             "quick-info" => await RunStructuredCommandAsync("quick-info", options, static (builder, cli) =>
             {
-                builder.Add("file", cli.GetValue("file"));
-                builder.Add("document", cli.GetValue("document"));
-                builder.Add("line", cli.GetValue("line"));
-                builder.Add("column", cli.GetValue("column"));
-                builder.Add("context-lines", cli.GetValue("context-lines"));
+                builder.Add(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Document, cli.GetValue(Args.Document));
+                builder.Add(Args.Line, cli.GetValue(Args.Line));
+                builder.Add(Args.Column, cli.GetValue(Args.Column));
+                builder.Add(Args.ContextLines, cli.GetValue(Args.ContextLines));
             }),
             "document-slices" => await RunStructuredCommandAsync("document-slices", options, static (builder, cli) =>
             {
-                var ranges = cli.GetValue("ranges");
-                var rangesFile = cli.GetValue("ranges-file");
+                var ranges = cli.GetValue(Args.Ranges);
+                var rangesFile = cli.GetValue(Args.RangesFile);
                 if (string.IsNullOrWhiteSpace(ranges) && string.IsNullOrWhiteSpace(rangesFile))
                 {
                     throw new CliException("Specify --ranges-file <file> or --ranges <json>.");
                 }
 
-                builder.Add("ranges-file", rangesFile);
-                builder.Add("ranges", ranges);
+                builder.Add(Args.RangesFile, rangesFile);
+                builder.Add(Args.Ranges, ranges);
             }),
             "file-symbols" => await RunStructuredCommandAsync("file-symbols", options, static (builder, cli) =>
             {
-                builder.AddRequired("file", cli.GetValue("file"));
-                builder.Add("kind", cli.GetValue("kind"));
-                builder.Add("max-depth", cli.GetValue("max-depth"));
+                builder.AddRequired(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Kind, cli.GetValue(Args.Kind));
+                builder.Add(Args.MaxDepth, cli.GetValue(Args.MaxDepth));
             }),
             "file-outline" => await RunStructuredCommandAsync("file-outline", options, static (builder, cli) =>
             {
-                builder.AddRequired("file", cli.GetValue("file"));
-                builder.Add("kind", cli.GetValue("kind"));
-                builder.Add("max-depth", cli.GetValue("max-depth"));
+                builder.AddRequired(Args.File, cli.GetValue(Args.File));
+                builder.Add(Args.Kind, cli.GetValue(Args.Kind));
+                builder.Add(Args.MaxDepth, cli.GetValue(Args.MaxDepth));
+            }),
+            "debug-threads" => await RunStructuredCommandAsync("debug-threads", options, static (_, _) => { }),
+            "debug-stack" => await RunStructuredCommandAsync("debug-stack", options, static (builder, cli) =>
+            {
+                builder.Add(Args.ThreadId, cli.GetValue(Args.ThreadId));
+                builder.Add(Args.MaxFrames, cli.GetValue(Args.MaxFrames));
+            }),
+            "debug-locals" => await RunStructuredCommandAsync("debug-locals", options, static (builder, cli) => builder.Add(Args.Max, cli.GetValue(Args.Max))),
+            "debug-modules" => await RunStructuredCommandAsync("debug-modules", options, static (_, _) => { }),
+            "debug-watch" => await RunStructuredCommandAsync("debug-watch", options, static (builder, cli) =>
+            {
+                builder.AddRequired(Args.Expression, cli.GetValue(Args.Expression));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+            }),
+            "debug-state" => await RunStructuredCommandAsync("debug-state", options, static (_, _) => { }),
+            "debug-exceptions" => await RunStructuredCommandAsync("debug-exceptions", options, static (_, _) => { }),
+            "diagnostics-snapshot" => await RunStructuredCommandAsync("diagnostics-snapshot", options, static (builder, cli) =>
+            {
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+                builder.Add(Args.Max, cli.GetValue(Args.Max));
+                builder.AddFlag(Args.WaitForIntellisense, cli.GetFlag(Args.WaitForIntellisense));
+                builder.AddFlag(Args.Quick, cli.GetFlag(Args.Quick));
+            }),
+            "build-configurations" => await RunStructuredCommandAsync("build-configurations", options, static (_, _) => { }),
+            "set-build-configuration" => await RunStructuredCommandAsync("set-build-configuration", options, static (builder, cli) =>
+            {
+                builder.AddRequired(Args.Configuration, cli.GetValue(Args.Configuration));
+                builder.Add(Args.Platform, cli.GetValue(Args.Platform));
             }),
             "build" => await RunStructuredCommandAsync("build", options, static (builder, cli) =>
             {
-                builder.Add("configuration", cli.GetValue("configuration"));
-                builder.Add("platform", cli.GetValue("platform"));
-                builder.Add("timeout-ms", cli.GetValue("timeout-ms"));
+                builder.Add(Args.Configuration, cli.GetValue(Args.Configuration));
+                builder.Add(Args.Platform, cli.GetValue(Args.Platform));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
             }),
             "catalog" => await RunSimpleCommandAsync("Tools.IdeHelp", options, "summary"),
             "ready" => await RunSimpleCommandAsync("Tools.IdeWaitForReady", options),
             "state" => await RunSimpleCommandAsync("Tools.IdeGetState", options),
             "errors" => await RunStructuredCommandAsync("errors", options, static (builder, cli) =>
             {
-                builder.Add("severity", cli.GetValue("severity"));
-                builder.Add("code", cli.GetValue("code"));
-                builder.Add("project", cli.GetValue("project"));
-                builder.Add("path", cli.GetValue("path"));
+                builder.Add(Args.Severity, cli.GetValue(Args.Severity));
+                builder.Add(Args.Code, cli.GetValue(Args.Code));
+                builder.Add(Args.Project, cli.GetValue(Args.Project));
+                builder.Add(Args.Path, cli.GetValue(Args.Path));
                 builder.Add("text", cli.GetValue("text"));
-                builder.Add("group-by", cli.GetValue("group-by"));
-                builder.Add("max", cli.GetValue("max"));
-                builder.Add("timeout-ms", cli.GetValue("timeout-ms"));
-                builder.AddFlag("wait-for-intellisense", cli.GetFlag("wait-for-intellisense"));
-                builder.AddFlag("quick", cli.GetFlag("quick"));
+                builder.Add(Args.GroupBy, cli.GetValue(Args.GroupBy));
+                builder.Add(Args.Max, cli.GetValue(Args.Max));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+                builder.AddFlag(Args.WaitForIntellisense, cli.GetFlag(Args.WaitForIntellisense));
+                builder.AddFlag(Args.Quick, cli.GetFlag(Args.Quick));
             }),
             "warnings" => await RunStructuredCommandAsync("warnings", options, static (builder, cli) =>
             {
-                builder.Add("severity", cli.GetValue("severity"));
-                builder.Add("code", cli.GetValue("code"));
-                builder.Add("project", cli.GetValue("project"));
-                builder.Add("path", cli.GetValue("path"));
+                builder.Add(Args.Severity, cli.GetValue(Args.Severity));
+                builder.Add(Args.Code, cli.GetValue(Args.Code));
+                builder.Add(Args.Project, cli.GetValue(Args.Project));
+                builder.Add(Args.Path, cli.GetValue(Args.Path));
                 builder.Add("text", cli.GetValue("text"));
-                builder.Add("group-by", cli.GetValue("group-by"));
-                builder.Add("max", cli.GetValue("max"));
-                builder.Add("timeout-ms", cli.GetValue("timeout-ms"));
-                builder.AddFlag("wait-for-intellisense", cli.GetFlag("wait-for-intellisense"));
-                builder.AddFlag("quick", cli.GetFlag("quick"));
+                builder.Add(Args.GroupBy, cli.GetValue(Args.GroupBy));
+                builder.Add(Args.Max, cli.GetValue(Args.Max));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+                builder.AddFlag(Args.WaitForIntellisense, cli.GetFlag(Args.WaitForIntellisense));
+                builder.AddFlag(Args.Quick, cli.GetFlag(Args.Quick));
             }),
             "build-errors" => await RunStructuredCommandAsync("build-errors", options, static (builder, cli) =>
             {
-                builder.Add("severity", cli.GetValue("severity"));
-                builder.Add("code", cli.GetValue("code"));
-                builder.Add("project", cli.GetValue("project"));
-                builder.Add("path", cli.GetValue("path"));
+                builder.Add(Args.Severity, cli.GetValue(Args.Severity));
+                builder.Add(Args.Code, cli.GetValue(Args.Code));
+                builder.Add(Args.Project, cli.GetValue(Args.Project));
+                builder.Add(Args.Path, cli.GetValue(Args.Path));
                 builder.Add("text", cli.GetValue("text"));
-                builder.Add("group-by", cli.GetValue("group-by"));
-                builder.Add("max", cli.GetValue("max"));
-                builder.Add("timeout-ms", cli.GetValue("timeout-ms"));
-                builder.AddFlag("wait-for-intellisense", cli.GetFlag("wait-for-intellisense"));
+                builder.Add(Args.GroupBy, cli.GetValue(Args.GroupBy));
+                builder.Add(Args.Max, cli.GetValue(Args.Max));
+                builder.Add(Args.TimeoutMs, cli.GetValue(Args.TimeoutMs));
+                builder.AddFlag(Args.WaitForIntellisense, cli.GetFlag(Args.WaitForIntellisense));
             }),
             "send" or "call" => await RunSendAsync(options),
+            "smoke-test" => await RunStructuredCommandAsync("smoke-test", options, static (_, _) => { }),
             "close" => await RunSimpleCommandAsync("close-ide", options, "summary"),
+            "close-ide" => await RunSimpleCommandAsync("close-ide", options, "summary"),
             "batch" => await RunBatchAsync(options),
             "request" => await RunRawRequestAsync(options),
             "mcp-server" => await RunMcpServerAsync(options),
@@ -305,10 +406,10 @@ internal static partial class CliApp
         return 0;
     }
 
-    private static int RunParseAsync(CliOptions options)
+    private static int RunParse(CliOptions options)
     {
-        var jsonText = options.GetValue("json");
-        var jsonFile = options.GetValue("json-file");
+        var jsonText = options.GetValue(Args.Json);
+        var jsonFile = options.GetValue(Args.JsonFile);
         if (string.IsNullOrWhiteSpace(jsonText) == string.IsNullOrWhiteSpace(jsonFile))
         {
             throw new CliException("Specify exactly one of --json or --json-file.");
@@ -321,7 +422,7 @@ internal static partial class CliApp
 
         var node = ParseJson(jsonText!);
         var select = options.GetValue("select") ?? options.GetValue("path");
-        if (select is not null && select.Length >= 3 && char.IsLetter(select[0]) && select[1] == ':' && (select[2] == '/' || select[2] == '\\'))
+        if (select is { Length: >= 3 } && char.IsLetter(select[0]) && select[1] == ':' && (select[2] == '/' || select[2] == '\\'))
         {
             throw new CliException(
                 $"--select value looks like a Windows path ('{select}'). " +
@@ -345,7 +446,11 @@ internal static partial class CliApp
 
     private static async Task<int> RunCurrentAsync(CliOptions options)
     {
-        var instance = await PipeDiscovery.SelectAsync(BridgeInstanceSelector.FromOptions(options), options.GetFlag("verbose"));
+        var discoveryMode = ResolveDiscoveryMode(options);
+        var instance = await PipeDiscovery.SelectAsync(
+            BridgeInstanceSelector.FromOptions(options),
+            options.GetFlag("verbose"),
+            discoveryMode);
         Console.WriteLine(InstanceFormatter.FormatSingle(instance, options.GetValue("format") ?? "summary"));
         return 0;
     }
@@ -363,16 +468,18 @@ internal static partial class CliApp
         var timeoutMs = Math.Max(1_000, options.GetInt32("timeout-ms", 180_000));
         var pollMs = Math.Max(100, options.GetInt32("poll-ms", 1_000));
         var waitForReady = !options.GetFlag("skip-ready");
+        var discoveryMode = ResolveDiscoveryMode(options);
+        var emitDiscoveryJson = options.GetBoolean("emit-discovery-json", true);
 
-        var discovery = await TryFindSolutionInstanceAsync(solutionPath).ConfigureAwait(false);
+        var discovery = await TryFindSolutionInstanceAsync(solutionPath, discoveryMode).ConfigureAwait(false);
         if (discovery is null)
         {
-            StartVisualStudio(solutionPath, verbose);
+            StartVisualStudio(solutionPath, verbose, discoveryMode, emitDiscoveryJson);
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             while (DateTime.UtcNow < deadline)
             {
                 await Task.Delay(pollMs).ConfigureAwait(false);
-                discovery = await TryFindSolutionInstanceAsync(solutionPath).ConfigureAwait(false);
+                discovery = await TryFindSolutionInstanceAsync(solutionPath, discoveryMode).ConfigureAwait(false);
                 if (discovery is not null)
                 {
                     break;
@@ -400,7 +507,7 @@ internal static partial class CliApp
     private static async Task<int> RunInstancesAsync(CliOptions options)
     {
         var selector = BridgeInstanceSelector.FromOptions(options);
-        var instances = await PipeDiscovery.ListAsync(options.GetFlag("verbose"));
+        var instances = await PipeDiscovery.ListAsync(options.GetFlag("verbose"), ResolveDiscoveryMode(options));
         var filtered = PipeDiscovery.Filter(instances, selector).ToArray();
 
         Console.WriteLine(InstanceFormatter.Format(filtered, options.GetValue("format") ?? "summary"));
@@ -497,7 +604,10 @@ internal static partial class CliApp
 
     private static async Task<int> ExecuteAsync(JsonObject payload, CliOptions options, string defaultFormat = "json")
     {
-        var discovery = await PipeDiscovery.SelectAsync(BridgeInstanceSelector.FromOptions(options), options.GetFlag("verbose"));
+        var discovery = await PipeDiscovery.SelectAsync(
+            BridgeInstanceSelector.FromOptions(options),
+            options.GetFlag("verbose"),
+            ResolveDiscoveryMode(options));
         return await ExecuteAsync(payload, discovery, options, defaultFormat).ConfigureAwait(false);
     }
 
@@ -510,8 +620,16 @@ internal static partial class CliApp
     {
         await using var client = new PipeClient(discovery.PipeName, options.GetInt32("timeout-ms", 10_000));
 
+        JsonObject response;
         var stopwatch = Stopwatch.StartNew();
-        JsonObject response = await client.SendAsync(payload);
+        try
+        {
+            response = await client.SendAsync(payload).ConfigureAwait(false);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new CliException(ex.Message);
+        }
         stopwatch.Stop();
         response["_elapsedMs"] = Math.Round(stopwatch.Elapsed.TotalMilliseconds, 1);
 
@@ -637,7 +755,7 @@ internal static partial class CliApp
         };
     }
 
-    private static JsonNode? SelectWildcard(JsonNode? node, string[] segments, int nextIndex, string currentPath)
+    private static JsonArray SelectWildcard(JsonNode? node, string[] segments, int nextIndex, string currentPath)
     {
         var results = new JsonArray();
         switch (node)
@@ -702,16 +820,78 @@ internal static partial class CliApp
         return SelectJsonNode(array[index], segments, nextIndex, childPath);
     }
 
-    private static async Task<PipeDiscovery?> TryFindSolutionInstanceAsync(string solutionPath)
+    private static async Task<PipeDiscovery?> TryFindSolutionInstanceAsync(string solutionPath, DiscoveryMode discoveryMode)
     {
         var solutionName = Path.GetFileName(solutionPath);
-        var instances = await PipeDiscovery.ListAsync(verbose: false).ConfigureAwait(false);
-        return instances
+        var instances = await PipeDiscovery.ListAsync(verbose: false, discoveryMode).ConfigureAwait(false);
+        var directMatch = instances
             .Where(instance =>
                 string.Equals(NormalizeExistingPathOrEmpty(instance.SolutionPath), solutionPath, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(instance.SolutionName, solutionName, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(instance => instance.LastWriteTimeUtc)
             .FirstOrDefault();
+        if (directMatch is not null)
+        {
+            return directMatch;
+        }
+
+        foreach (var instance in instances.OrderByDescending(item => item.LastWriteTimeUtc))
+        {
+            var probedPath = await TryProbeSolutionPathAsync(instance).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(probedPath))
+            {
+                continue;
+            }
+
+            if (!string.Equals(probedPath, solutionPath, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(Path.GetFileName(probedPath), solutionName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return CreateDiscoveryWithSolution(instance, probedPath);
+        }
+
+        return null;
+    }
+
+    private static PipeDiscovery CreateDiscoveryWithSolution(PipeDiscovery source, string solutionPath)
+    {
+        var normalized = NormalizeExistingPathOrEmpty(solutionPath);
+        return new PipeDiscovery
+        {
+            InstanceId = source.InstanceId,
+            PipeName = source.PipeName,
+            ProcessId = source.ProcessId,
+            SolutionPath = normalized,
+            SolutionName = Path.GetFileName(normalized),
+            StartedAtUtc = source.StartedAtUtc,
+            DiscoveryFile = source.DiscoveryFile,
+            LastWriteTimeUtc = source.LastWriteTimeUtc,
+            Source = source.Source,
+        };
+    }
+
+    private static async Task<string?> TryProbeSolutionPathAsync(PipeDiscovery instance)
+    {
+        try
+        {
+            await using var client = new PipeClient(instance.PipeName, timeoutMs: 2_000);
+            var response = await client.SendAsync(CreateCommandRequest("Tools.IdeGetState", string.Empty, "probe-state")).ConfigureAwait(false);
+            if (!ResponseFormatter.IsSuccess(response))
+            {
+                return null;
+            }
+
+            var data = response["Data"] as JsonObject;
+            var path = data?["solutionPath"]?.GetValue<string>();
+            var normalized = NormalizeExistingPathOrEmpty(path);
+            return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string NormalizeExistingSolutionPath(string path)
@@ -735,7 +915,7 @@ internal static partial class CliApp
         return Path.GetFullPath(Environment.ExpandEnvironmentVariables(path));
     }
 
-    private static void StartVisualStudio(string solutionPath, bool verbose)
+    private static void StartVisualStudio(string solutionPath, bool verbose, DiscoveryMode discoveryMode, bool emitDiscoveryJson)
     {
         var devenvPath = ResolveDevenvPath();
         if (verbose)
@@ -748,11 +928,40 @@ internal static partial class CliApp
             FileName = devenvPath,
             Arguments = QuoteArgument(solutionPath),
             WorkingDirectory = Path.GetDirectoryName(solutionPath) ?? Environment.CurrentDirectory,
-            UseShellExecute = true,
+            UseShellExecute = false,
         };
+        startInfo.EnvironmentVariables["VS_IDE_BRIDGE_DISCOVERY_MODE"] = DiscoveryModeToOption(discoveryMode);
+        startInfo.EnvironmentVariables["VS_IDE_BRIDGE_EMIT_DISCOVERY_JSON"] = emitDiscoveryJson ? "true" : "false";
+        startInfo.EnvironmentVariables["VS_IDE_BRIDGE_EMIT_MEMORY_DISCOVERY"] =
+            discoveryMode == DiscoveryMode.JsonOnly ? "false" : "true";
 
         _ = Process.Start(startInfo)
             ?? throw new CliException($"Failed to start Visual Studio for '{solutionPath}'.");
+    }
+
+    private static DiscoveryMode ResolveDiscoveryMode(CliOptions options)
+    {
+        var raw = options.GetValue("discovery-mode")
+            ?? Environment.GetEnvironmentVariable("VS_IDE_BRIDGE_DISCOVERY_MODE")
+            ?? "memory-first";
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "json-only" => DiscoveryMode.JsonOnly,
+            "hybrid" => DiscoveryMode.Hybrid,
+            "memory-first" => DiscoveryMode.MemoryFirst,
+            _ => throw new CliException("Invalid --discovery-mode. Use json-only, hybrid, or memory-first."),
+        };
+    }
+
+    private static string DiscoveryModeToOption(DiscoveryMode mode)
+    {
+        return mode switch
+        {
+            DiscoveryMode.JsonOnly => "json-only",
+            DiscoveryMode.Hybrid => "hybrid",
+            _ => "memory-first",
+        };
     }
 
     private static string ResolveDevenvPath()
@@ -802,44 +1011,90 @@ internal static partial class CliApp
             "current" => HelpText.Current,
             "instances" => HelpText.Instances,
             "catalog" => HelpText.Catalog,
-            "ready" => HelpText.Ready,
-            "state" => HelpText.State,
-            "build" => HelpText.Build,
-            "errors" => HelpText.Errors,
-            "warnings" => HelpText.Warnings,
-            "build-errors" => HelpText.BuildErrors,
-            "find-files" => HelpText.FindFiles,
-            "find-text" => HelpText.FindText,
-            "open-document" => HelpText.OpenDocument,
-            "list-documents" => HelpText.ListDocuments,
-            "list-tabs" => HelpText.ListTabs,
-            "activate-document" => HelpText.ActivateDocument,
-            "close-document" => HelpText.CloseDocument,
-            "close-file" => HelpText.CloseFile,
-            "close-others" => HelpText.CloseOthers,
-            "list-windows" => HelpText.ListWindows,
-            "activate-window" => HelpText.ActivateWindow,
-            "apply-diff" => HelpText.ApplyDiff,
-            "document-slice" => HelpText.DocumentSlice,
-            "document-slices" => HelpText.DocumentSlices,
-            "search-symbols" => HelpText.SearchSymbols,
-            "goto-definition" => HelpText.GoToDefinition,
-            "peek-definition" => HelpText.PeekDefinition,
-            "goto-implementation" => HelpText.GoToImplementation,
-            "find-references" => HelpText.FindReferences,
-            "call-hierarchy" => HelpText.CallHierarchy,
-            "quick-info" => HelpText.QuickInfo,
-            "file-symbols" => HelpText.FileSymbols,
-            "file-outline" => HelpText.FileSymbols,
-            "close" => HelpText.Close,
+            "ready" => CombineHelpWithCommandMetadata("ready", HelpText.Ready),
+            "state" => CombineHelpWithCommandMetadata("state", HelpText.State),
+            "build" => CombineHelpWithCommandMetadata("build", HelpText.Build),
+            "errors" => CombineHelpWithCommandMetadata("errors", HelpText.Errors),
+            "warnings" => CombineHelpWithCommandMetadata("warnings", HelpText.Warnings),
+            "build-errors" => CombineHelpWithCommandMetadata("build-errors", HelpText.BuildErrors),
+            "find-files" => CombineHelpWithCommandMetadata("find-files", HelpText.FindFiles),
+            "find-text" => CombineHelpWithCommandMetadata("find-text", HelpText.FindText),
+            "open-document" => CombineHelpWithCommandMetadata("open-document", HelpText.OpenDocument),
+            "list-documents" => CombineHelpWithCommandMetadata("list-documents", HelpText.ListDocuments),
+            "list-tabs" => CombineHelpWithCommandMetadata("list-tabs", HelpText.ListTabs),
+            "activate-document" => CombineHelpWithCommandMetadata("activate-document", HelpText.ActivateDocument),
+            "close-document" => CombineHelpWithCommandMetadata("close-document", HelpText.CloseDocument),
+            "save-document" => CombineHelpWithCommandMetadata("save-document", HelpText.SaveDocument),
+            "close-file" => CombineHelpWithCommandMetadata("close-file", HelpText.CloseFile),
+            "close-others" => CombineHelpWithCommandMetadata("close-others", HelpText.CloseOthers),
+            "list-windows" => CombineHelpWithCommandMetadata("list-windows", HelpText.ListWindows),
+            "activate-window" => CombineHelpWithCommandMetadata("activate-window", HelpText.ActivateWindow),
+            "apply-diff" => CombineHelpWithCommandMetadata("apply-diff", HelpText.ApplyDiff),
+            "document-slice" => CombineHelpWithCommandMetadata("document-slice", HelpText.DocumentSlice),
+            "document-slices" => CombineHelpWithCommandMetadata("document-slices", HelpText.DocumentSlices),
+            "search-symbols" => CombineHelpWithCommandMetadata("search-symbols", HelpText.SearchSymbols),
+            "goto-definition" => CombineHelpWithCommandMetadata("goto-definition", HelpText.GoToDefinition),
+            "peek-definition" => CombineHelpWithCommandMetadata("quick-info", HelpText.PeekDefinition),
+            "goto-implementation" => CombineHelpWithCommandMetadata("goto-implementation", HelpText.GoToImplementation),
+            "find-references" => CombineHelpWithCommandMetadata("find-references", HelpText.FindReferences),
+            "count-references" => CombineHelpWithCommandMetadata("count-references", HelpText.CountReferences),
+            "call-hierarchy" => CombineHelpWithCommandMetadata("call-hierarchy", HelpText.CallHierarchy),
+            "quick-info" => CombineHelpWithCommandMetadata("quick-info", HelpText.QuickInfo),
+            "file-symbols" => CombineHelpWithCommandMetadata("file-symbols", HelpText.FileSymbols),
+            "file-outline" => CombineHelpWithCommandMetadata("file-outline", HelpText.FileSymbols),
+            "debug-threads" => CombineHelpWithCommandMetadata("debug-threads", HelpText.DebugThreads),
+            "debug-stack" => CombineHelpWithCommandMetadata("debug-stack", HelpText.DebugStack),
+            "debug-locals" => CombineHelpWithCommandMetadata("debug-locals", HelpText.DebugLocals),
+            "debug-modules" => CombineHelpWithCommandMetadata("debug-modules", HelpText.DebugModules),
+            "debug-watch" => CombineHelpWithCommandMetadata("debug-watch", HelpText.DebugWatch),
+            "debug-exceptions" => CombineHelpWithCommandMetadata("debug-exceptions", HelpText.DebugExceptions),
+            "diagnostics-snapshot" => CombineHelpWithCommandMetadata("diagnostics-snapshot", HelpText.DiagnosticsSnapshot),
+            "build-configurations" => CombineHelpWithCommandMetadata("build-configurations", HelpText.BuildConfigurations),
+            "set-build-configuration" => CombineHelpWithCommandMetadata("set-build-configuration", HelpText.SetBuildConfiguration),
+            "close" => CombineHelpWithCommandMetadata("close-ide", HelpText.Close),
             "send" => HelpText.Send,
-            "batch" => HelpText.Batch,
+            "batch" => CombineHelpWithCommandMetadata("batch", HelpText.Batch),
             "request" => HelpText.Request,
             "mcp-server" => HelpText.McpServer,
-            _ => $"ERROR: Unknown help topic '{subject}'.{Environment.NewLine}{Environment.NewLine}{HelpText.General}",
+            _ => TryBuildCatalogHelp(normalizedSubject, out var catalogHelp)
+                ? catalogHelp
+                : $"ERROR: Unknown help topic '{subject}'.{Environment.NewLine}{Environment.NewLine}{HelpText.General}",
         };
 
         Console.WriteLine(text);
+    }
+
+    private static string CombineHelpWithCommandMetadata(string pipeName, string helpText)
+    {
+        if (!BridgeCommandCatalog.TryGetByPipeName(pipeName, out var metadata))
+        {
+            return helpText;
+        }
+
+        return $"{helpText.TrimEnd()}{Environment.NewLine}{Environment.NewLine}Metadata{Environment.NewLine}  Canonical: {metadata.CanonicalName}{Environment.NewLine}  Description: {metadata.Description}{Environment.NewLine}  Example:{Environment.NewLine}    vs-ide-bridge {metadata.Example}";
+    }
+
+    private static bool TryBuildCatalogHelp(string normalizedSubject, out string helpText)
+    {
+        if (!BridgeCommandCatalog.TryGetByPipeName(normalizedSubject, out var metadata))
+        {
+            helpText = string.Empty;
+            return false;
+        }
+
+        var fullExample = $"vs-ide-bridge {metadata.Example}";
+        helpText =
+            $"{metadata.PipeName}{Environment.NewLine}{Environment.NewLine}" +
+            $"Purpose{Environment.NewLine}" +
+            $"  {metadata.Description}{Environment.NewLine}{Environment.NewLine}" +
+            $"Examples{Environment.NewLine}" +
+            $"  {fullExample}{Environment.NewLine}{Environment.NewLine}" +
+            $"Metadata{Environment.NewLine}" +
+            $"  Canonical: {metadata.CanonicalName}{Environment.NewLine}" +
+            $"  Description: {metadata.Description}{Environment.NewLine}" +
+            $"  Example:{Environment.NewLine}" +
+            $"    {fullExample}";
+        return true;
     }
 }
 
@@ -869,12 +1124,28 @@ internal static class HelpText
           peek-definition Get definition context without leaving the source location
           goto-implementation Jump to one implementation
           find-references Run Find All References
+          count-references Count references (exact-or-explicit)
           call-hierarchy  Open Call Hierarchy
+          list-documents  List open documents from the IDE document table
           list-tabs       List open editor tabs
+          activate-document Activate one open document by path or name
+          close-document  Close one matching document, or all open documents
+          save-document   Save one document or all open documents
           close-file      Close one open file tab
           close-others    Close all tabs except the active one
+          list-windows    List open tool/document windows
+          activate-window Activate one window by caption fragment
           search-symbols  Search symbols semantically by name
           quick-info      Resolve symbol info at a location
+          debug-threads   Capture debugger thread snapshot
+          debug-stack     Capture debugger stack frames
+          debug-locals    Capture local variables in break mode
+          debug-modules   Capture debugger modules snapshot
+          debug-watch     Evaluate one debugger watch expression
+          debug-exceptions Capture debugger exception settings snapshot
+          diagnostics-snapshot Capture IDE/debug/build/error snapshot
+          build-configurations List available build configs/platforms
+          set-build-configuration Activate one build config/platform
           file-symbols    List symbols from one file
           file-outline    List symbols from one file (alias for file-symbols)
           apply-diff      Apply a unified diff visibly in Visual Studio
@@ -904,6 +1175,8 @@ internal static class HelpText
           --format json|summary|keyvalue
           --timeout-ms <ms>
           --out <file>
+          --discovery-mode json-only|hybrid|memory-first
+          --emit-discovery-json true|false
           --verbose
 
         Help topics
@@ -916,9 +1189,20 @@ internal static class HelpText
           vs-ide-bridge help search-symbols
           vs-ide-bridge help peek-definition
           vs-ide-bridge help goto-implementation
+          vs-ide-bridge help count-references
           vs-ide-bridge help warnings
           vs-ide-bridge help quick-info
+          vs-ide-bridge help debug-watch
+          vs-ide-bridge help diagnostics-snapshot
+          vs-ide-bridge help build-configurations
+          vs-ide-bridge help set-build-configuration
+          vs-ide-bridge help list-documents
           vs-ide-bridge help list-tabs
+          vs-ide-bridge help activate-document
+          vs-ide-bridge help close-document
+          vs-ide-bridge help save-document
+          vs-ide-bridge help list-windows
+          vs-ide-bridge help activate-window
           vs-ide-bridge help close-file
           vs-ide-bridge help apply-diff
           vs-ide-bridge help send
@@ -1040,6 +1324,8 @@ internal static class HelpText
           --timeout-ms <ms>
           --poll-ms <ms>
           --skip-ready
+          --discovery-mode json-only|hybrid|memory-first
+          --emit-discovery-json true|false
 
         Result
           Prints the state response for the matched instance.
@@ -1076,7 +1362,11 @@ internal static class HelpText
 
         Notes
           This wraps the bridge help command so callers do not need to remember the internal name.
-          Use --format json to get simple pipe names, legacy names, examples, and recipes.
+          Use --format json to get the standardized catalog payload:
+            schemaVersion, generatedAtUtc, catalog.commands[].
+          Each catalog.commands[] item includes:
+            name, canonicalName, description, example, aliases.
+          commands[] and legacyCommands[] remain for compatibility.
 
         Examples
           vs-ide-bridge catalog --instance <instanceId>
@@ -1195,13 +1485,24 @@ internal static class HelpText
         find-files
 
         Purpose
-          Find files by name across the current solution.
+          Search solution explorer files by name or path fragment.
 
         Required
           --query <text>
 
+        Optional
+          --path <text>
+          --extensions <csv-or-semicolon-list>
+          --max-results <n>
+          --include-non-project true|false
+
+        Output
+          Returns ranked matches with:
+            path, name, project, score, source
+
         Examples
           vs-ide-bridge find-files --instance <instanceId> --query PipeServerService.cs
+          vs-ide-bridge find-files --instance <instanceId> --query CMakeLists.txt --include-non-project true
           vs-ide-bridge find-files --sln VsIdeBridge.sln --query Program.cs
         """;
 
@@ -1236,10 +1537,17 @@ internal static class HelpText
           Open a file and optionally move the caret to a line and column.
 
         Required
-          --file <path>
+          --file <path-or-solution-item>
+
+        Notes
+          Accepts an absolute path, solution-relative path, or a solution item name.
+          If multiple solution items match, the command returns document_ambiguous.
+          Use find-files first when the query is broad.
+          --allow-disk-fallback true enables solution-root disk fallback (default true).
 
         Examples
           vs-ide-bridge open-document --instance <instanceId> --file C:\repo\src\foo.cpp
+          vs-ide-bridge open-document --instance <instanceId> --file src\CMakeLists.txt
           vs-ide-bridge open-document --instance <instanceId> --file C:\repo\src\foo.cpp --line 42 --column 1
         """;
 
@@ -1294,6 +1602,27 @@ internal static class HelpText
         Examples
           vs-ide-bridge close-document --instance <instanceId> --query Program.cs
           vs-ide-bridge close-document --instance <instanceId> --query .json --all
+        """;
+
+    public const string SaveDocument =
+        """
+        save-document
+
+        Purpose
+          Save one document by file path or save all open documents.
+
+        Optional
+          --file <path>
+          --all
+
+        Notes
+          If --file is omitted, saves the active document.
+          --all saves all open documents and ignores --file.
+
+        Examples
+          vs-ide-bridge save-document --instance <instanceId>
+          vs-ide-bridge save-document --instance <instanceId> --file C:\repo\src\foo.cpp
+          vs-ide-bridge save-document --instance <instanceId> --all
         """;
 
     public const string CloseFile =
@@ -1368,11 +1697,12 @@ internal static class HelpText
 
         Optional
           --base-directory <path>
-          --open-changed-files
+          --open-changed-files <true|false> (default: true)
           --save-changed-files
 
         Notes
           Existing file edits are applied through the editor buffer first.
+          Changed files are opened by default so edit movement stays visible in Visual Studio.
           This leaves normal edits visible in Visual Studio and lets the IDE re-evaluate syntax.
 
         Examples
@@ -1396,6 +1726,7 @@ internal static class HelpText
           --context-after <n>
           --start-line <n>
           --end-line <n>
+          --reveal-in-editor <true|false> (default: true)
 
         Examples
           vs-ide-bridge document-slice --instance <instanceId> --file C:\repo\src\foo.cpp --line 42 --context-before 8 --context-after 20
@@ -1515,6 +1846,30 @@ internal static class HelpText
           vs-ide-bridge find-references --instance <instanceId> --file C:\repo\src\foo.cpp --line 42 --column 13
         """;
 
+    public const string CountReferences =
+        """
+        count-references
+
+        Purpose
+          Run Find All References and return exact count when Visual Studio exposes one.
+
+        Common usage
+          --file <path> --line <n> --column <n>
+
+        Optional
+          --document <name>
+          --select-word
+          --activate-window
+          --timeout-ms <ms>
+
+        Result
+          Returns countKnown=true with count when exact extraction succeeds.
+          Otherwise returns countKnown=false with reason.
+
+        Examples
+          vs-ide-bridge count-references --instance <instanceId> --file C:\repo\src\foo.cpp --line 42 --column 13
+        """;
+
     public const string CallHierarchy =
         """
         call-hierarchy
@@ -1551,6 +1906,130 @@ internal static class HelpText
 
         Examples
           vs-ide-bridge quick-info --instance <instanceId> --file C:\repo\src\foo.cpp --line 42 --column 13
+        """;
+
+    public const string DebugThreads =
+        """
+        debug-threads
+
+        Purpose
+          Capture debugger thread snapshot.
+
+        Examples
+          vs-ide-bridge debug-threads --instance <instanceId>
+        """;
+
+    public const string DebugStack =
+        """
+        debug-stack
+
+        Purpose
+          Capture stack frames for the current thread or a selected thread id.
+
+        Optional
+          --thread-id <id>
+          --max-frames <n>
+
+        Examples
+          vs-ide-bridge debug-stack --instance <instanceId> --thread-id 1 --max-frames 50
+        """;
+
+    public const string DebugLocals =
+        """
+        debug-locals
+
+        Purpose
+          Capture local variables for the active stack frame in break mode.
+
+        Optional
+          --max <n>
+
+        Examples
+          vs-ide-bridge debug-locals --instance <instanceId> --max 100
+        """;
+
+    public const string DebugModules =
+        """
+        debug-modules
+
+        Purpose
+          Capture debugger module snapshot (best effort by debugger engine).
+
+        Examples
+          vs-ide-bridge debug-modules --instance <instanceId>
+        """;
+
+    public const string DebugWatch =
+        """
+        debug-watch
+
+        Purpose
+          Evaluate one watch expression in break mode.
+
+        Required
+          --expression <text>
+
+        Optional
+          --timeout-ms <ms>
+
+        Examples
+          vs-ide-bridge debug-watch --instance <instanceId> --expression count
+        """;
+
+    public const string DebugExceptions =
+        """
+        debug-exceptions
+
+        Purpose
+          Capture debugger exception settings/groups snapshot (best effort).
+
+        Examples
+          vs-ide-bridge debug-exceptions --instance <instanceId>
+        """;
+
+    public const string DiagnosticsSnapshot =
+        """
+        diagnostics-snapshot
+
+        Purpose
+          Capture IDE/debug/build state and current errors/warnings in one response.
+
+        Optional
+          --wait-for-intellisense
+          --quick
+          --max <n>
+          --timeout-ms <ms>
+
+        Examples
+          vs-ide-bridge diagnostics-snapshot --instance <instanceId> --wait-for-intellisense --max 200
+        """;
+
+    public const string BuildConfigurations =
+        """
+        build-configurations
+
+        Purpose
+          List available solution build configurations and platforms.
+
+        Examples
+          vs-ide-bridge build-configurations --instance <instanceId>
+        """;
+
+    public const string SetBuildConfiguration =
+        """
+        set-build-configuration
+
+        Purpose
+          Activate one build configuration/platform pair.
+
+        Required
+          --configuration <name>
+
+        Optional
+          --platform <name>
+
+        Examples
+          vs-ide-bridge set-build-configuration --instance <instanceId> --configuration Debug --platform x64
         """;
 
     public const string FileSymbols =
@@ -1651,12 +2130,19 @@ internal static class HelpText
           --pid <pid>
           --pipe <pipeName>
           --sln <hint>
+          --discovery-mode json-only|hybrid|memory-first
+          --emit-discovery-json true|false
+          --tools-only
 
         Notes
           Resolves the selected bridge once and reuses that pipe for the MCP session.
+          discovery-mode defaults to memory-first with JSON fallback compatibility.
+          --tools-only advertises MCP tools capability only; resources/prompts methods remain callable.
+          Use MCP tool `tool_help` to retrieve all MCP tools with schemas and examples.
 
         Example
           vs-ide-bridge mcp-server --instance <instanceId>
+          vs-ide-bridge mcp-server --instance <instanceId> --tools-only
         """;
 }
 
@@ -1728,8 +2214,24 @@ internal sealed class PipeArgsBuilder
     }
 }
 
+internal enum DiscoveryMode
+{
+    JsonOnly,
+    Hybrid,
+    MemoryFirst,
+}
+
 internal sealed class PipeDiscovery
 {
+    private const string MemoryMapName = @"Local\VsIdeBridge.Discovery.v1";
+    private const string MemoryMutexName = @"Local\VsIdeBridge.Discovery.v1.mutex";
+    private const int MemoryCapacityBytes = 1024 * 1024;
+    private static readonly (string MapName, string MutexName, string SourceUri)[] MemoryStores =
+    [
+        (MemoryMapName, MemoryMutexName, "memory://local/VsIdeBridge.Discovery.v1"),
+        (@"Global\VsIdeBridge.Discovery.v1", @"Global\VsIdeBridge.Discovery.v1.mutex", "memory://global/VsIdeBridge.Discovery.v1"),
+    ];
+
     public required string InstanceId { get; init; }
     public required string PipeName { get; init; }
     public required int ProcessId { get; init; }
@@ -1738,8 +2240,48 @@ internal sealed class PipeDiscovery
     public string? StartedAtUtc { get; init; }
     public required string DiscoveryFile { get; init; }
     public required DateTime LastWriteTimeUtc { get; init; }
+    public required string Source { get; init; }
 
-    public static async Task<IReadOnlyList<PipeDiscovery>> ListAsync(bool verbose)
+    public static Task<IReadOnlyList<PipeDiscovery>> ListAsync(bool verbose)
+    {
+        return ListAsync(verbose, DiscoveryMode.MemoryFirst);
+    }
+
+    public static async Task<IReadOnlyList<PipeDiscovery>> ListAsync(bool verbose, DiscoveryMode discoveryMode)
+    {
+        var jsonInstances = discoveryMode == DiscoveryMode.MemoryFirst || discoveryMode == DiscoveryMode.Hybrid || discoveryMode == DiscoveryMode.JsonOnly
+            ? await ListJsonAsync().ConfigureAwait(false)
+            : [];
+
+        if (discoveryMode == DiscoveryMode.JsonOnly)
+        {
+            if (verbose)
+            {
+                Console.Error.WriteLine($"Found {jsonInstances.Count} live bridge instance(s) from json discovery.");
+            }
+
+            return jsonInstances;
+        }
+
+        var memoryInstances = ListMemory();
+        var combined = discoveryMode switch
+        {
+            DiscoveryMode.MemoryFirst => MergeInstances(memoryInstances, jsonInstances, preferPrimary: true),
+            DiscoveryMode.Hybrid => MergeInstances(memoryInstances, jsonInstances, preferPrimary: false),
+            _ => jsonInstances,
+        };
+
+        if (verbose)
+        {
+            Console.Error.WriteLine(
+                $"Found {combined.Count} live bridge instance(s) " +
+                $"(memory={memoryInstances.Count}, json={jsonInstances.Count}, mode={discoveryMode.ToString().ToLowerInvariant()}).");
+        }
+
+        return combined;
+    }
+
+    private static async Task<IReadOnlyList<PipeDiscovery>> ListJsonAsync()
     {
         var temp = Environment.GetEnvironmentVariable("TEMP")
             ?? Environment.GetEnvironmentVariable("TMP")
@@ -1747,7 +2289,7 @@ internal sealed class PipeDiscovery
         var directory = Path.Combine(temp, "vs-ide-bridge", "pipes");
         if (!Directory.Exists(directory))
         {
-            throw new CliException($"Discovery directory not found: {directory}");
+            return [];
         }
 
         var files = Directory.GetFiles(directory, "bridge-*.json")
@@ -1770,11 +2312,6 @@ internal sealed class PipeDiscovery
             }
 
             instances.Add(instance);
-        }
-
-        if (verbose)
-        {
-            Console.Error.WriteLine($"Found {instances.Count} live bridge instance(s).");
         }
 
         return instances;
@@ -1815,9 +2352,14 @@ internal sealed class PipeDiscovery
         }
     }
 
-    public static async Task<PipeDiscovery> SelectAsync(BridgeInstanceSelector selector, bool verbose)
+    public static Task<PipeDiscovery> SelectAsync(BridgeInstanceSelector selector, bool verbose)
     {
-        var instances = await ListAsync(verbose).ConfigureAwait(false);
+        return SelectAsync(selector, verbose, DiscoveryMode.MemoryFirst);
+    }
+
+    public static async Task<PipeDiscovery> SelectAsync(BridgeInstanceSelector selector, bool verbose, DiscoveryMode discoveryMode)
+    {
+        var instances = await ListAsync(verbose, discoveryMode).ConfigureAwait(false);
         if (instances.Count == 0)
         {
             throw new CliException(
@@ -1830,7 +2372,9 @@ internal sealed class PipeDiscovery
         {
             if (verbose)
             {
-                Console.Error.WriteLine($"Using instance '{matches[0].InstanceId}' on pipe '{matches[0].PipeName}'.");
+                Console.Error.WriteLine(
+                    $"Using instance '{matches[0].InstanceId}' on pipe '{matches[0].PipeName}' " +
+                    $"(source={matches[0].Source}).");
             }
 
             return matches[0];
@@ -1847,6 +2391,168 @@ internal sealed class PipeDiscovery
             $"Multiple live VS IDE Bridge instances matched {selector.Describe()}. " +
             $"Use 'vs-ide-bridge instances --format summary' to choose one.{Environment.NewLine}" +
             InstanceFormatter.Format(matches, "summary"));
+    }
+
+    private static List<PipeDiscovery> ListMemory()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        var collected = new List<PipeDiscovery>();
+        foreach (var (mapName, mutexName, sourceUri) in MemoryStores)
+        {
+            var fromStore = TryListMemoryStore(mapName, mutexName, sourceUri);
+            if (fromStore.Count == 0)
+            {
+                continue;
+            }
+
+            collected.AddRange(fromStore);
+        }
+
+        if (collected.Count <= 1)
+        {
+            return collected;
+        }
+
+        return
+        [
+            .. collected
+                .GroupBy(BuildInstanceKey, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(item => item.LastWriteTimeUtc).First())
+                .OrderByDescending(item => item.LastWriteTimeUtc)
+        ];
+    }
+
+    private static List<PipeDiscovery> TryListMemoryStore(string mapName, string mutexName, string sourceUri)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        try
+        {
+            using var mutex = new System.Threading.Mutex(false, mutexName);
+            var hasLock = false;
+            try
+            {
+                hasLock = mutex.WaitOne(TimeSpan.FromSeconds(2));
+                if (!hasLock)
+                {
+                    return [];
+                }
+
+                using var map = MemoryMappedFile.OpenExisting(mapName);
+                using var view = map.CreateViewStream(0, MemoryCapacityBytes, MemoryMappedFileAccess.Read);
+                var lenBuffer = new byte[4];
+                var bytesRead = view.Read(lenBuffer, 0, lenBuffer.Length);
+                if (bytesRead < lenBuffer.Length)
+                {
+                    return [];
+                }
+
+                var payloadLength = BitConverter.ToInt32(lenBuffer, 0);
+                if (payloadLength <= 0 || payloadLength > MemoryCapacityBytes - 4)
+                {
+                    return [];
+                }
+
+                var payload = new byte[payloadLength];
+                bytesRead = view.Read(payload, 0, payload.Length);
+                if (bytesRead != payloadLength)
+                {
+                    return [];
+                }
+
+                var root = JsonNode.Parse(Encoding.UTF8.GetString(payload)) as JsonObject;
+                if (root?["items"] is not JsonArray items)
+                {
+                    return [];
+                }
+
+                var instances = new List<PipeDiscovery>();
+                foreach (var entry in items.OfType<JsonObject>())
+                {
+                    var updatedAt = entry["updatedAtUtc"]?.GetValue<string>();
+                    var updatedAtUtc = DateTime.UtcNow;
+                    if (!string.IsNullOrWhiteSpace(updatedAt) &&
+                        DateTimeOffset.TryParse(updatedAt, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
+                    {
+                        updatedAtUtc = parsed.UtcDateTime;
+                    }
+
+                    var instance = TryCreateFromNode(entry, sourceUri, updatedAtUtc, "memory");
+                    if (instance is not null)
+                    {
+                        instances.Add(instance);
+                    }
+                }
+
+                return instances;
+            }
+            finally
+            {
+                if (hasLock)
+                {
+                    mutex.ReleaseMutex();
+                }
+            }
+        }
+        catch (FileNotFoundException)
+        {
+            return [];
+        }
+        catch (System.Threading.WaitHandleCannotBeOpenedException)
+        {
+            return [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static IReadOnlyList<PipeDiscovery> MergeInstances(
+        IReadOnlyCollection<PipeDiscovery> primary,
+        IReadOnlyCollection<PipeDiscovery> secondary,
+        bool preferPrimary)
+    {
+        var merged = new Dictionary<string, PipeDiscovery>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in primary)
+        {
+            merged[BuildInstanceKey(item)] = item;
+        }
+
+        foreach (var item in secondary)
+        {
+            var key = BuildInstanceKey(item);
+            if (!merged.TryGetValue(key, out var existing))
+            {
+                merged[key] = item;
+                continue;
+            }
+
+            if (preferPrimary)
+            {
+                continue;
+            }
+
+            if (item.LastWriteTimeUtc > existing.LastWriteTimeUtc)
+            {
+                merged[key] = item;
+            }
+        }
+
+        return [.. merged.Values.OrderByDescending(item => item.LastWriteTimeUtc)];
+    }
+
+    private static string BuildInstanceKey(PipeDiscovery item)
+    {
+        return $"{item.InstanceId}|{item.ProcessId}|{item.PipeName}";
     }
 
     private static int ParsePid(string fileName)
@@ -1873,13 +2579,19 @@ internal sealed class PipeDiscovery
             return null;
         }
 
+        var file = new FileInfo(path);
+        return TryCreateFromNode(info, file.FullName, file.LastWriteTimeUtc, "json");
+    }
+
+    private static PipeDiscovery? TryCreateFromNode(JsonObject? info, string discoveryFile, DateTime lastWriteTimeUtc, string source)
+    {
         var pipeName = info?["pipeName"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(pipeName))
         {
             return null;
         }
 
-        var processId = info?["pid"]?.GetValue<int?>() ?? ParsePid(Path.GetFileName(path));
+        var processId = info?["pid"]?.GetValue<int?>() ?? ParsePid(Path.GetFileName(discoveryFile));
         if (processId <= 0)
         {
             return null;
@@ -1914,7 +2626,6 @@ internal sealed class PipeDiscovery
             instanceId = $"vs18-{processId}";
         }
 
-        var file = new FileInfo(path);
         return new PipeDiscovery
         {
             InstanceId = instanceId,
@@ -1923,8 +2634,9 @@ internal sealed class PipeDiscovery
             SolutionPath = solutionPath,
             SolutionName = solutionName,
             StartedAtUtc = startedAtUtc,
-            DiscoveryFile = file.FullName,
-            LastWriteTimeUtc = file.LastWriteTimeUtc,
+            DiscoveryFile = discoveryFile,
+            LastWriteTimeUtc = lastWriteTimeUtc,
+            Source = source,
         };
     }
 
@@ -2035,7 +2747,7 @@ internal static class InstanceFormatter
         foreach (var instance in instances.OrderByDescending(item => item.LastWriteTimeUtc))
         {
             var solution = string.IsNullOrWhiteSpace(instance.SolutionPath) ? "<no solution>" : instance.SolutionPath;
-            lines.Add($"  {instance.InstanceId} pid={instance.ProcessId} pipe={instance.PipeName} solution={solution}");
+            lines.Add($"  {instance.InstanceId} pid={instance.ProcessId} pipe={instance.PipeName} source={instance.Source} solution={solution}");
         }
 
         return string.Join(Environment.NewLine, lines);
@@ -2053,6 +2765,7 @@ internal static class InstanceFormatter
             lines.Add($"instances[{index}].solutionPath={instance.SolutionPath}");
             lines.Add($"instances[{index}].solutionName={instance.SolutionName}");
             lines.Add($"instances[{index}].startedAtUtc={instance.StartedAtUtc}");
+            lines.Add($"instances[{index}].source={instance.Source}");
             index++;
         }
 
@@ -2062,7 +2775,7 @@ internal static class InstanceFormatter
     private static string FormatSingleSummary(PipeDiscovery instance)
     {
         var solution = string.IsNullOrWhiteSpace(instance.SolutionPath) ? "<no solution>" : instance.SolutionPath;
-        return $"[OK] current instance={instance.InstanceId} pid={instance.ProcessId} pipe={instance.PipeName} solution={solution}";
+        return $"[OK] current instance={instance.InstanceId} pid={instance.ProcessId} pipe={instance.PipeName} source={instance.Source} solution={solution}";
     }
 
     private static string FormatSingleKeyValue(PipeDiscovery instance)
@@ -2075,6 +2788,7 @@ internal static class InstanceFormatter
             $"solutionPath={instance.SolutionPath}",
             $"solutionName={instance.SolutionName}",
             $"startedAtUtc={instance.StartedAtUtc}",
+            $"source={instance.Source}",
         };
         return string.Join(Environment.NewLine, lines);
     }
@@ -2093,6 +2807,7 @@ internal static class InstanceFormatter
                     ["solutionPath"] = instance.SolutionPath,
                     ["solutionName"] = instance.SolutionName,
                     ["startedAtUtc"] = instance.StartedAtUtc,
+                    ["source"] = instance.Source,
                     ["discoveryFile"] = instance.DiscoveryFile,
                     ["lastWriteTimeUtc"] = instance.LastWriteTimeUtc.ToString("O"),
                 }),
@@ -2110,6 +2825,7 @@ internal static class InstanceFormatter
             ["solutionPath"] = instance.SolutionPath,
             ["solutionName"] = instance.SolutionName,
             ["startedAtUtc"] = instance.StartedAtUtc,
+            ["source"] = instance.Source,
             ["discoveryFile"] = instance.DiscoveryFile,
             ["lastWriteTimeUtc"] = instance.LastWriteTimeUtc.ToString("O"),
         };
@@ -2122,11 +2838,16 @@ internal sealed class PipeClient : IAsyncDisposable
     private readonly NamedPipeClientStream _pipe;
     private readonly StreamReader _reader;
     private readonly StreamWriter _writer;
+    private readonly int _timeoutMs;
+    private readonly FileStream _requestGate;
 
     public PipeClient(string pipeName, int timeoutMs)
     {
+        _timeoutMs = Math.Max(1_000, timeoutMs);
+        _requestGate = AcquireRequestGate(pipeName, _timeoutMs);
+
         _pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        using var cts = new CancellationTokenSource(timeoutMs);
+        using var cts = new CancellationTokenSource(_timeoutMs);
         _pipe.ConnectAsync(cts.Token).GetAwaiter().GetResult();
         _reader = new StreamReader(_pipe, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, leaveOpen: true);
         _writer = new StreamWriter(_pipe, new UTF8Encoding(false), leaveOpen: true)
@@ -2138,15 +2859,32 @@ internal sealed class PipeClient : IAsyncDisposable
 
     public async Task<JsonObject> SendAsync(JsonObject payload)
     {
-        await _writer.WriteLineAsync(payload.ToJsonString());
-        var line = await _reader.ReadLineAsync();
-        if (string.IsNullOrWhiteSpace(line))
-        {
-            throw new CliException("The bridge pipe returned an empty response.");
-        }
+        using var cts = new CancellationTokenSource(_timeoutMs);
+        var payloadJson = payload.ToJsonString();
 
-        return JsonNode.Parse(line) as JsonObject
-               ?? throw new CliException("The bridge pipe returned malformed JSON.");
+        try
+        {
+            await _writer.WriteLineAsync(payloadJson.AsMemory(), cts.Token).ConfigureAwait(false);
+            var line = await _reader.ReadLineAsync(cts.Token).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                throw new CliException("The bridge pipe returned an empty response.");
+            }
+
+            return JsonNode.Parse(line) as JsonObject
+                   ?? throw new CliException("The bridge pipe returned malformed JSON.");
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException(
+                $"Timed out waiting for bridge response after {_timeoutMs} ms. Visual Studio may be blocked by a modal dialog.");
+        }
+    }
+
+    private static string BuildGateName(string pipeName)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(pipeName ?? string.Empty));
+        return Convert.ToHexString(hash);
     }
 
     public ValueTask DisposeAsync()
@@ -2154,7 +2892,31 @@ internal sealed class PipeClient : IAsyncDisposable
         _reader.Dispose();
         _writer.Dispose();
         _pipe.Dispose();
+        _requestGate.Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    private static FileStream AcquireRequestGate(string pipeName, int timeoutMs)
+    {
+        var lockDirectory = Path.Combine(Path.GetTempPath(), "vs-ide-bridge", "locks");
+        Directory.CreateDirectory(lockDirectory);
+        var lockFile = Path.Combine(lockDirectory, $"{BuildGateName(pipeName)}.lock");
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+
+        while (DateTime.UtcNow <= deadline)
+        {
+            try
+            {
+                return new FileStream(lockFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                Thread.Sleep(100);
+            }
+        }
+
+        throw new CliException(
+            $"Bridge pipe '{pipeName}' is busy with another request. Avoid parallel calls and retry.");
     }
 }
 
@@ -2453,6 +3215,22 @@ internal sealed class CliOptions
         return _flags.Contains(name);
     }
 
+    public bool GetBoolean(string name, bool defaultValue)
+    {
+        var value = GetValue(name);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return defaultValue;
+        }
+
+        if (bool.TryParse(value, out var parsed))
+        {
+            return parsed;
+        }
+
+        throw new CliException($"Option --{name} must be true or false.");
+    }
+
     public int GetInt32(string name, int defaultValue)
     {
         var value = GetValue(name);
@@ -2466,4 +3244,20 @@ internal sealed class CliOptions
     }
 }
 
-internal sealed class CliException(string message) : Exception(message);
+internal sealed class CliException : Exception
+{
+    public CliException()
+    {
+    }
+
+    public CliException(string message)
+        : base(message)
+    {
+    }
+
+    public CliException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+}

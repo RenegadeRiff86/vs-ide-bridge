@@ -1,17 +1,18 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System;
+using System.Linq;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
 
 internal sealed class WindowService
 {
+    private const int WindowPollIntervalMilliseconds = 200;
+
     public async Task<JObject> ListWindowsAsync(DTE2 dte, string? query)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -42,7 +43,7 @@ internal sealed class WindowService
     public async Task<JObject?> WaitForWindowAsync(DTE2 dte, string query, bool activate, int timeoutMs)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(Math.Max(0, timeoutMs));
-        do
+        while (true)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
@@ -62,9 +63,8 @@ internal sealed class WindowService
                 break;
             }
 
-            await Task.Delay(200).ConfigureAwait(true);
+            await Task.Delay(WindowPollIntervalMilliseconds).ConfigureAwait(true);
         }
-        while (true);
 
         return null;
     }

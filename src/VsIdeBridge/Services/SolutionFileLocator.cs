@@ -1,0 +1,339 @@
+using EnvDTE;
+using EnvDTE80;
+using Microsoft.VisualStudio.Shell;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using VsIdeBridge.Infrastructure;
+
+namespace VsIdeBridge.Services;
+
+internal static class SolutionFileLocator
+{
+    internal sealed class Match
+    {
+        public string Path { get; set; } = string.Empty;
+
+        public string ProjectUniqueName { get; set; } = string.Empty;
+
+        public int Score { get; set; }
+
+        public string Source { get; set; } = "solution";
+    }
+
+    public static IReadOnlyList<Match> FindMatches(
+        DTE2 dte,
+        string query,
+        string? pathFilter = null,
+        IReadOnlyCollection<string>? extensions = null)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var trimmedQuery = query?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmedQuery))
+        {
+            return [];
+        }
+
+        var normalizedQuery = NormalizeQuery(trimmedQuery);
+        var queryFileName = Path.GetFileName(trimmedQuery.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
+
+        return EnumerateSolutionFiles(dte)
+            .Select(item => new Match
+            {
+                Path = item.Path,
+                ProjectUniqueName = item.ProjectUniqueName,
+                Score = ScoreMatch(item.Path, trimmedQuery, normalizedQuery, queryFileName),
+                Source = "solution",
+            })
+            .Where(item => item.Score > 0 && MatchesFilters(item.Path, pathFilter, extensions))
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Path.Length)
+            .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public static IReadOnlyList<Match> FindDiskMatches(
+        DTE2 dte,
+        string query,
+        string? pathFilter = null,
+        IReadOnlyCollection<string>? extensions = null,
+        int maxResults = 200)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var trimmedQuery = query?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmedQuery))
+        {
+            return [];
+        }
+
+        var solutionDirectory = GetSolutionDirectory(dte);
+        if (string.IsNullOrWhiteSpace(solutionDirectory) || !Directory.Exists(solutionDirectory))
+        {
+            return [];
+        }
+
+        var normalizedQuery = NormalizeQuery(trimmedQuery);
+        var queryFileName = Path.GetFileName(trimmedQuery.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
+        var results = new List<Match>();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(solutionDirectory, "*", SearchOption.AllDirectories);
+        }
+        catch
+        {
+            return [];
+        }
+
+        foreach (var candidate in files)
+        {
+            string normalizedPath;
+            try
+            {
+                normalizedPath = PathNormalization.NormalizeFilePath(candidate);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (!visited.Add(normalizedPath))
+            {
+                continue;
+            }
+
+            if (!MatchesFilters(normalizedPath, pathFilter, extensions))
+            {
+                continue;
+            }
+
+            var score = ScoreMatch(normalizedPath, trimmedQuery, normalizedQuery, queryFileName);
+            if (score <= 0)
+            {
+                continue;
+            }
+
+            results.Add(new Match
+            {
+                Path = normalizedPath,
+                ProjectUniqueName = string.Empty,
+                Score = score,
+                Source = "disk",
+            });
+
+            if (results.Count >= maxResults)
+            {
+                break;
+            }
+        }
+
+        return results
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Path.Length)
+            .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static int ScoreMatch(string candidatePath, string rawQuery, string normalizedQuery, string queryFileName)
+    {
+        var candidateKey = NormalizeQuery(candidatePath);
+        var candidateName = Path.GetFileName(candidatePath);
+        var score = 0;
+
+        if (Path.IsPathRooted(rawQuery) && PathNormalization.AreEquivalent(candidatePath, rawQuery))
+        {
+            return 1000;
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalizedQuery))
+        {
+            if (string.Equals(candidateKey, normalizedQuery, StringComparison.OrdinalIgnoreCase))
+            {
+                score = Math.Max(score, 950);
+            }
+
+            if (candidateKey.EndsWith("/" + normalizedQuery, StringComparison.OrdinalIgnoreCase) ||
+                candidateKey.EndsWith(normalizedQuery, StringComparison.OrdinalIgnoreCase))
+            {
+                score = Math.Max(score, 900);
+            }
+
+            if (candidateKey.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase))
+            {
+                score = Math.Max(score, 500);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(queryFileName))
+        {
+            if (string.Equals(candidateName, queryFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                score = Math.Max(score, 700);
+            }
+            else if (candidateName.IndexOf(queryFileName, StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                score = Math.Max(score, 400);
+            }
+        }
+
+        if (candidatePath.IndexOf(rawQuery, StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            score = Math.Max(score, 300);
+        }
+
+        return score;
+    }
+
+    private static string NormalizeQuery(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var normalized = Path.IsPathRooted(path)
+            ? PathNormalization.NormalizeFilePath(path)
+            : path.Trim();
+
+        normalized = normalized
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .TrimStart('.', Path.DirectorySeparatorChar)
+            .TrimEnd(Path.DirectorySeparatorChar);
+
+        return normalized.Replace(Path.DirectorySeparatorChar, '/');
+    }
+
+    private static bool MatchesFilters(string candidatePath, string? pathFilter, IReadOnlyCollection<string>? extensions)
+    {
+        if (!string.IsNullOrWhiteSpace(pathFilter))
+        {
+            var normalizedFilter = NormalizeQuery(pathFilter!);
+            var normalizedCandidate = NormalizeQuery(candidatePath);
+            if (!normalizedCandidate.Contains(normalizedFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        if (extensions is not null && extensions.Count > 0)
+        {
+            var ext = Path.GetExtension(candidatePath);
+            if (string.IsNullOrWhiteSpace(ext))
+            {
+                return false;
+            }
+
+            var matched = extensions.Any(item =>
+            {
+                var normalized = item.StartsWith(".") ? item : "." + item;
+                return string.Equals(normalized, ext, StringComparison.OrdinalIgnoreCase);
+            });
+
+            if (!matched)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string GetSolutionDirectory(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (dte.Solution?.IsOpen != true || string.IsNullOrWhiteSpace(dte.Solution.FullName))
+        {
+            return string.Empty;
+        }
+
+        return Path.GetDirectoryName(PathNormalization.NormalizeFilePath(dte.Solution.FullName)) ?? string.Empty;
+    }
+
+    private static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateSolutionFiles(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (dte.Solution?.IsOpen != true)
+        {
+            yield break;
+        }
+
+        foreach (Project project in dte.Solution.Projects)
+        {
+            foreach (var file in EnumerateProjectFiles(project))
+            {
+                yield return file;
+            }
+        }
+    }
+
+    private static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateProjectFiles(Project? project)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (project is null)
+        {
+            yield break;
+        }
+
+        if (string.Equals(project.Kind, ProjectKinds.vsProjectKindSolutionFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (ProjectItem item in project.ProjectItems)
+            {
+                if (item.SubProject is not null)
+                {
+                    foreach (var file in EnumerateProjectFiles(item.SubProject))
+                    {
+                        yield return file;
+                    }
+                }
+            }
+
+            yield break;
+        }
+
+        foreach (ProjectItem item in project.ProjectItems)
+        {
+            foreach (var file in EnumerateProjectItemFiles(item, project.UniqueName))
+            {
+                yield return file;
+            }
+        }
+    }
+
+    private static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateProjectItemFiles(ProjectItem item, string projectUniqueName)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (item.FileCount > 0)
+        {
+            for (short i = 1; i <= item.FileCount; i++)
+            {
+                var fileName = item.FileNames[i];
+                if (!string.IsNullOrWhiteSpace(fileName))
+                {
+                    yield return (PathNormalization.NormalizeFilePath(fileName), projectUniqueName);
+                }
+            }
+        }
+
+        if (item.ProjectItems is null)
+        {
+            yield break;
+        }
+
+        foreach (ProjectItem child in item.ProjectItems)
+        {
+            foreach (var file in EnumerateProjectItemFiles(child, projectUniqueName))
+            {
+                yield return file;
+            }
+        }
+    }
+}

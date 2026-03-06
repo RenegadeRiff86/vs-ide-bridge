@@ -1,23 +1,19 @@
-using System.Runtime.InteropServices;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
 
-internal sealed class IdeStateService
+internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceService, BridgeWatchdogService bridgeWatchdogService)
 {
-    private readonly BridgeInstanceService _bridgeInstanceService;
-
-    public IdeStateService(BridgeInstanceService bridgeInstanceService)
-    {
-        _bridgeInstanceService = bridgeInstanceService;
-    }
+    private readonly BridgeInstanceService _bridgeInstanceService = bridgeInstanceService;
+    private readonly BridgeWatchdogService _bridgeWatchdogService = bridgeWatchdogService;
 
     public async Task<JObject> GetStateAsync(EnvDTE80.DTE2 dte)
     {
@@ -38,6 +34,7 @@ internal sealed class IdeStateService
             ["openDocuments"] = GetOpenDocumentPaths(dte),
             ["startupProjects"] = GetStartupProjects(dte),
             ["bridge"] = _bridgeInstanceService.CreateStateData(solutionPath),
+            ["watchdog"] = _bridgeWatchdogService.GetSnapshot(),
         };
 
         if (TryGetActiveTextSelection(activeDocument, out var selection))
@@ -116,7 +113,7 @@ internal sealed class IdeStateService
             object[] projects => new JArray(projects
                 .OfType<string>()
                 .Where(project => !string.IsNullOrWhiteSpace(project))),
-            _ => new JArray(),
+            _ => [],
         };
     }
 }

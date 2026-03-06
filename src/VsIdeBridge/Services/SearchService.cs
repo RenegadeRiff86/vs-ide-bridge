@@ -1,18 +1,15 @@
+using EnvDTE;
+using EnvDTE80;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.FindResults;
+using Microsoft.VisualStudio.Text;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using EnvDTE;
-using EnvDTE80;
-using Microsoft.VisualStudio.ComponentModelHost;
-using Microsoft.VisualStudio.Shell;
-using Microsoft.VisualStudio.Shell.FindResults;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Editor;
-using Microsoft.VisualStudio.Utilities;
-using Newtonsoft.Json.Linq;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -35,7 +32,7 @@ internal sealed class SearchService
 
         public int ScoreHint { get; set; }
 
-        public List<string> SourceQueries { get; set; } = new List<string>();
+        public List<string> SourceQueries { get; set; } = [];
     }
 
     private sealed class CodeModelHit
@@ -70,8 +67,8 @@ internal sealed class SearchService
         public bool WholeWord { get; set; }
     }
 
-    private static readonly HashSet<vsCMElement> s_codeModelKinds = new()
-    {
+    private static readonly HashSet<vsCMElement> s_codeModelKinds =
+    [
         vsCMElement.vsCMElementFunction,
         vsCMElement.vsCMElementClass,
         vsCMElement.vsCMElementStruct,
@@ -80,25 +77,58 @@ internal sealed class SearchService
         vsCMElement.vsCMElementInterface,
         vsCMElement.vsCMElementProperty,
         vsCMElement.vsCMElementVariable,
-    };
+    ];
 
-    public async Task<JObject> FindFilesAsync(IdeCommandContext context, string query)
+    public async Task<JObject> FindFilesAsync(
+        IdeCommandContext context,
+        string query,
+        string? pathFilter,
+        IReadOnlyCollection<string> extensions,
+        int maxResults,
+        bool includeNonProject)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
-        var matches = new JArray(
-            EnumerateSolutionFiles(context.Dte)
-                .Where(item => item.Path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                               Path.GetFileName(item.Path).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
-                .Select(item => new JObject
+        var merged = new Dictionary<string, SolutionFileLocator.Match>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in SolutionFileLocator.FindMatches(context.Dte, query, pathFilter, extensions))
+        {
+            merged[item.Path] = item;
+        }
+
+        if (includeNonProject)
+        {
+            foreach (var item in SolutionFileLocator.FindDiskMatches(context.Dte, query, pathFilter, extensions, Math.Max(100, maxResults * 2)))
+            {
+                if (!merged.TryGetValue(item.Path, out var existing) || item.Score > existing.Score)
                 {
-                    ["path"] = item.Path,
-                    ["project"] = item.ProjectUniqueName,
-                }));
+                    merged[item.Path] = item;
+                }
+            }
+        }
+
+        var items = merged.Values
+            .OrderByDescending(item => item.Score)
+            .ThenBy(item => item.Path.Length)
+            .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Max(1, maxResults))
+            .ToArray();
+
+        var matches = new JArray(items.Select(item => new JObject
+        {
+            ["path"] = item.Path,
+            ["name"] = Path.GetFileName(item.Path),
+            ["project"] = item.ProjectUniqueName,
+            ["score"] = item.Score,
+            ["source"] = item.Source,
+        }));
 
         return new JObject
         {
             ["query"] = query,
+            ["pathFilter"] = pathFilter ?? string.Empty,
+            ["extensions"] = new JArray(extensions.OrderBy(item => item, StringComparer.OrdinalIgnoreCase)),
+            ["includeNonProject"] = includeNonProject,
             ["count"] = matches.Count,
             ["matches"] = matches,
         };
@@ -115,7 +145,7 @@ internal sealed class SearchService
         string? projectUniqueName,
         string? pathFilter = null)
     {
-        var searchData = await SearchTextMatchesAsync(
+        var (Matches, GroupedMatches) = await SearchTextMatchesAsync(
             context,
             query,
             scope,
@@ -125,16 +155,16 @@ internal sealed class SearchService
             projectUniqueName,
             pathFilter).ConfigureAwait(true);
 
-        await PopulateFindResultsAsync(context, searchData.GroupedMatches, query, resultsWindow).ConfigureAwait(true);
+        await PopulateFindResultsAsync(context, GroupedMatches, query, resultsWindow).ConfigureAwait(true);
 
         return new JObject
         {
             ["query"] = query,
             ["scope"] = scope,
             ["pathFilter"] = pathFilter ?? string.Empty,
-            ["count"] = searchData.Matches.Count,
+            ["count"] = Matches.Count,
             ["resultsWindow"] = resultsWindow,
-            ["matches"] = new JArray(searchData.Matches.Select(SerializeHit)),
+            ["matches"] = new JArray(Matches.Select(SerializeHit)),
         };
     }
 
@@ -222,7 +252,7 @@ internal sealed class SearchService
                 break;
         }
 
-        var searchData = await SearchTextMatchesAsync(
+        var (Matches, GroupedMatches) = await SearchTextMatchesAsync(
             context,
             pattern,
             scope,
@@ -233,7 +263,7 @@ internal sealed class SearchService
             pathFilter).ConfigureAwait(true);
 
         // Annotate each hit with an inferred kind and cap at max
-        var hits = searchData.Matches
+        var hits = Matches
             .Take(max)
             .Select(hit =>
             {
@@ -254,7 +284,7 @@ internal sealed class SearchService
             ["project"] = projectUniqueName ?? string.Empty,
             ["pathFilter"] = pathFilter ?? string.Empty,
             ["count"] = hits.Length,
-            ["totalMatchCount"] = searchData.Matches.Count,
+            ["totalMatchCount"] = Matches.Count,
             ["source"] = "text",
             ["matches"] = new JArray(hits),
         };
@@ -295,7 +325,7 @@ internal sealed class SearchService
         int resultsWindow)
     {
         IReadOnlyList<string> searchTerms;
-        var searchData = useRegex
+        var (Matches, GroupedMatches) = useRegex
             ? await SearchTextMatchesAsync(
                 context,
                 query,
@@ -324,7 +354,7 @@ internal sealed class SearchService
 
         if (populateResultsWindow)
         {
-            await PopulateFindResultsAsync(context, searchData.GroupedMatches, query, resultsWindow).ConfigureAwait(true);
+            await PopulateFindResultsAsync(context, GroupedMatches, query, resultsWindow).ConfigureAwait(true);
         }
 
         var contexts = BuildSmartContexts(
@@ -332,7 +362,7 @@ internal sealed class SearchService
             matchCase,
             wholeWord,
             useRegex,
-            searchData.Matches,
+            Matches,
             contextBefore,
             contextAfter,
             maxContexts);
@@ -342,7 +372,7 @@ internal sealed class SearchService
             ["query"] = query,
             ["scope"] = scope,
             ["searchTerms"] = new JArray(searchTerms),
-            ["totalMatchCount"] = searchData.Matches.Count,
+            ["totalMatchCount"] = Matches.Count,
             ["contextCount"] = contexts.Count,
             ["populateResultsWindow"] = populateResultsWindow,
             ["resultsWindow"] = resultsWindow,
@@ -358,8 +388,7 @@ internal sealed class SearchService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
-        var service = await context.Package.GetServiceAsync(typeof(SVsFindResults)).ConfigureAwait(true) as IFindResultsService;
-        if (service is null)
+        if (await context.Package.GetServiceAsync(typeof(SVsFindResults)).ConfigureAwait(true) is not IFindResultsService service)
         {
             return;
         }
@@ -409,16 +438,14 @@ internal sealed class SearchService
         var allFiles = scope switch
         {
             "document" => new[] { await GetDocumentTargetAsync(context).ConfigureAwait(true) },
-            "open" => EnumerateOpenFiles(context.Dte).ToArray(),
-            "project" => EnumerateSolutionFiles(context.Dte)
-                .Where(item => string.Equals(item.ProjectUniqueName, projectUniqueName, StringComparison.OrdinalIgnoreCase))
-                .ToArray(),
-            _ => EnumerateSolutionFiles(context.Dte).ToArray(),
+            "open" => [.. EnumerateOpenFiles(context.Dte)],
+            "project" => [.. EnumerateSolutionFiles(context.Dte).Where(item => string.Equals(item.ProjectUniqueName, projectUniqueName, StringComparison.OrdinalIgnoreCase))],
+            _ => [.. EnumerateSolutionFiles(context.Dte)],
         };
 
         var files = string.IsNullOrWhiteSpace(pathFilter)
             ? allFiles
-            : allFiles.Where(f => f.Path.IndexOf(pathFilter, StringComparison.OrdinalIgnoreCase) >= 0).ToArray();
+            : [.. allFiles.Where(f => f.Path.IndexOf(pathFilter, StringComparison.OrdinalIgnoreCase) >= 0)];
 
         var regex = BuildRegex(query, matchCase, wholeWord, useRegex);
         var hits = new List<SearchHit>();
@@ -446,12 +473,12 @@ internal sealed class SearchService
                         MatchLength = match.Length,
                         Preview = line,
                         ScoreHint = 0,
-                        SourceQueries = new List<string> { query },
+                        SourceQueries = [query],
                     });
 
                     if (!groupedMatches.TryGetValue(file.Path, out var results))
                     {
-                        results = new List<FindResult>();
+                        results = [];
                         groupedMatches[file.Path] = results;
                     }
 
@@ -475,7 +502,7 @@ internal sealed class SearchService
 
         foreach (var term in terms)
         {
-            var termResults = await SearchTextMatchesAsync(
+            var (Matches, GroupedMatches) = await SearchTextMatchesAsync(
                 context,
                 term.Text,
                 scope,
@@ -484,7 +511,7 @@ internal sealed class SearchService
                 useRegex: false,
                 projectUniqueName).ConfigureAwait(true);
 
-            foreach (var hit in termResults.Matches)
+            foreach (var hit in Matches)
             {
                 var key = string.Concat(hit.Path, "|", hit.Line.ToString(), "|", hit.Column.ToString());
 
@@ -511,7 +538,7 @@ internal sealed class SearchService
 
                 if (!groupedMatches.TryGetValue(hit.Path, out var results))
                 {
-                    results = new List<FindResult>();
+                    results = [];
                     groupedMatches[hit.Path] = results;
                 }
 
@@ -571,11 +598,11 @@ internal sealed class SearchService
                 }
             }
 
-            foreach (var window in windows)
+            foreach (var (StartLine, EndLine, Hits) in windows)
             {
                 var textLines = new JArray();
                 var builder = new System.Text.StringBuilder();
-                for (var lineNumber = window.StartLine; lineNumber <= window.EndLine; lineNumber++)
+                for (var lineNumber = StartLine; lineNumber <= EndLine; lineNumber++)
                 {
                     var lineText = allLines[lineNumber - 1];
                     textLines.Add(new JObject
@@ -594,15 +621,15 @@ internal sealed class SearchService
                     builder.Append(lineText);
                 }
 
-                var score = ScoreSmartContext(window.Hits);
-                contexts.Add((score, window.Hits.Min(hit => hit.Line), new JObject
+                var score = ScoreSmartContext(Hits);
+                contexts.Add((score, Hits.Min(hit => hit.Line), new JObject
                 {
                     ["path"] = fileGroup.Key,
-                    ["project"] = window.Hits[0].ProjectUniqueName,
-                    ["startLine"] = window.StartLine,
-                    ["endLine"] = window.EndLine,
+                    ["project"] = Hits[0].ProjectUniqueName,
+                    ["startLine"] = StartLine,
+                    ["endLine"] = EndLine,
                     ["score"] = score,
-                    ["hits"] = new JArray(window.Hits.Select(SerializeHit)),
+                    ["hits"] = new JArray(Hits.Select(SerializeHit)),
                     ["text"] = builder.ToString(),
                     ["lines"] = textLines,
                 }));
@@ -786,7 +813,7 @@ internal sealed class SearchService
         var files = scope switch
         {
             "document" => string.IsNullOrWhiteSpace(activeDocument.Path)
-                ? Array.Empty<(string Path, string ProjectUniqueName)>()
+                ? []
                 : new[] { activeDocument },
             "open" => EnumerateOpenFiles(dte),
             "project" => EnumerateSolutionFiles(dte)

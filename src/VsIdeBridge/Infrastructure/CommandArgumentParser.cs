@@ -36,7 +36,7 @@ internal static class CommandArgumentParser
 
             if (!values.TryGetValue(name, out var list))
             {
-                list = new List<string>();
+                list = [];
                 values[name] = list;
             }
 

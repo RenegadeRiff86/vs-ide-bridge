@@ -5,14 +5,9 @@ using System.Linq;
 
 namespace VsIdeBridge.Infrastructure;
 
-internal sealed class CommandArguments
+internal sealed class CommandArguments(Dictionary<string, List<string>> values)
 {
-    private readonly Dictionary<string, List<string>> _values;
-
-    public CommandArguments(Dictionary<string, List<string>> values)
-    {
-        _values = values;
-    }
+    private readonly Dictionary<string, List<string>> _values = values;
 
     public string? GetString(string name, string? defaultValue = null)
     {

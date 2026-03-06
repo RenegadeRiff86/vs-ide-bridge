@@ -2,16 +2,9 @@ using System;
 
 namespace VsIdeBridge.Infrastructure;
 
-internal sealed class CommandErrorException : Exception
+internal sealed class CommandErrorException(string code, string message, object? details = null) : Exception(message)
 {
-    public CommandErrorException(string code, string message, object? details = null)
-        : base(message)
-    {
-        Code = code;
-        Details = details;
-    }
+    public string Code { get; } = code;
 
-    public string Code { get; }
-
-    public object? Details { get; }
+    public object? Details { get; } = details;
 }

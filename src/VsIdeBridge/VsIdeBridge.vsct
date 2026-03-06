@@ -239,6 +239,17 @@
           <LocCanonicalName>.Tools.IdeFindAllReferences</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeCountReferences" priority="0x023C" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Count References</ButtonText>
+          <CommandName>IdeCountReferences</CommandName>
+          <CanonicalName>Tools.IdeCountReferences</CanonicalName>
+          <LocCanonicalName>.Tools.IdeCountReferences</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeShowCallHierarchy" priority="0x021C" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -448,6 +459,105 @@
           <LocCanonicalName>.Tools.IdeDebugStepOut</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeDebugThreads" priority="0x0233" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Debug Threads</ButtonText>
+          <CommandName>IdeDebugThreads</CommandName>
+          <CanonicalName>Tools.IdeDebugThreads</CanonicalName>
+          <LocCanonicalName>.Tools.IdeDebugThreads</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeDebugStack" priority="0x0234" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Debug Stack</ButtonText>
+          <CommandName>IdeDebugStack</CommandName>
+          <CanonicalName>Tools.IdeDebugStack</CanonicalName>
+          <LocCanonicalName>.Tools.IdeDebugStack</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeDebugLocals" priority="0x0235" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Debug Locals</ButtonText>
+          <CommandName>IdeDebugLocals</CommandName>
+          <CanonicalName>Tools.IdeDebugLocals</CanonicalName>
+          <LocCanonicalName>.Tools.IdeDebugLocals</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeDebugModules" priority="0x0236" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Debug Modules</ButtonText>
+          <CommandName>IdeDebugModules</CommandName>
+          <CanonicalName>Tools.IdeDebugModules</CanonicalName>
+          <LocCanonicalName>.Tools.IdeDebugModules</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeDebugWatch" priority="0x0237" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Debug Watch</ButtonText>
+          <CommandName>IdeDebugWatch</CommandName>
+          <CanonicalName>Tools.IdeDebugWatch</CanonicalName>
+          <LocCanonicalName>.Tools.IdeDebugWatch</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeDebugExceptions" priority="0x0238" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Debug Exceptions</ButtonText>
+          <CommandName>IdeDebugExceptions</CommandName>
+          <CanonicalName>Tools.IdeDebugExceptions</CanonicalName>
+          <LocCanonicalName>.Tools.IdeDebugExceptions</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeDiagnosticsSnapshot" priority="0x0239" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Diagnostics Snapshot</ButtonText>
+          <CommandName>IdeDiagnosticsSnapshot</CommandName>
+          <CanonicalName>Tools.IdeDiagnosticsSnapshot</CanonicalName>
+          <LocCanonicalName>.Tools.IdeDiagnosticsSnapshot</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeBuildConfigurations" priority="0x023A" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Build Configurations</ButtonText>
+          <CommandName>IdeBuildConfigurations</CommandName>
+          <CanonicalName>Tools.IdeBuildConfigurations</CanonicalName>
+          <LocCanonicalName>.Tools.IdeBuildConfigurations</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSetBuildConfiguration" priority="0x023B" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Set Build Configuration</ButtonText>
+          <CommandName>IdeSetBuildConfiguration</CommandName>
+          <CanonicalName>Tools.IdeSetBuildConfiguration</CanonicalName>
+          <LocCanonicalName>.Tools.IdeSetBuildConfiguration</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeBuildSolution" priority="0x0212" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -612,6 +722,17 @@
           <LocCanonicalName>.Tools.IdeCloseIde</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSaveDocument" priority="0x0232" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Save Document</ButtonText>
+          <CommandName>IdeSaveDocument</CommandName>
+          <CanonicalName>Tools.IdeSaveDocument</CanonicalName>
+          <LocCanonicalName>.Tools.IdeSaveDocument</LocCanonicalName>
+        </Strings>
+      </Button>
     </Buttons>
   </Commands>
 
@@ -643,6 +764,7 @@
       <IDSymbol name="cmdidIdeListWindows" value="0x0219" />
       <IDSymbol name="cmdidIdeExecuteVsCommand" value="0x021A" />
       <IDSymbol name="cmdidIdeFindAllReferences" value="0x021B" />
+      <IDSymbol name="cmdidIdeCountReferences" value="0x023C" />
       <IDSymbol name="cmdidIdeShowCallHierarchy" value="0x021C" />
       <IDSymbol name="cmdidIdeGetDocumentSlice" value="0x0215" />
       <IDSymbol name="cmdidIdeGetSmartContextForQuery" value="0x0220" />
@@ -662,6 +784,15 @@
       <IDSymbol name="cmdidIdeDebugStepOver" value="0x020F" />
       <IDSymbol name="cmdidIdeDebugStepInto" value="0x0210" />
       <IDSymbol name="cmdidIdeDebugStepOut" value="0x0211" />
+      <IDSymbol name="cmdidIdeDebugThreads" value="0x0233" />
+      <IDSymbol name="cmdidIdeDebugStack" value="0x0234" />
+      <IDSymbol name="cmdidIdeDebugLocals" value="0x0235" />
+      <IDSymbol name="cmdidIdeDebugModules" value="0x0236" />
+      <IDSymbol name="cmdidIdeDebugWatch" value="0x0237" />
+      <IDSymbol name="cmdidIdeDebugExceptions" value="0x0238" />
+      <IDSymbol name="cmdidIdeDiagnosticsSnapshot" value="0x0239" />
+      <IDSymbol name="cmdidIdeBuildConfigurations" value="0x023A" />
+      <IDSymbol name="cmdidIdeSetBuildConfiguration" value="0x023B" />
       <IDSymbol name="cmdidIdeBuildSolution" value="0x0212" />
       <IDSymbol name="cmdidIdeGetErrorList" value="0x0213" />
       <IDSymbol name="cmdidIdeGetWarnings" value="0x0230" />
@@ -677,6 +808,7 @@
       <IDSymbol name="cmdidIdeEnableAllBreakpoints" value="0x022B" />
       <IDSymbol name="cmdidIdeDisableAllBreakpoints" value="0x022C" />
       <IDSymbol name="cmdidIdeCloseIde" value="0x0231" />
+      <IDSymbol name="cmdidIdeSaveDocument" value="0x0232" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

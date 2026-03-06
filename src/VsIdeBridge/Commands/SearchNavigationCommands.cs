@@ -1,9 +1,10 @@
-using System;
-using System.ComponentModel.Design;
-using System.IO;
-using System.Threading.Tasks;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Services;
 
@@ -11,13 +12,8 @@ namespace VsIdeBridge.Commands;
 
 internal static class SearchNavigationCommands
 {
-    internal sealed class IdeFindTextCommand : IdeCommandBase
+    internal sealed class IdeFindTextCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0202)
     {
-        public IdeFindTextCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0202)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeFindText";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -40,30 +36,34 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeFindFilesCommand : IdeCommandBase
+    internal sealed class IdeFindFilesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0203)
     {
-        public IdeFindFilesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0203)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeFindFiles";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             var query = args.GetRequiredString("query");
-            var data = await context.Runtime.SearchService.FindFilesAsync(context, query).ConfigureAwait(true);
+            var rawExtensions = args.GetString("extensions", string.Empty) ?? string.Empty;
+            var extensions = rawExtensions
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(item => item.Trim())
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            var data = await context.Runtime.SearchService.FindFilesAsync(
+                context,
+                query,
+                args.GetString("path"),
+                extensions,
+                args.GetInt32("max-results", 200),
+                args.GetBoolean("include-non-project", true)).ConfigureAwait(true);
             return new CommandExecutionResult($"Found {data["count"]} file(s).", data);
         }
     }
 
-    internal sealed class IdeOpenDocumentCommand : IdeCommandBase
+    internal sealed class IdeOpenDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0204)
     {
-        public IdeOpenDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0204)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeOpenDocument";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -72,19 +72,15 @@ internal static class SearchNavigationCommands
                 context.Dte,
                 args.GetRequiredString("file"),
                 args.GetInt32("line", 1),
-                args.GetInt32("column", 1)).ConfigureAwait(true);
+                args.GetInt32("column", 1),
+                args.GetBoolean("allow-disk-fallback", true)).ConfigureAwait(true);
 
             return new CommandExecutionResult("Document activated.", data);
         }
     }
 
-    internal sealed class IdeListDocumentsCommand : IdeCommandBase
+    internal sealed class IdeListDocumentsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0216)
     {
-        public IdeListDocumentsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0216)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeListDocuments";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -94,13 +90,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeActivateDocumentCommand : IdeCommandBase
+    internal sealed class IdeActivateDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0217)
     {
-        public IdeActivateDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0217)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeActivateDocument";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -112,13 +103,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeCloseDocumentCommand : IdeCommandBase
+    internal sealed class IdeCloseDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0218)
     {
-        public IdeCloseDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0218)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeCloseDocument";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -134,13 +120,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeListOpenTabsCommand : IdeCommandBase
+    internal sealed class IdeListOpenTabsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x021D)
     {
-        public IdeListOpenTabsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x021D)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeListOpenTabs";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -150,13 +131,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeCloseFileCommand : IdeCommandBase
+    internal sealed class IdeCloseFileCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x021E)
     {
-        public IdeCloseFileCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x021E)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeCloseFile";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -173,13 +149,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeCloseAllExceptCurrentCommand : IdeCommandBase
+    internal sealed class IdeCloseAllExceptCurrentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x021F)
     {
-        public IdeCloseAllExceptCurrentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x021F)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeCloseAllExceptCurrent";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -192,13 +163,24 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeActivateWindowCommand : IdeCommandBase
+    internal sealed class IdeSaveDocumentCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0232)
     {
-        public IdeActivateWindowCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0205)
-        {
-        }
+        protected override string CanonicalName => "Tools.IdeSaveDocument";
 
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var saveAll = args.GetBoolean("all", false);
+            var filePath = args.GetString("file");
+            var data = await context.Runtime.DocumentService
+                .SaveDocumentAsync(context.Dte, filePath, saveAll)
+                .ConfigureAwait(true);
+            var count = data["count"]?.Value<int>() ?? 0;
+            return new CommandExecutionResult(saveAll ? $"Saved all {count} document(s)." : $"Saved {count} document(s).", data);
+        }
+    }
+
+    internal sealed class IdeActivateWindowCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0205)
+    {
         protected override string CanonicalName => "Tools.IdeActivateWindow";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -208,13 +190,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeListWindowsCommand : IdeCommandBase
+    internal sealed class IdeListWindowsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0219)
     {
-        public IdeListWindowsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0219)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeListWindows";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -224,13 +201,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeExecuteVsCommandCommand : IdeCommandBase
+    internal sealed class IdeExecuteVsCommandCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x021A)
     {
-        public IdeExecuteVsCommandCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x021A)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeExecuteVsCommand";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -251,14 +223,9 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeFindAllReferencesCommand : IdeCommandBase
+    internal sealed class IdeFindAllReferencesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x021B)
     {
-        private static readonly string[] CandidateCommands = { "Edit.FindAllReferences" };
-
-        public IdeFindAllReferencesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x021B)
-        {
-        }
+        private static readonly string[] CandidateCommands = ["Edit.FindAllReferences"];
 
         protected override string CanonicalName => "Tools.IdeFindAllReferences";
 
@@ -283,14 +250,53 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeShowCallHierarchyCommand : IdeCommandBase
+    internal sealed class IdeCountReferencesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x023C)
     {
-        private static readonly string[] CandidateCommands = { "View.CallHierarchy" };
+        private static readonly string[] CandidateCommands = ["Edit.FindAllReferences"];
+        private static readonly Regex CountPattern = new(@"\b(?<count>\d+)\b", RegexOptions.Compiled);
 
-        public IdeShowCallHierarchyCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x021C)
+        protected override string CanonicalName => "Tools.IdeCountReferences";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
+            var data = await context.Runtime.VsCommandService.ExecuteSymbolCommandAsync(
+                    context.Dte,
+                    context.Runtime.DocumentService,
+                    context.Runtime.WindowService,
+                    CandidateCommands,
+                    args.GetString("file"),
+                    args.GetString("document"),
+                    args.GetNullableInt32("line"),
+                    args.GetNullableInt32("column"),
+                    args.GetBoolean("select-word", false),
+                    "references",
+                    args.GetBoolean("activate-window", true),
+                    args.GetInt32("timeout-ms", 5000))
+                .ConfigureAwait(true);
+
+            var caption = data["resultWindow"]?["caption"]?.ToString() ?? string.Empty;
+            var match = CountPattern.Match(caption);
+            if (match.Success && int.TryParse(match.Groups["count"].Value, out var count))
+            {
+                data["countKnown"] = true;
+                data["count"] = count;
+            }
+            else
+            {
+                data["countKnown"] = false;
+                data["count"] = null;
+                data["reason"] = string.IsNullOrWhiteSpace(caption)
+                    ? "Could not determine reference count from the references tool window."
+                    : $"Could not parse an exact count from window caption '{caption}'.";
+            }
+
+            return new CommandExecutionResult("Reference count request completed.", data);
         }
+    }
+
+    internal sealed class IdeShowCallHierarchyCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x021C)
+    {
+        private static readonly string[] CandidateCommands = ["View.CallHierarchy"];
 
         protected override string CanonicalName => "Tools.IdeShowCallHierarchy";
 
@@ -315,13 +321,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGetDocumentSliceCommand : IdeCommandBase
+    internal sealed class IdeGetDocumentSliceCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0215)
     {
-        public IdeGetDocumentSliceCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0215)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGetDocumentSlice";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -331,13 +332,16 @@ internal static class SearchNavigationCommands
             var contextAfter = args.GetInt32("context-after", 0);
             var startLine = args.GetInt32("start-line", Math.Max(1, baseLine - contextBefore));
             var endLine = args.GetInt32("end-line", Math.Max(startLine, baseLine + contextAfter));
+            var revealInEditor = args.GetBoolean("reveal-in-editor", true);
 
             var data = await context.Runtime.DocumentService.GetDocumentSliceAsync(
                 context.Dte,
                 args.GetString("file"),
                 startLine,
                 endLine,
-                args.GetBoolean("include-line-numbers", true)).ConfigureAwait(true);
+                args.GetBoolean("include-line-numbers", true),
+                revealInEditor)
+                .ConfigureAwait(true);
 
             return new CommandExecutionResult(
                 $"Captured lines {data["actualStartLine"]}-{data["actualEndLine"]}.",
@@ -345,13 +349,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGetSmartContextForQueryCommand : IdeCommandBase
+    internal sealed class IdeGetSmartContextForQueryCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0220)
     {
-        public IdeGetSmartContextForQueryCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0220)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGetSmartContextForQuery";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -376,13 +375,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGoToDefinitionCommand : IdeCommandBase
+    internal sealed class IdeGoToDefinitionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0222)
     {
-        public IdeGoToDefinitionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0222)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGoToDefinition";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -402,13 +396,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGoToImplementationCommand : IdeCommandBase
+    internal sealed class IdeGoToImplementationCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x022F)
     {
-        public IdeGoToImplementationCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x022F)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGoToImplementation";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -428,13 +417,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGetFileOutlineCommand : IdeCommandBase
+    internal sealed class IdeGetFileOutlineCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0223)
     {
-        public IdeGetFileOutlineCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0223)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGetFileOutline";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -450,13 +434,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeSearchSymbolsCommand : IdeCommandBase
+    internal sealed class IdeSearchSymbolsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0226)
     {
-        public IdeSearchSymbolsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0226)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeSearchSymbols";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -481,13 +460,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGetQuickInfoCommand : IdeCommandBase
+    internal sealed class IdeGetQuickInfoCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0227)
     {
-        public IdeGetQuickInfoCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0227)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGetQuickInfo";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -507,13 +481,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGetDocumentSlicesCommand : IdeCommandBase
+    internal sealed class IdeGetDocumentSlicesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0228)
     {
-        public IdeGetDocumentSlicesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0228)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGetDocumentSlices";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -559,13 +528,8 @@ internal static class SearchNavigationCommands
         }
     }
 
-    internal sealed class IdeGetFileSymbolsCommand : IdeCommandBase
+    internal sealed class IdeGetFileSymbolsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x022D)
     {
-        public IdeGetFileSymbolsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x022D)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGetFileSymbols";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)

@@ -26,6 +26,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="PresentationCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\BridgeCommandCatalog.cs" Link="Shared\BridgeCommandCatalog.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Update="source.extension.vsixmanifest">
       <SubType>Designer</SubType>
     </Content>

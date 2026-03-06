@@ -1,7 +1,7 @@
-using System;
-using System.Collections.Generic;
 using Microsoft.VisualStudio.Settings;
 using Microsoft.VisualStudio.Shell.Settings;
+using System;
+using System.Collections.Generic;
 
 namespace VsIdeBridge.Services;
 
@@ -12,7 +12,7 @@ internal sealed class BridgeUiSettingsService
     private const string GoToEditedPartsKey = "GoToEditedParts";
 
     private readonly WritableSettingsStore? _store;
-    private readonly Dictionary<string, bool> _fallback = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, bool> _fallback = new(StringComparer.OrdinalIgnoreCase);
 
     public BridgeUiSettingsService(IServiceProvider serviceProvider)
     {

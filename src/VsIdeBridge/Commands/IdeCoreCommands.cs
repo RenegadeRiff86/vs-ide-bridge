@@ -1,15 +1,15 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.Design;
-using System.IO;
-using System.Threading.Tasks;
-using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Services;
+using VsIdeBridge.Shared;
 
 namespace VsIdeBridge.Commands;
 
@@ -24,10 +24,9 @@ internal static class IdeCoreCommands
 
         for (var i = 0; i < steps.Count; i++)
         {
-            var step = steps[i] as JObject;
             JObject stepResult;
 
-            if (step == null)
+            if (steps[i] is not JObject step)
             {
                 failureCount++;
                 stepResult = new JObject
@@ -54,7 +53,7 @@ internal static class IdeCoreCommands
                     stepResult = new JObject
                     {
                         ["index"] = i,
-                        ["id"] = stepId is null ? JValue.CreateNull() : stepId,
+                        ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
                         ["command"] = commandName,
                         ["success"] = false,
                         ["summary"] = $"Unknown command: {commandName}",
@@ -73,7 +72,7 @@ internal static class IdeCoreCommands
                         stepResult = new JObject
                         {
                             ["index"] = i,
-                            ["id"] = stepId is null ? JValue.CreateNull() : stepId,
+                            ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
                             ["command"] = commandName,
                             ["success"] = true,
                             ["summary"] = result.Summary,
@@ -88,7 +87,7 @@ internal static class IdeCoreCommands
                         stepResult = new JObject
                         {
                             ["index"] = i,
-                            ["id"] = stepId is null ? JValue.CreateNull() : stepId,
+                            ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
                             ["command"] = commandName,
                             ["success"] = false,
                             ["summary"] = ex.Message,
@@ -103,7 +102,7 @@ internal static class IdeCoreCommands
                         stepResult = new JObject
                         {
                             ["index"] = i,
-                            ["id"] = stepId is null ? JValue.CreateNull() : stepId,
+                            ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
                             ["command"] = commandName,
                             ["success"] = false,
                             ["summary"] = ex.Message,
@@ -140,125 +139,46 @@ internal static class IdeCoreCommands
 
     private static Task<CommandExecutionResult> GetHelpResultAsync()
     {
-        var canonicalCommands = new[]
-        {
-            "Tools.IdeGetState",
-            "Tools.IdeWaitForReady",
-            "Tools.IdeFindText",
-            "Tools.IdeFindFiles",
-            "Tools.IdeOpenDocument",
-            "Tools.IdeListDocuments",
-            "Tools.IdeListOpenTabs",
-            "Tools.IdeActivateDocument",
-            "Tools.IdeCloseDocument",
-            "Tools.IdeCloseFile",
-            "Tools.IdeCloseAllExceptCurrent",
-            "Tools.IdeActivateWindow",
-            "Tools.IdeListWindows",
-            "Tools.IdeExecuteVsCommand",
-            "Tools.IdeFindAllReferences",
-            "Tools.IdeShowCallHierarchy",
-            "Tools.IdeGetDocumentSlice",
-            "Tools.IdeGetSmartContextForQuery",
-            "Tools.IdeApplyUnifiedDiff",
-            "Tools.IdeSetBreakpoint",
-            "Tools.IdeListBreakpoints",
-            "Tools.IdeRemoveBreakpoint",
-            "Tools.IdeClearAllBreakpoints",
-            "Tools.IdeDebugGetState",
-            "Tools.IdeDebugStart",
-            "Tools.IdeDebugStop",
-            "Tools.IdeDebugBreak",
-            "Tools.IdeDebugContinue",
-            "Tools.IdeDebugStepOver",
-            "Tools.IdeDebugStepInto",
-            "Tools.IdeDebugStepOut",
-            "Tools.IdeBuildSolution",
-            "Tools.IdeGetErrorList",
-            "Tools.IdeGetWarnings",
-            "Tools.IdeBuildAndCaptureErrors",
-            "Tools.IdeOpenSolution",
-            "Tools.IdeGoToDefinition",
-            "Tools.IdeGoToImplementation",
-            "Tools.IdeGetFileOutline",
-            "Tools.IdeGetFileSymbols",
-            "Tools.IdeSearchSymbols",
-            "Tools.IdeGetQuickInfo",
-            "Tools.IdeGetDocumentSlices",
-            "Tools.IdeEnableBreakpoint",
-            "Tools.IdeDisableBreakpoint",
-            "Tools.IdeEnableAllBreakpoints",
-            "Tools.IdeDisableAllBreakpoints",
-            "Tools.IdeBatchCommands",
-        };
+        var commandMetadata = BridgeCommandCatalog.All
+            .OrderBy(item => item.PipeName, StringComparer.Ordinal)
+            .ToArray();
+        var generatedAtUtc = DateTime.UtcNow.ToString("O");
+        var commandDetails = BuildCommandDetails(commandMetadata);
 
         var commands = new JArray();
         var legacyCommands = new JArray();
-        foreach (var canonicalCommand in canonicalCommands)
+        foreach (var command in commandMetadata)
         {
-            commands.Add(PipeCommandNames.GetPrimaryName(canonicalCommand));
-            legacyCommands.Add(canonicalCommand);
+            commands.Add(command.PipeName);
+            legacyCommands.Add(command.CanonicalName);
         }
 
         return Task.FromResult(new CommandExecutionResult(
             "Command catalog written.",
             new JObject
             {
+                ["schemaVersion"] = "vs-ide-bridge.help.v1",
+                ["generatedAtUtc"] = generatedAtUtc,
+                ["catalog"] = new JObject
+                {
+                    ["schemaVersion"] = "vs-ide-bridge.command-catalog.v1",
+                    ["generatedAtUtc"] = generatedAtUtc,
+                    ["count"] = commandMetadata.Length,
+                    ["commands"] = commandDetails.DeepClone(),
+                    ["nameField"] = "name",
+                    ["canonicalNameField"] = "canonicalName",
+                    ["exampleField"] = "example",
+                    ["aliasesField"] = "aliases",
+                    ["notes"] = new JArray
+                    {
+                        "Use name for pipe/MCP command routing.",
+                        "Use canonicalName only for compatibility mapping or VS Command Window fallbacks.",
+                    },
+                },
                 ["commands"] = commands,
                 ["legacyCommands"] = legacyCommands,
                 ["note"] = "Pipe requests accept the simple command names in commands[]. The legacy Tools.Ide* names still work in Visual Studio and over the pipe.",
-                ["commandDetails"] = new JArray
-                {
-                    new JObject
-                    {
-                        ["name"] = "search-symbols",
-                        ["legacyName"] = "Tools.IdeSearchSymbols",
-                        ["description"] = "Search likely symbol definitions by name across the solution or a filtered path.",
-                        ["example"] = @"search-symbols --query ""propose_export_file_name_and_path"" --kind function --path ""src\VsIdeBridge"""
-                    },
-                    new JObject
-                    {
-                        ["name"] = "quick-info",
-                        ["legacyName"] = "Tools.IdeGetQuickInfo",
-                        ["description"] = "Resolve a symbol at a file/line/column and return its definition location plus a surrounding code slice without leaving the source location selected.",
-                        ["example"] = @"quick-info --file ""C:\repo\src\foo.cpp"" --line 42 --column 13"
-                    },
-                    new JObject
-                    {
-                        ["name"] = "goto-implementation",
-                        ["legacyName"] = "Tools.IdeGoToImplementation",
-                        ["description"] = "Navigate to one implementation of the symbol at the given source location.",
-                        ["example"] = @"goto-implementation --file ""C:\repo\src\foo.cpp"" --line 42 --column 13"
-                    },
-                    new JObject
-                    {
-                        ["name"] = "document-slices",
-                        ["legacyName"] = "Tools.IdeGetDocumentSlices",
-                        ["description"] = "Fetch multiple code slices in one call from either --ranges-file or inline --ranges JSON.",
-                        ["example"] = @"document-slices --ranges ""[{\""file\"":\""C:\\repo\\src\\foo.cpp\"",\""line\"":42,\""contextBefore\"":8,\""contextAfter\"":20}]"""
-                    },
-                    new JObject
-                    {
-                        ["name"] = "find-text",
-                        ["legacyName"] = "Tools.IdeFindText",
-                        ["description"] = "Find text across the solution, project, or current document, with optional --path subtree filtering.",
-                        ["example"] = @"find-text --query ""OnInit"" --path ""src\libslic3r"""
-                    },
-                    new JObject
-                    {
-                        ["name"] = "file-symbols",
-                        ["legacyName"] = "Tools.IdeGetFileSymbols",
-                        ["description"] = "List symbols from one file with optional --kind filtering; alias over IdeGetFileOutline.",
-                        ["example"] = @"file-symbols --file ""C:\repo\src\foo.cpp"" --kind function"
-                    },
-                    new JObject
-                    {
-                        ["name"] = "warnings",
-                        ["legacyName"] = "Tools.IdeGetWarnings",
-                        ["description"] = "Capture only warnings from the Error List, with optional code/path/project filtering.",
-                        ["example"] = @"warnings --code C6031 --group-by code"
-                    }
-                },
+                ["commandDetails"] = commandDetails,
                 ["recipes"] = new JArray
                 {
                     new JObject
@@ -277,7 +197,7 @@ internal static class IdeCoreCommands
                     {
                         ["name"] = "group-current-warnings",
                         ["summary"] = "Filter the Error List down to warnings and group them by code.",
-                        ["command"] = @"warnings --group-by code"
+                        ["command"] = "warnings --group-by code"
                     },
                     new JObject
                     {
@@ -299,6 +219,36 @@ internal static class IdeCoreCommands
                 ["applyDiffExample"] = @"apply-diff --patch-file ""C:\temp\change.diff"" --out ""C:\temp\apply-diff.json""",
                 ["openSolutionExample"] = @"open-solution --solution ""C:\path\to\solution.sln"" --out ""C:\temp\open-solution.json"""
             }));
+    }
+
+    private static JArray BuildCommandDetails(IEnumerable<BridgeCommandMetadata> commandMetadata)
+    {
+        var details = new JArray();
+        foreach (var command in commandMetadata)
+        {
+            var aliases = new JArray();
+            foreach (var alias in PipeCommandNames.GetAliases(command.CanonicalName))
+            {
+                if (string.Equals(alias, command.PipeName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                aliases.Add(alias);
+            }
+
+            details.Add(new JObject
+            {
+                ["name"] = command.PipeName,
+                ["canonicalName"] = command.CanonicalName,
+                ["legacyName"] = command.CanonicalName,
+                ["description"] = command.Description,
+                ["example"] = command.Example,
+                ["aliases"] = aliases,
+            });
+        }
+
+        return details;
     }
 
     private static async Task<CommandExecutionResult> GetSmokeTestResultAsync(IdeCommandContext context)
@@ -393,18 +343,14 @@ internal static class IdeCoreCommands
             string.IsNullOrWhiteSpace(readmePath) ? "Displayed IDE Bridge help." : "Opened IDE Bridge help.",
             new JObject
             {
-                ["readmePath"] = readmePath is null ? JValue.CreateNull() : readmePath,
+                ["readmePath"] = (JToken?)readmePath ?? JValue.CreateNull(),
                 ["commandWindowHelp"] = "Tools.IdeHelp",
             });
     }
 
-    internal sealed class IdeHelpMenuCommand : IdeCommandBase
+    internal sealed class IdeHelpMenuCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0102, acceptsParameters: false)
     {
-        public IdeHelpMenuCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0102, acceptsParameters: false)
-        {
-        }
-
         protected override string CanonicalName => "Tools.VsIdeBridgeHelpMenu";
 
         internal override bool AllowAutomationInvocation => false;
@@ -451,13 +397,9 @@ internal static class IdeCoreCommands
         }
     }
 
-    internal sealed class IdeHelpCommand : IdeCommandBase
+    internal sealed class IdeHelpCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0100)
     {
-        public IdeHelpCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0100)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeHelp";
 
         protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -466,13 +408,9 @@ internal static class IdeCoreCommands
         }
     }
 
-    internal sealed class IdeSmokeTestCommand : IdeCommandBase
+    internal sealed class IdeSmokeTestCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0101)
     {
-        public IdeSmokeTestCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0101)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeSmokeTest";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -481,13 +419,9 @@ internal static class IdeCoreCommands
         }
     }
 
-    internal sealed class IdeGetStateCommand : IdeCommandBase
+    internal sealed class IdeGetStateCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0200)
     {
-        public IdeGetStateCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0200)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeGetState";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -497,13 +431,9 @@ internal static class IdeCoreCommands
         }
     }
 
-    internal sealed class IdeWaitForReadyCommand : IdeCommandBase
+    internal sealed class IdeWaitForReadyCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0201)
     {
-        public IdeWaitForReadyCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0201)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeWaitForReady";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -514,13 +444,9 @@ internal static class IdeCoreCommands
         }
     }
 
-    internal sealed class IdeOpenSolutionCommand : IdeCommandBase
+    internal sealed class IdeOpenSolutionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0224)
     {
-        public IdeOpenSolutionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0224)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeOpenSolution";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
@@ -542,14 +468,10 @@ internal static class IdeCoreCommands
         }
     }
 
-    internal sealed class IdeCloseIdeCommand : IdeCommandBase
+    internal sealed class IdeCloseIdeCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0231)
     {
         private const int CloseIdeDelayMilliseconds = 300;
-
-        public IdeCloseIdeCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0231)
-        {
-        }
 
         protected override string CanonicalName => "Tools.IdeCloseIde";
 
@@ -569,13 +491,9 @@ internal static class IdeCoreCommands
         }
     }
 
-    internal sealed class IdeBatchCommandsCommand : IdeCommandBase
+    internal sealed class IdeBatchCommandsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0225)
     {
-        public IdeBatchCommandsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
-            : base(package, runtime, commandService, 0x0225)
-        {
-        }
-
         protected override string CanonicalName => "Tools.IdeBatchCommands";
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)

@@ -1,11 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel.Composition;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
 using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Tagging;
 using Microsoft.VisualStudio.Utilities;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.Composition;
 
 namespace VsIdeBridge.Services;
 
@@ -87,7 +87,7 @@ internal sealed class BridgeEditHighlightTaggerProvider : IViewTaggerProvider
 
         private void OnHighlightsChanged(object? sender, SnapshotSpanEventArgs e)
         {
-            if (e.SnapshotSpan.Snapshot.TextBuffer == _buffer)
+            if (e.Span.Snapshot.TextBuffer == _buffer)
             {
                 TagsChanged?.Invoke(this, e);
             }

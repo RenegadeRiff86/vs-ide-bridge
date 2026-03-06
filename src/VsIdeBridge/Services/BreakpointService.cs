@@ -1,9 +1,9 @@
-using System.Linq;
-using System.Threading.Tasks;
 using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System.Linq;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
@@ -24,10 +24,7 @@ internal sealed class BreakpointService
 
         var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
         var existing = FindBreakpoint(dte, normalizedPath, line);
-        if (existing is not null)
-        {
-            existing.Delete();
-        }
+        existing?.Delete();
 
         dte.Debugger.Breakpoints.Add(
             File: normalizedPath,
@@ -105,12 +102,7 @@ internal sealed class BreakpointService
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
         var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
-        var bp = FindBreakpoint(dte, normalizedPath, line);
-        if (bp is null)
-        {
-            throw new CommandErrorException("not_found", $"No breakpoint found at {normalizedPath}:{line}");
-        }
-
+        var bp = FindBreakpoint(dte, normalizedPath, line) ?? throw new CommandErrorException("not_found", $"No breakpoint found at {normalizedPath}:{line}");
         bp.Enabled = true;
         return SerializeBreakpoint(bp);
     }
@@ -120,12 +112,7 @@ internal sealed class BreakpointService
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
         var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
-        var bp = FindBreakpoint(dte, normalizedPath, line);
-        if (bp is null)
-        {
-            throw new CommandErrorException("not_found", $"No breakpoint found at {normalizedPath}:{line}");
-        }
-
+        var bp = FindBreakpoint(dte, normalizedPath, line) ?? throw new CommandErrorException("not_found", $"No breakpoint found at {normalizedPath}:{line}");
         bp.Enabled = false;
         return SerializeBreakpoint(bp);
     }

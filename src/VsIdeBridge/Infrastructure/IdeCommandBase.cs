@@ -1,20 +1,19 @@
-using System;
-using System.ComponentModel.Design;
-using System.IO;
-using System.Threading.Tasks;
 using EnvDTE80;
 using Microsoft;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using Newtonsoft.Json.Linq;
+using System;
+using System.ComponentModel.Design;
+using System.IO;
+using System.Threading.Tasks;
 using VsIdeBridge.Services;
 
 namespace VsIdeBridge.Infrastructure;
 
 internal abstract class IdeCommandBase
 {
-    private readonly VsIdeBridgePackage _package;
-    private readonly IdeBridgeRuntime _runtime;
+    protected VsIdeBridgePackage Package { get; }
+    protected IdeBridgeRuntime Runtime { get; }
     protected OleMenuCommand MenuCommand { get; }
 
     protected IdeCommandBase(
@@ -24,8 +23,8 @@ internal abstract class IdeCommandBase
         int commandId,
         bool acceptsParameters = true)
     {
-        _package = package;
-        _runtime = runtime;
+        Package = package;
+        Runtime = runtime;
 
         var menuCommandId = new CommandID(CommandRegistrar.CommandSet, commandId);
         var menuCommand = new OleMenuCommand(Execute, menuCommandId);
@@ -40,10 +39,6 @@ internal abstract class IdeCommandBase
 
     protected abstract string CanonicalName { get; }
 
-    protected VsIdeBridgePackage Package => _package;
-
-    protected IdeBridgeRuntime Runtime => _runtime;
-
     internal string Name => CanonicalName;
 
     internal virtual bool AllowAutomationInvocation => true;
@@ -55,7 +50,7 @@ internal abstract class IdeCommandBase
 
     private void Execute(object sender, EventArgs e)
     {
-        _ = _package.JoinableTaskFactory.RunAsync(() => ExecuteInternalAsync(e));
+        _ = Package.JoinableTaskFactory.RunAsync(() => ExecuteInternalAsync(e));
     }
 
     private async Task ExecuteInternalAsync(EventArgs e)
@@ -65,11 +60,11 @@ internal abstract class IdeCommandBase
         var outputPath = string.Empty;
         string? requestId = null;
 
-        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(_package.DisposalToken);
-        var dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(Package.DisposalToken);
+        var dte = await Package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
         Assumes.Present(dte);
 
-        var context = new IdeCommandContext(_package, dte, _runtime.Logger, _runtime, _package.DisposalToken);
+        var context = new IdeCommandContext(Package, dte, Runtime.Logger, Runtime, Package.DisposalToken);
 
         try
         {
@@ -91,12 +86,12 @@ internal abstract class IdeCommandBase
                 Data = result.Data,
             };
 
-            await CommandResultWriter.WriteAsync(outputPath, envelope, _package.DisposalToken).ConfigureAwait(false);
-            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} OK - {result.Summary} -> {outputPath}", _package.DisposalToken, activatePane: true).ConfigureAwait(true);
+            await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
+            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} OK - {result.Summary} -> {outputPath}", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
         }
         catch (CommandErrorException ex)
         {
-            var failureData = await _runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
+            var failureData = await Runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
             var envelope = new CommandEnvelope
             {
                 SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
@@ -106,7 +101,7 @@ internal abstract class IdeCommandBase
                 StartedAtUtc = startedAt.UtcDateTime.ToString("O"),
                 FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
                 Summary = ex.Message,
-                Warnings = new JArray(),
+                Warnings = [],
                 Error = new
                 {
                     code = ex.Code,
@@ -118,15 +113,15 @@ internal abstract class IdeCommandBase
 
             if (!string.IsNullOrWhiteSpace(outputPath))
             {
-                await CommandResultWriter.WriteAsync(outputPath, envelope, _package.DisposalToken).ConfigureAwait(false);
+                await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
             }
 
-            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - {ex.Code}", _package.DisposalToken, activatePane: true).ConfigureAwait(true);
+            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - {ex.Code}", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
             ActivityLog.LogError(nameof(VsIdeBridgePackage), ex.ToString());
         }
         catch (Exception ex)
         {
-            var failureData = await _runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
+            var failureData = await Runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
             var envelope = new CommandEnvelope
             {
                 SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
@@ -136,7 +131,7 @@ internal abstract class IdeCommandBase
                 StartedAtUtc = startedAt.UtcDateTime.ToString("O"),
                 FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
                 Summary = ex.Message,
-                Warnings = new JArray(),
+                Warnings = [],
                 Error = new
                 {
                     code = "internal_error",
@@ -148,10 +143,10 @@ internal abstract class IdeCommandBase
 
             if (!string.IsNullOrWhiteSpace(outputPath))
             {
-                await CommandResultWriter.WriteAsync(outputPath, envelope, _package.DisposalToken).ConfigureAwait(false);
+                await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
             }
 
-            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - internal_error", _package.DisposalToken, activatePane: true).ConfigureAwait(true);
+            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - internal_error", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
             ActivityLog.LogError(nameof(VsIdeBridgePackage), ex.ToString());
         }
     }

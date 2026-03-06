@@ -1,19 +1,21 @@
+using Microsoft.VisualStudio.Text;
+using Microsoft.VisualStudio.Text.Editor;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.VisualStudio.Text;
-using Microsoft.VisualStudio.Text.Editor;
 
 namespace VsIdeBridge.Services;
 
 internal sealed class BridgeEditHighlightService
 {
+    private const int HighlightExpirationMinutes = 5;
+
     private sealed class BufferHighlights
     {
-        public List<ITrackingSpan> AddedOrModified { get; } = new();
+        public List<ITrackingSpan> AddedOrModified { get; } = [];
 
-        public List<ITrackingSpan> DeletedMarkers { get; } = new();
+        public List<ITrackingSpan> DeletedMarkers { get; } = [];
 
         public DateTimeOffset ExpiresAtUtc { get; set; }
     }
@@ -29,13 +31,13 @@ internal sealed class BridgeEditHighlightService
         var snapshot = view.TextSnapshot;
         var state = new BufferHighlights
         {
-            ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(5),
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(HighlightExpirationMinutes),
         };
 
-        foreach (var range in changedRanges)
+        foreach (var (StartLine, EndLine) in changedRanges)
         {
-            var startLine = Math.Max(1, range.StartLine);
-            var endLine = Math.Max(startLine, range.EndLine);
+            var startLine = Math.Max(1, StartLine);
+            var endLine = Math.Max(startLine, EndLine);
             if (startLine > snapshot.LineCount)
             {
                 continue;
@@ -55,20 +57,20 @@ internal sealed class BridgeEditHighlightService
         }
 
         _highlights.AddOrUpdate(snapshot.TextBuffer, state, (_, _) => state);
-        HighlightsChanged?.Invoke(this, new SnapshotSpanEventArgs(snapshot.GetFullSpan()));
+        HighlightsChanged?.Invoke(this, new SnapshotSpanEventArgs(new SnapshotSpan(snapshot, 0, snapshot.Length)));
     }
 
     public IReadOnlyList<(SnapshotSpan Span, string MarkerType)> GetHighlights(ITextSnapshot snapshot)
     {
         if (!_highlights.TryGetValue(snapshot.TextBuffer, out var state))
         {
-            return Array.Empty<(SnapshotSpan, string)>();
+            return [];
         }
 
         if (DateTimeOffset.UtcNow >= state.ExpiresAtUtc)
         {
             _highlights.TryRemove(snapshot.TextBuffer, out _);
-            return Array.Empty<(SnapshotSpan, string)>();
+            return [];
         }
 
         var result = new List<(SnapshotSpan, string)>();
