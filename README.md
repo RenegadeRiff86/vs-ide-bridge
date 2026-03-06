@@ -860,3 +860,7 @@ output/                   Local smoke-test artifacts (git-ignored)
 
 
 
+
+## Third-Party Notices
+
+See `THIRD_PARTY_NOTICES.md` for third-party attributions used by the build and packaging workflow.
