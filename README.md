@@ -74,16 +74,18 @@ This is enough to produce:
 
 ### Installer EXE (Preferred)
 
-Build the installer executable:
+Build release artifacts:
 
 ```bat
+scripts\build.bat Release
+dotnet build src\VsIdeBridgeService\VsIdeBridgeService.csproj -c Release
 dotnet build src\VsIdeBridgeInstaller\VsIdeBridgeInstaller.csproj -c Release
 ```
 
-Run from an elevated PowerShell terminal:
+Install (single EXE command, elevated terminal):
 
 ```powershell
-src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe install --configuration Release
+src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe
 ```
 
 Uninstall:
@@ -92,45 +94,18 @@ Uninstall:
 src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe uninstall
 ```
 
-Optional service registration is supported only when you provide a real service host binary:
+Default installer behavior:
 
-```powershell
-src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe install --configuration Release --install-service --service-exe "C:\Program Files\VsIdeBridge\VsIdeBridgeService.exe"
-```
+- Copies bridge CLI + service binaries to `C:\Program Files\VsIdeBridge`
+- Registers `VsIdeBridgeService` as a manual-start Windows service
+- Installs/updates VSIX `StanElston.VsIdeBridge`
 
-### Service Install / Uninstall (Manual Start + Idle Auto-Shutdown)
+Idle policy enforced by service host:
 
-Build required binaries first:
-
-```bat
-scripts\build.bat Release
-dotnet build src\VsIdeBridgeService\VsIdeBridgeService.csproj -c Release
-```
-
-Install as an elevated user:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Configuration Release
-```
-
-Uninstall:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\uninstall.ps1
-```
-
-Default install behavior:
-
-- Copy bridge CLI and service binaries to `C:\Program Files\VsIdeBridge`
-- Register Windows service `VsIdeBridgeService` with `StartType=Manual`
-- Install/update VSIX `StanElston.VsIdeBridge` via `VSIXInstaller.exe`
-
-Service idle policy:
-
-- Activity includes: `MCP_REQUEST`, active command in-flight, and connected client stream.
-- Never shuts down while commands are in-flight.
-- Emits final `service going idle` log before stopping.
-- Restart path is explicit (`sc start VsIdeBridgeService`) or client activation path.
+- Activity tracked from MCP request traffic, in-flight commands, and connected client stream state
+- Never stops while commands are in-flight
+- Logs final `service going idle` event before stop
+- Restarts only on explicit start (`sc start VsIdeBridgeService`) or next client activation path
 
 Logs and recovery:
 
@@ -849,6 +824,7 @@ output/                   Local smoke-test artifacts (git-ignored)
 - Symbol commands rely on VS language services, not bridge-side parsing.
 - `execute-command` is the escape hatch for native VS commands that have no first-class bridge equivalent.
 - Simple pipe names are the preferred public contract. The legacy `Tools.Ide*` names remain supported for compatibility.
+
 
 
 

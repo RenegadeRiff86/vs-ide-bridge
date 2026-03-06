@@ -8,4 +8,8 @@
     <AssemblyName>VsIdeBridgeService</AssemblyName>
     <RootNamespace>VsIdeBridgeService</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="9.0.0" />
+  </ItemGroup>
 </Project>

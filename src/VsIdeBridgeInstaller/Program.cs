@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Principal;
 
@@ -7,7 +6,7 @@ namespace VsIdeBridgeInstaller;
 internal static class Program
 {
     private const string DefaultInstallDir = @"C:\Program Files\VsIdeBridge";
-    private const string DefaultServiceName = "VsIdeBridgeHost";
+    private const string DefaultServiceName = "VsIdeBridgeService";
     private const string DefaultVsixId = "StanElston.VsIdeBridge";
 
     private static int Main(string[] args)
@@ -18,18 +17,21 @@ internal static class Program
             return 1;
         }
 
-        if (args.Length == 0 || IsHelp(args[0]))
+        if (args.Length > 0 && IsHelp(args[0]))
         {
             PrintHelp();
             return 0;
         }
 
-        var verb = args[0].Trim().ToLowerInvariant();
-        var options = ParseOptions(args.Skip(1).ToArray());
+        var (verb, optionArgs) = ResolveVerb(args);
+        var options = ParseOptions(optionArgs);
 
         try
         {
-            EnsureAdmin();
+            if (!HasFlag(options, "skip-admin-check"))
+            {
+                EnsureAdmin();
+            }
 
             return verb switch
             {
@@ -45,21 +47,41 @@ internal static class Program
         }
     }
 
+    private static (string Verb, string[] OptionArgs) ResolveVerb(string[] args)
+    {
+        if (args.Length == 0)
+        {
+            return ("install", []);
+        }
+
+        if (args[0].StartsWith("--", StringComparison.Ordinal))
+        {
+            // Allow running as: installer.exe --configuration Release
+            return ("install", args);
+        }
+
+        return (args[0].Trim().ToLowerInvariant(), args.Skip(1).ToArray());
+    }
+
     private static int RunInstall(Dictionary<string, string?> options)
     {
         var repoRoot = GetPathOption(options, "repo-root") ?? FindRepoRoot();
-        var configuration = GetOption(options, "configuration") ?? "Debug";
+        var configuration = GetOption(options, "configuration") ?? "Release";
         var installDir = GetPathOption(options, "install-dir") ?? DefaultInstallDir;
         var serviceName = GetOption(options, "service-name") ?? DefaultServiceName;
         var vsixId = GetOption(options, "vsix-id") ?? DefaultVsixId;
+        var idleSoftSeconds = GetIntOption(options, "idle-soft-seconds", 900);
+        var idleHardSeconds = GetIntOption(options, "idle-hard-seconds", 1200);
+
         var cliSource = GetPathOption(options, "cli-source")
             ?? Path.Combine(repoRoot, "src", "VsIdeBridgeCli", "bin", configuration, "net8.0");
+        var serviceSource = GetPathOption(options, "service-source")
+            ?? Path.Combine(repoRoot, "src", "VsIdeBridgeService", "bin", configuration, "net8.0-windows");
         var vsixPath = GetPathOption(options, "vsix-path")
             ?? Path.Combine(repoRoot, "src", "VsIdeBridge", "bin", configuration, "net472", "VsIdeBridge.vsix");
 
         var skipVsix = HasFlag(options, "skip-vsix");
-        var installService = HasFlag(options, "install-service");
-        var serviceExePath = GetPathOption(options, "service-exe");
+        var skipService = HasFlag(options, "skip-service");
 
         if (!Directory.Exists(cliSource))
         {
@@ -67,9 +89,29 @@ internal static class Program
         }
 
         Directory.CreateDirectory(installDir);
+
         var cliDest = Path.Combine(installDir, "cli");
         CopyDirectory(cliSource, cliDest);
         Console.WriteLine($"Installed CLI files -> {cliDest}");
+
+        if (!skipService)
+        {
+            if (!Directory.Exists(serviceSource))
+            {
+                return Fail($"Service source directory not found: {serviceSource}");
+            }
+
+            var serviceDest = Path.Combine(installDir, "service");
+            CopyDirectory(serviceSource, serviceDest);
+            var installedServiceExe = Path.Combine(serviceDest, "VsIdeBridgeService.exe");
+            if (!File.Exists(installedServiceExe))
+            {
+                return Fail($"Service executable not found after copy: {installedServiceExe}");
+            }
+
+            InstallOrUpdateService(serviceName, installedServiceExe, idleSoftSeconds, idleHardSeconds);
+            Console.WriteLine($"Service '{serviceName}' installed (StartType=Manual).");
+        }
 
         if (!skipVsix)
         {
@@ -82,22 +124,6 @@ internal static class Program
             Console.WriteLine($"VSIX installed/updated ({vsixId}).");
         }
 
-        if (installService)
-        {
-            if (string.IsNullOrWhiteSpace(serviceExePath))
-            {
-                return Fail("--install-service requires --service-exe <absolute path>.");
-            }
-
-            if (!Path.IsPathRooted(serviceExePath) || !File.Exists(serviceExePath))
-            {
-                return Fail($"Service executable not found: {serviceExePath}");
-            }
-
-            InstallOrUpdateService(serviceName, serviceExePath);
-            Console.WriteLine($"Service '{serviceName}' installed (StartType=Manual).");
-        }
-
         Console.WriteLine("Install complete.");
         return 0;
     }
@@ -108,18 +134,18 @@ internal static class Program
         var serviceName = GetOption(options, "service-name") ?? DefaultServiceName;
         var vsixId = GetOption(options, "vsix-id") ?? DefaultVsixId;
         var skipVsix = HasFlag(options, "skip-vsix");
-        var removeService = HasFlag(options, "remove-service");
+        var skipService = HasFlag(options, "skip-service");
+
+        if (!skipService)
+        {
+            RemoveService(serviceName);
+            Console.WriteLine($"Service '{serviceName}' removed if it existed.");
+        }
 
         if (!skipVsix)
         {
             UninstallVsix(vsixId);
             Console.WriteLine($"VSIX uninstall attempted ({vsixId}).");
-        }
-
-        if (removeService)
-        {
-            RemoveService(serviceName);
-            Console.WriteLine($"Service '{serviceName}' removed if it existed.");
         }
 
         if (Directory.Exists(installDir))
@@ -152,27 +178,24 @@ internal static class Program
         }
     }
 
-    private static void InstallOrUpdateService(string serviceName, string serviceExePath)
+    private static void InstallOrUpdateService(string serviceName, string serviceExePath, int idleSoftSeconds, int idleHardSeconds)
     {
         RemoveService(serviceName);
-        var createArgs = $"create \"{serviceName}\" binPath= \"\"{serviceExePath}\"\" start= demand DisplayName= \"VS IDE Bridge Host\"";
+        var binPath = $"\"{serviceExePath}\" --idle-soft-seconds {idleSoftSeconds} --idle-hard-seconds {idleHardSeconds}";
+        var createArgs = $"create \"{serviceName}\" binPath= \"{binPath}\" start= demand DisplayName= \"VS IDE Bridge Service\"";
         var createExit = RunProcess("sc.exe", createArgs);
         if (createExit != 0)
         {
             throw new InvalidOperationException($"Failed to create service '{serviceName}'. Exit code: {createExit}");
         }
 
-        var descExit = RunProcess("sc.exe", $"description \"{serviceName}\" \"VS IDE Bridge background host (manual start).\"");
-        if (descExit != 0)
-        {
-            Console.WriteLine($"Failed to set service description. Exit code: {descExit}");
-        }
+        _ = RunProcess("sc.exe", $"description \"{serviceName}\" \"VS IDE Bridge background host (manual start, idle auto-stop).\"");
     }
 
     private static void RemoveService(string serviceName)
     {
-        RunProcess("sc.exe", $"stop \"{serviceName}\"");
-        RunProcess("sc.exe", $"delete \"{serviceName}\"");
+        _ = RunProcess("sc.exe", $"stop \"{serviceName}\"");
+        _ = RunProcess("sc.exe", $"delete \"{serviceName}\"");
     }
 
     private static string FindVsixInstallerPath()
@@ -245,6 +268,12 @@ internal static class Program
             var fileName = Path.GetFileName(file);
             File.Copy(file, Path.Combine(destinationDir, fileName), overwrite: true);
         }
+
+        foreach (var directory in Directory.GetDirectories(sourceDir))
+        {
+            var childName = Path.GetFileName(directory);
+            CopyDirectory(directory, Path.Combine(destinationDir, childName));
+        }
     }
 
     private static string FindRepoRoot()
@@ -275,10 +304,7 @@ internal static class Program
         }
     }
 
-    private static bool IsHelp(string token)
-    {
-        return token is "-h" or "--help" or "/?";
-    }
+    private static bool IsHelp(string token) => token is "-h" or "--help" or "/?";
 
     private static Dictionary<string, string?> ParseOptions(string[] args)
     {
@@ -316,6 +342,12 @@ internal static class Program
         return string.IsNullOrWhiteSpace(value) ? null : Path.GetFullPath(value);
     }
 
+    private static int GetIntOption(Dictionary<string, string?> options, string key, int defaultValue)
+    {
+        var raw = GetOption(options, key);
+        return int.TryParse(raw, out var value) && value > 0 ? value : defaultValue;
+    }
+
     private static bool HasFlag(Dictionary<string, string?> options, string key)
     {
         return options.ContainsKey(key);
@@ -331,27 +363,32 @@ internal static class Program
     {
         Console.WriteLine("vs-ide-bridge-installer");
         Console.WriteLine();
-        Console.WriteLine("Commands:");
-        Console.WriteLine("  install   Install CLI binaries, VSIX, and optionally register a Windows service");
-        Console.WriteLine("  uninstall Uninstall VSIX, remove service (optional), and delete install directory");
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  installer.exe                  # default install");
+        Console.WriteLine("  installer.exe install [options]");
+        Console.WriteLine("  installer.exe uninstall [options]");
         Console.WriteLine();
         Console.WriteLine("Install options:");
-        Console.WriteLine("  --repo-root <path>       Repo root (default: inferred)");
-        Console.WriteLine("  --configuration <cfg>    Build config (Debug|Release, default: Debug)");
-        Console.WriteLine("  --install-dir <path>     Install root (default: C:\\Program Files\\VsIdeBridge)");
-        Console.WriteLine("  --cli-source <path>      CLI source folder override");
-        Console.WriteLine("  --vsix-path <path>       VSIX file override");
-        Console.WriteLine("  --vsix-id <id>           VSIX id (default: StanElston.VsIdeBridge)");
-        Console.WriteLine("  --skip-vsix              Skip VSIX install/update");
-        Console.WriteLine("  --install-service        Register Windows service");
-        Console.WriteLine("  --service-name <name>    Service name (default: VsIdeBridgeHost)");
-        Console.WriteLine("  --service-exe <path>     Absolute path to service executable (required with --install-service)");
+        Console.WriteLine("  --configuration <cfg>      Build config (default: Release)");
+        Console.WriteLine("  --install-dir <path>       Install root (default: C:\\Program Files\\VsIdeBridge)");
+        Console.WriteLine("  --repo-root <path>         Repo root override");
+        Console.WriteLine("  --cli-source <path>        CLI source folder override");
+        Console.WriteLine("  --service-source <path>    Service source folder override");
+        Console.WriteLine("  --service-name <name>      Service name (default: VsIdeBridgeService)");
+        Console.WriteLine("  --idle-soft-seconds <n>    Idle drain start (default: 900)");
+        Console.WriteLine("  --idle-hard-seconds <n>    Idle stop timeout (default: 1200)");
+        Console.WriteLine("  --vsix-path <path>         VSIX override path");
+        Console.WriteLine("  --vsix-id <id>             VSIX id (default: StanElston.VsIdeBridge)");
+        Console.WriteLine("  --skip-service             Do not install service");
+        Console.WriteLine("  --skip-vsix                Do not install VSIX");
+        Console.WriteLine("  --skip-admin-check         Bypass elevation check (automation only)");
         Console.WriteLine();
         Console.WriteLine("Uninstall options:");
-        Console.WriteLine("  --install-dir <path>     Install root to remove");
-        Console.WriteLine("  --vsix-id <id>           VSIX id to uninstall");
-        Console.WriteLine("  --skip-vsix              Skip VSIX uninstall");
-        Console.WriteLine("  --remove-service         Stop and delete service");
-        Console.WriteLine("  --service-name <name>    Service name to remove");
+        Console.WriteLine("  --install-dir <path>       Install root to remove");
+        Console.WriteLine("  --service-name <name>      Service name to remove");
+        Console.WriteLine("  --vsix-id <id>             VSIX id to uninstall");
+        Console.WriteLine("  --skip-service             Do not remove service");
+        Console.WriteLine("  --skip-vsix                Do not uninstall VSIX");
+        Console.WriteLine("  --skip-admin-check         Bypass elevation check (automation only)");
     }
 }
