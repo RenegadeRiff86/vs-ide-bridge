@@ -115,7 +115,35 @@ sc.exe query VsIdeBridgeService
 sc.exe start VsIdeBridgeService
 sc.exe stop VsIdeBridgeService
 ```
-### Install Or Update The Extension
+
+### Wizard Setup.exe (End-User Friendly)
+
+Create a standard Windows installer wizard (`Setup.exe`):
+
+1. Install Inno Setup 6 once: https://jrsoftware.org/isdl.php
+2. Build release artifacts:
+
+```bat
+scripts\build.bat Release
+dotnet build src\VsIdeBridgeService\VsIdeBridgeService.csproj -c Release
+```
+
+3. Build Setup.exe:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-setup.ps1
+```
+
+Installer output:
+
+- `installer\output\vs-ide-bridge-setup-2.0.3.exe`
+
+What users see:
+
+- Standard installer wizard pages (welcome/license/install folder/progress/finish)
+- Installed app appears in Apps & Features with uninstall entry
+- Installs bridge files, registers service (`Manual`), and installs VSIX
+### Legacy Manual VSIX Update (Troubleshooting)
 
 **Prerequisites — before running the installer:**
 
@@ -824,6 +852,7 @@ output/                   Local smoke-test artifacts (git-ignored)
 - Symbol commands rely on VS language services, not bridge-side parsing.
 - `execute-command` is the escape hatch for native VS commands that have no first-class bridge equivalent.
 - Simple pipe names are the preferred public contract. The legacy `Tools.Ide*` names remain supported for compatibility.
+
 
 
 
