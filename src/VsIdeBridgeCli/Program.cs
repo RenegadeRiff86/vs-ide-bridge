@@ -635,13 +635,16 @@ internal static partial class CliApp
         string defaultFormat = "json",
         bool writeOutput = true)
     {
-        await using var client = new PipeClient(discovery.PipeName, options.GetInt32("timeout-ms", 10_000));
-
         JsonObject response;
         var stopwatch = Stopwatch.StartNew();
         try
         {
+            await using var client = new PipeClient(discovery.PipeName, options.GetInt32("timeout-ms", 10_000));
             response = await client.SendAsync(payload).ConfigureAwait(false);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new CliException($"Access denied communicating with Visual Studio bridge pipe '{discovery.PipeName}': {ex.Message}");
         }
         catch (TimeoutException ex)
         {
@@ -1162,11 +1165,12 @@ internal static partial class CliApp
             "list-windows" => CombineHelpWithCommandMetadata("list-windows", HelpText.ListWindows),
             "activate-window" => CombineHelpWithCommandMetadata("activate-window", HelpText.ActivateWindow),
             "apply-diff" => CombineHelpWithCommandMetadata("apply-diff", HelpText.ApplyDiff),
+            "apply-patch" => CombineHelpWithCommandMetadata("apply-diff", HelpText.ApplyDiff),
             "document-slice" => CombineHelpWithCommandMetadata("document-slice", HelpText.DocumentSlice),
             "document-slices" => CombineHelpWithCommandMetadata("document-slices", HelpText.DocumentSlices),
             "search-symbols" => CombineHelpWithCommandMetadata("search-symbols", HelpText.SearchSymbols),
             "goto-definition" => CombineHelpWithCommandMetadata("goto-definition", HelpText.GoToDefinition),
-            "peek-definition" => CombineHelpWithCommandMetadata("quick-info", HelpText.PeekDefinition),
+            "peek-definition" => CombineHelpWithCommandMetadata("peek-definition", HelpText.PeekDefinition),
             "goto-implementation" => CombineHelpWithCommandMetadata("goto-implementation", HelpText.GoToImplementation),
             "find-references" => CombineHelpWithCommandMetadata("find-references", HelpText.FindReferences),
             "count-references" => CombineHelpWithCommandMetadata("count-references", HelpText.CountReferences),
@@ -1820,7 +1824,7 @@ internal static class HelpText
         apply-diff
 
         Purpose
-          Apply a unified diff through the live Visual Studio editor so edits are visible immediately.
+          Apply a patch through the live Visual Studio editor so edits are visible immediately.
 
         Required
           --patch-file <path>
@@ -1833,6 +1837,8 @@ internal static class HelpText
           --save-changed-files
 
         Notes
+          Patch content may be unified diff text with ---/+++ file headers and @@ hunks.
+          Patch content may also use the editor wrapper format with *** Begin Patch / *** End Patch, including *** Update File, *** Add File, *** Delete File, *** Move to, and *** End of File markers.
           Existing file edits are applied through the editor buffer first.
           Changed files are opened by default so edit movement stays visible in Visual Studio.
           This leaves normal edits visible in Visual Studio and lets the IDE re-evaluate syntax.

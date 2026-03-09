@@ -19,6 +19,10 @@ namespace VsIdeBridge.Services;
 internal sealed class DocumentService(IServiceProvider serviceProvider)
 {
     private readonly IServiceProvider _serviceProvider = serviceProvider;
+    private const string DocumentNotFoundCode = "document_not_found";
+    private const string ResolvedPathProperty = "resolvedPath";
+    private const string TextDocumentKind = "TextDocument";
+    private const string UnsupportedOperationCode = "unsupported_operation";
 
     public async Task<JObject> ListOpenTabsAsync(DTE2 dte)
     {
@@ -65,19 +69,19 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         var window = dte.ItemOperations.OpenFile(normalizedPath);
         window.Activate();
 
-        if (window.Document?.Object("TextDocument") is TextDocument textDocument)
+        var navigated = false;
+        if (window.Document?.Object(TextDocumentKind) is TextDocument textDocument)
         {
-            var selection = textDocument.Selection;
-            selection.MoveToLineAndOffset(Math.Max(1, line), Math.Max(1, column), false);
-            TryShowActivePoint(selection);
+            navigated = TryNavigateToLine(textDocument, line, column);
         }
 
         return new JObject
         {
-            ["resolvedPath"] = normalizedPath,
+            [ResolvedPathProperty] = normalizedPath,
             ["name"] = Path.GetFileName(normalizedPath),
             ["line"] = Math.Max(1, line),
             ["column"] = Math.Max(1, column),
+            ["navigated"] = navigated,
             ["windowCaption"] = window.Caption,
         };
     }
@@ -95,33 +99,47 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
         if (!File.Exists(normalizedPath))
         {
-            throw new CommandErrorException("document_not_found", $"File not found: {normalizedPath}");
+            throw new CommandErrorException(DocumentNotFoundCode, $"File not found: {normalizedPath}");
         }
 
         var window = dte.ItemOperations.OpenFile(normalizedPath);
         window.Activate();
 
-        if (window.Document?.Object("TextDocument") is TextDocument textDocument)
+        var navigated = false;
+        if (window.Document?.Object(TextDocumentKind) is TextDocument textDocument)
         {
-            var selection = textDocument.Selection;
-            SelectRange(
-                textDocument,
-                selection,
-                Math.Max(1, startLine),
-                Math.Max(1, startColumn),
-                Math.Max(1, endLine),
-                Math.Max(1, endColumn));
-            TryShowActivePoint(selection);
+            try
+            {
+                var selection = textDocument.Selection;
+                SelectRange(
+                    textDocument,
+                    selection,
+                    Math.Max(1, startLine),
+                    Math.Max(1, startColumn),
+                    Math.Max(1, endLine),
+                    Math.Max(1, endColumn));
+                TryShowActivePoint(selection);
+                navigated = true;
+            }
+            catch (ArgumentException)
+            {
+                navigated = TryNavigateToLine(textDocument, startLine, startColumn);
+            }
+            catch (COMException)
+            {
+                navigated = TryNavigateToLine(textDocument, startLine, startColumn);
+            }
         }
 
         return new JObject
         {
-            ["resolvedPath"] = normalizedPath,
+            [ResolvedPathProperty] = normalizedPath,
             ["name"] = Path.GetFileName(normalizedPath),
             ["startLine"] = Math.Max(1, startLine),
             ["startColumn"] = Math.Max(1, startColumn),
             ["endLine"] = Math.Max(1, endLine),
             ["endColumn"] = Math.Max(1, endColumn),
+            ["navigated"] = navigated,
             ["windowCaption"] = window.Caption,
         };
     }
@@ -154,12 +172,13 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         window.Activate();
 
         var document = window.Document ?? dte.ActiveDocument
-            ?? throw new CommandErrorException("document_not_found", $"Unable to activate: {normalizedPath}");
+            ?? throw new CommandErrorException(DocumentNotFoundCode, $"Unable to activate: {normalizedPath}");
 
+        var originalContent = TryReadDocumentText(document) ?? ReadFileText(normalizedPath);
         var usedEditorBuffer = false;
         try
         {
-            if (document.Object("TextDocument") is TextDocument textDocument)
+            if (document.Object(TextDocumentKind) is TextDocument textDocument)
             {
                 var start = textDocument.StartPoint.CreateEditPoint();
                 start.ReplaceText(textDocument.EndPoint, content, 0);
@@ -167,7 +186,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
                 var selection = textDocument.Selection;
                 selection.MoveToLineAndOffset(Math.Max(1, line), Math.Max(1, column), false);
                 TryShowActivePoint(selection);
-                usedEditorBuffer = true;
+                usedEditorBuffer = string.Equals(TryReadDocumentText(document), content, StringComparison.Ordinal);
             }
         }
         catch (COMException)
@@ -186,6 +205,15 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             }
         }
 
+        var finalDocument = window.Document ?? document;
+        var finalContent = TryReadDocumentText(finalDocument) ?? ReadFileText(normalizedPath);
+        if (!string.Equals(finalContent, content, StringComparison.Ordinal))
+        {
+            throw new CommandErrorException("write_failed", $"Document content did not match the requested text after write: {normalizedPath}");
+        }
+
+        var contentChanged = !string.Equals(originalContent, finalContent, StringComparison.Ordinal);
+
         if (saveChanges && window.Document is not null)
         {
             window.Document.Save();
@@ -202,13 +230,44 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
 
         return new JObject
         {
-            ["resolvedPath"] = normalizedPath,
+            [ResolvedPathProperty] = normalizedPath,
             ["editorBacked"] = usedEditorBuffer,
+            ["verified"] = true,
+            ["contentChanged"] = contentChanged,
             ["saved"] = window.Document?.Saved ?? saveChanges,
             ["line"] = Math.Max(1, line),
             ["column"] = Math.Max(1, column),
             ["windowCaption"] = window.Caption,
         };
+    }
+    private static string ReadFileText(string path)
+    {
+        return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+    }
+
+    private static string? TryReadDocumentText(Document? document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (document is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (document.Object(TextDocumentKind) is not TextDocument textDocument)
+            {
+                return null;
+            }
+
+            var start = textDocument.StartPoint.CreateEditPoint();
+            return start.GetText(textDocument.EndPoint);
+        }
+        catch (COMException)
+        {
+            return null;
+        }
     }
 
     private IWpfTextView? TryGetActiveWpfTextView()
@@ -251,12 +310,12 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
             if (!File.Exists(normalizedPath))
             {
-                throw new CommandErrorException("document_not_found", $"File not found: {normalizedPath}");
+                throw new CommandErrorException(DocumentNotFoundCode, $"File not found: {normalizedPath}");
             }
 
             var window = dte.ItemOperations.OpenFile(normalizedPath);
             window.Activate();
-            document = window.Document ?? dte.ActiveDocument ?? throw new CommandErrorException("document_not_found", $"Unable to activate: {normalizedPath}");
+            document = window.Document ?? dte.ActiveDocument ?? throw new CommandErrorException(DocumentNotFoundCode, $"Unable to activate: {normalizedPath}");
         }
         else if (!string.IsNullOrWhiteSpace(documentQuery))
         {
@@ -266,13 +325,13 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         }
         else
         {
-            document = dte.ActiveDocument ?? throw new CommandErrorException("document_not_found", "There is no active document.");
+            document = dte.ActiveDocument ?? throw new CommandErrorException(DocumentNotFoundCode, "There is no active document.");
             document.Activate();
         }
 
-        if (document.Object("TextDocument") is not TextDocument textDocument)
+        if (document.Object(TextDocumentKind) is not TextDocument textDocument)
         {
-            throw new CommandErrorException("unsupported_operation", $"Document is not a text document: {document.FullName}");
+            throw new CommandErrorException(UnsupportedOperationCode, $"Document is not a text document: {document.FullName}");
         }
 
         var selection = textDocument.Selection;
@@ -290,7 +349,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         var activeColumn = selection.ActivePoint.DisplayColumn;
         return new JObject
         {
-            ["resolvedPath"] = PathNormalization.NormalizeFilePath(document.FullName),
+            [ResolvedPathProperty] = PathNormalization.NormalizeFilePath(document.FullName),
             ["name"] = document.Name,
             ["line"] = activeLine,
             ["column"] = activeColumn,
@@ -355,7 +414,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         if (!string.IsNullOrWhiteSpace(filePath))
         {
             var normalized = PathNormalization.NormalizeFilePath(filePath);
-            var document = TryFindOpenDocumentByPath(dte, normalized) ?? throw new CommandErrorException("document_not_found", $"No open document matching path: {filePath}");
+            var document = TryFindOpenDocumentByPath(dte, normalized) ?? throw new CommandErrorException(DocumentNotFoundCode, $"No open document matching path: {filePath}");
             document.Save();
             return new JObject
             {
@@ -402,11 +461,11 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var activeDocument = dte.ActiveDocument ?? throw new CommandErrorException("document_not_found", "There is no active document.");
+        var activeDocument = dte.ActiveDocument ?? throw new CommandErrorException(DocumentNotFoundCode, "There is no active document.");
         var activePath = TryGetDocumentFullName(activeDocument);
         if (string.IsNullOrWhiteSpace(activePath))
         {
-            throw new CommandErrorException("document_not_found", "The active document does not have a file path.");
+            throw new CommandErrorException(DocumentNotFoundCode, "The active document does not have a file path.");
         }
 
         var documentsToClose = EnumerateOpenDocuments(dte)
@@ -436,10 +495,10 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var document = dte.ActiveDocument ?? throw new CommandErrorException("document_not_found", "There is no active document.");
-        if (document.Object("TextDocument") is not TextDocument textDocument)
+        var document = dte.ActiveDocument ?? throw new CommandErrorException(DocumentNotFoundCode, "There is no active document.");
+        if (document.Object(TextDocumentKind) is not TextDocument textDocument)
         {
-            throw new CommandErrorException("unsupported_operation", $"Active document is not a text document: {document.FullName}");
+            throw new CommandErrorException(UnsupportedOperationCode, $"Active document is not a text document: {document.FullName}");
         }
 
         var editPoint = textDocument.StartPoint.CreateEditPoint();
@@ -497,7 +556,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
 
         return new JObject
         {
-            ["resolvedPath"] = resolvedPath,
+            [ResolvedPathProperty] = resolvedPath,
             ["requestedStartLine"] = clampedStart,
             ["requestedEndLine"] = clampedEnd,
             ["actualStartLine"] = actualStart,
@@ -524,7 +583,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         // rather than dte.ExecuteCommand("Edit.GoToDefinition", ...).
         // ExecuteCommand shows a modal "Command requires one argument" dialog
         // for this command.  PostExecCommand posts through the shell command
-        // dispatcher — the same path as pressing F12.
+        // dispatcher ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the same path as pressing F12.
         //
         // guidStandardCommandSet97 = {5efc7975-14bc-11cf-9b2b-00aa00573819}
         // cmdidGotoDefn             = 935   (from stdidcmd.h)
@@ -535,9 +594,9 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             object? arg = null;
             var shell = (Microsoft.VisualStudio.Shell.Interop.IVsUIShell)
                 Microsoft.VisualStudio.Shell.Package.GetGlobalService(
-                    typeof(Microsoft.VisualStudio.Shell.Interop.SVsUIShell)) ?? throw new CommandErrorException("unsupported_operation", "IVsUIShell service not available.");
+                    typeof(Microsoft.VisualStudio.Shell.Interop.SVsUIShell)) ?? throw new CommandErrorException(UnsupportedOperationCode, "IVsUIShell service not available.");
             shell.PostExecCommand(ref goToDefnGuid, goToDefnId, 0, ref arg);
-            // PostExecCommand is asynchronous — give VS a moment to navigate.
+            // PostExecCommand is asynchronous ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â give VS a moment to navigate.
             await Task.Delay(500).ConfigureAwait(true);
         }
         catch (CommandErrorException)
@@ -547,7 +606,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         catch (COMException ex)
         {
             throw new CommandErrorException(
-                "unsupported_operation",
+                UnsupportedOperationCode,
                 $"GoToDefinition failed: {ex.Message}");
         }
 
@@ -566,7 +625,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         int definitionLine = 0, definitionColumn = 0;
         string selectedText = string.Empty, lineText = string.Empty;
 
-        if (activeDoc.Object("TextDocument") is TextDocument defTextDoc)
+        if (activeDoc.Object(TextDocumentKind) is TextDocument defTextDoc)
         {
             var selection = defTextDoc.Selection;
             definitionLine = selection.ActivePoint.Line;
@@ -577,7 +636,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
 
         var definitionLocation = new JObject
         {
-            ["resolvedPath"] = definitionPath,
+            [ResolvedPathProperty] = definitionPath,
             ["name"] = activeDoc.Name ?? string.Empty,
             ["line"] = definitionLine,
             ["column"] = definitionColumn,
@@ -585,7 +644,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             ["lineText"] = lineText,
         };
 
-        var sourcePath = (string?)sourceLocation["resolvedPath"] ?? string.Empty;
+        var sourcePath = (string?)sourceLocation[ResolvedPathProperty] ?? string.Empty;
         var sourceLine = (int?)sourceLocation["line"] ?? 0;
         var definitionFound = !string.Equals(sourcePath, definitionPath, StringComparison.OrdinalIgnoreCase)
             || sourceLine != definitionLine;
@@ -618,15 +677,15 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         catch (COMException ex)
         {
             throw new CommandErrorException(
-                "unsupported_operation",
+                UnsupportedOperationCode,
                 $"GoToImplementation failed: {ex.Message}");
         }
 
         var implementationLocation = await PositionTextSelectionAsync(dte, null, null, null, null, selectWord: false)
             .ConfigureAwait(true);
-        var sourcePath = (string?)sourceLocation["resolvedPath"] ?? string.Empty;
+        var sourcePath = (string?)sourceLocation[ResolvedPathProperty] ?? string.Empty;
         var sourceLine = (int?)sourceLocation["line"] ?? 0;
-        var implementationPath = (string?)implementationLocation["resolvedPath"] ?? string.Empty;
+        var implementationPath = (string?)implementationLocation[ResolvedPathProperty] ?? string.Empty;
         var implementationLine = (int?)implementationLocation["line"] ?? 0;
         var implementationFound = !string.Equals(sourcePath, implementationPath, StringComparison.OrdinalIgnoreCase)
             || sourceLine != implementationLine;
@@ -672,7 +731,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             {
                 results.Add(new Newtonsoft.Json.Linq.JObject
                 {
-                    ["resolvedPath"] = file ?? string.Empty,
+                    [ResolvedPathProperty] = file ?? string.Empty,
                     ["error"] = ex.Message,
                 });
             }
@@ -693,7 +752,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         var sourceLocation = await PositionTextSelectionAsync(dte, filePath, documentQuery, line, column, selectWord: true)
             .ConfigureAwait(true);
 
-        var sourcePath = (string?)sourceLocation["resolvedPath"] ?? string.Empty;
+        var sourcePath = (string?)sourceLocation[ResolvedPathProperty] ?? string.Empty;
         var sourceLine = (int?)sourceLocation["line"] ?? 0;
         var word = (string?)sourceLocation["selectedText"] ?? string.Empty;
 
@@ -710,7 +769,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
 
             if (definitionFound && defLocation is not null)
             {
-                var defPath = (string?)defLocation["resolvedPath"];
+                var defPath = (string?)defLocation[ResolvedPathProperty];
                 var defLine = (int?)defLocation["line"] ?? 0;
                 if (!string.IsNullOrEmpty(defPath) && defLine > 0)
                 {
@@ -749,13 +808,13 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         var resolvedPath = ResolveDocumentPath(dte, filePath);
 
         ProjectItem? projectItem = null;
-        try { projectItem = dte.Solution.FindProjectItem(resolvedPath); } catch { }
+        try { projectItem = dte.Solution.FindProjectItem(resolvedPath); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
 
         if (projectItem is null)
         {
             return new JObject
             {
-                ["resolvedPath"] = resolvedPath,
+                [ResolvedPathProperty] = resolvedPath,
                 ["count"] = 0,
                 ["symbols"] = new JArray(),
                 ["note"] = "File is not part of any project or code model is unavailable.",
@@ -771,7 +830,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             {
                 foreach (CodeElement element in codeModel.CodeElements)
                 {
-                    try { CollectOutlineSymbols(element, symbols, 0, maxDepth, kindFilter); } catch { }
+                    try { CollectOutlineSymbols(element, symbols, 0, maxDepth, kindFilter); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
                 }
             }
             else
@@ -786,7 +845,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
 
         var result = new JObject
         {
-            ["resolvedPath"] = resolvedPath,
+            [ResolvedPathProperty] = resolvedPath,
             ["count"] = symbols.Count,
             ["symbols"] = symbols,
         };
@@ -812,13 +871,13 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         if (depth > maxDepth) return;
 
         vsCMElement kind;
-        try { kind = element.Kind; } catch { return; }
+        try { kind = element.Kind; } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); return; }
 
         string name = string.Empty;
         int startLine = 0, endLine = 0;
-        try { name = element.Name ?? string.Empty; } catch { }
-        try { startLine = element.StartPoint?.Line ?? 0; } catch { }
-        try { endLine = element.EndPoint?.Line ?? 0; } catch { }
+        try { name = element.Name ?? string.Empty; } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        try { startLine = element.StartPoint?.Line ?? 0; } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
+        try { endLine = element.EndPoint?.Line ?? 0; } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
 
         if (s_outlineKinds.Contains(kind))
         {
@@ -846,12 +905,12 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             else if (element is CodeStruct st) children = st.Members;
             else if (element is CodeInterface iface) children = iface.Members;
         }
-        catch { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
 
         if (children is null) return;
         foreach (CodeElement child in children)
         {
-            try { CollectOutlineSymbols(child, symbols, depth + 1, maxDepth, kindFilter); } catch { }
+            try { CollectOutlineSymbols(child, symbols, depth + 1, maxDepth, kindFilter); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex); }
         }
     }
 
@@ -899,7 +958,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
 
         if (dte.ActiveDocument is null || string.IsNullOrWhiteSpace(dte.ActiveDocument.FullName))
         {
-            throw new CommandErrorException("document_not_found", "There is no active document.");
+            throw new CommandErrorException(DocumentNotFoundCode, "There is no active document.");
         }
 
         return PathNormalization.NormalizeFilePath(dte.ActiveDocument.FullName);
@@ -909,21 +968,9 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        if (!Path.IsPathRooted(filePath))
+        if (!Path.IsPathRooted(filePath) && TryResolveRelativeDocumentPath(dte, filePath) is { } resolvedRelativePath)
         {
-            var solutionPath = dte.Solution?.IsOpen == true ? dte.Solution.FullName : string.Empty;
-            var solutionDirectory = string.IsNullOrWhiteSpace(solutionPath)
-                ? string.Empty
-                : Path.GetDirectoryName(PathNormalization.NormalizeFilePath(solutionPath)) ?? string.Empty;
-
-            if (!string.IsNullOrWhiteSpace(solutionDirectory))
-            {
-                var solutionRelativePath = PathNormalization.NormalizeFilePath(Path.Combine(solutionDirectory, filePath));
-                if (File.Exists(solutionRelativePath))
-                {
-                    return solutionRelativePath;
-                }
-            }
+            return resolvedRelativePath;
         }
 
         var normalizedPath = PathNormalization.NormalizeFilePath(filePath);
@@ -949,7 +996,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         if (allMatches.Length == 0)
         {
             throw new CommandErrorException(
-                "document_not_found",
+                DocumentNotFoundCode,
                 $"File not found: {normalizedPath}. No solution item matched '{filePath}'.");
         }
 
@@ -989,6 +1036,65 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         {
             selection.MoveToLineAndOffset(originalLine, originalColumn, false);
         }
+    }
+
+    /// <summary>
+    /// Navigates to a line/column, clamping to the document range and handling
+    /// transient COM errors (e.g. "Class not registered" when the editor buffer
+    /// hasn't fully initialized after first open).
+    /// </summary>
+    private static bool TryNavigateToLine(TextDocument textDocument, int line, int column)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                var maxLine = textDocument.EndPoint.Line;
+                var clampedLine = Math.Min(Math.Max(line, 1), Math.Max(1, maxLine));
+                var clampedColumn = Math.Max(1, column);
+                var selection = textDocument.Selection;
+                selection.MoveToLineAndOffset(clampedLine, clampedColumn, false);
+                TryShowActivePoint(selection);
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                if (attempt == 0)
+                {
+                    // Editor buffers can be transiently unavailable immediately after open.
+                    System.Threading.Thread.Sleep(100);
+                    continue;
+                }
+
+                break;
+            }
+            catch (COMException)
+            {
+                if (attempt == 0)
+                {
+                    System.Threading.Thread.Sleep(100);
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        // Final fallback: try line 1 col 1.
+        try
+        {
+            var selection = textDocument.Selection;
+            selection.MoveToLineAndOffset(1, 1, false);
+            TryShowActivePoint(selection);
+        }
+        catch
+        {
+            // Give up on navigation; the file is still open.
+        }
+
+        return false;
     }
 
     private static void TryShowActivePoint(TextSelection selection)
@@ -1054,6 +1160,89 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         return start.GetText(end);
     }
 
+    private static string? TryResolveRelativeDocumentPath(DTE2 dte, string filePath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var normalizedRelativePath = filePath
+            .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
+            .TrimStart(Path.DirectorySeparatorChar);
+
+        foreach (var root in EnumerateDocumentSearchRoots(dte))
+        {
+            var candidate = PathNormalization.NormalizeFilePath(Path.Combine(root, normalizedRelativePath));
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        var targetFileName = Path.GetFileName(normalizedRelativePath);
+        string? fileNameMatch = null;
+        foreach (var document in EnumerateOpenDocuments(dte))
+        {
+            var documentPath = TryGetDocumentFullName(document);
+            if (string.IsNullOrWhiteSpace(documentPath))
+            {
+                continue;
+            }
+
+            var normalizedDocumentPath = PathNormalization.NormalizeFilePath(documentPath);
+            var comparableDocumentPath = normalizedDocumentPath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+            if (comparableDocumentPath.EndsWith(Path.DirectorySeparatorChar + normalizedRelativePath, StringComparison.OrdinalIgnoreCase) ||
+                comparableDocumentPath.EndsWith(normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalizedDocumentPath;
+            }
+
+            if (fileNameMatch is null && string.Equals(Path.GetFileName(comparableDocumentPath), targetFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                fileNameMatch = normalizedDocumentPath;
+            }
+        }
+
+        return fileNameMatch;
+    }
+
+    private static IReadOnlyList<string> EnumerateDocumentSearchRoots(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var searchRoots = new List<string>();
+        var solutionPath = dte.Solution?.IsOpen == true ? dte.Solution.FullName : string.Empty;
+        var current = string.IsNullOrWhiteSpace(solutionPath)
+            ? string.Empty
+            : Path.GetDirectoryName(PathNormalization.NormalizeFilePath(solutionPath)) ?? string.Empty;
+
+        while (!string.IsNullOrWhiteSpace(current))
+        {
+            AddDistinctPath(searchRoots, current);
+            var parent = Path.GetDirectoryName(current) ?? string.Empty;
+            if (string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            current = parent;
+        }
+
+        return searchRoots;
+    }
+
+    private static void AddDistinctPath(List<string> searchRoots, string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return;
+        }
+
+        var normalizedCandidate = PathNormalization.NormalizeFilePath(candidate);
+        if (!searchRoots.Contains(normalizedCandidate, StringComparer.OrdinalIgnoreCase))
+        {
+            searchRoots.Add(normalizedCandidate);
+        }
+    }
+
     private static IReadOnlyList<Document> EnumerateOpenDocuments(DTE2 dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -1076,11 +1265,16 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         var documents = EnumerateOpenDocuments(dte);
         if (documents.Count == 0)
         {
-            throw new CommandErrorException("document_not_found", "There are no open documents.");
+            throw new CommandErrorException(DocumentNotFoundCode, "There are no open documents.");
         }
 
         if (string.IsNullOrWhiteSpace(query))
         {
+            if (allowMultiple)
+            {
+                return (documents.ToList(), "all");
+            }
+
             if (!fallbackToActive || dte.ActiveDocument is null)
             {
                 throw new CommandErrorException("invalid_arguments", "Missing document query.");
@@ -1106,6 +1300,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             .ToList();
         if (exactName.Count > 0)
         {
+            exactName = PreferSingleDocumentMatch(dte, exactName);
             return FinalizeMatches(exactName, allowMultiple, "filename");
         }
 
@@ -1113,6 +1308,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             .ToList();
         if (containsName.Count > 0)
         {
+            containsName = PreferSingleDocumentMatch(dte, containsName);
             return FinalizeMatches(containsName, allowMultiple, "filename-contains");
         }
 
@@ -1120,10 +1316,42 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             .ToList();
         if (containsPath.Count > 0)
         {
+            containsPath = PreferSingleDocumentMatch(dte, containsPath);
             return FinalizeMatches(containsPath, allowMultiple, "path-contains");
         }
 
-        throw new CommandErrorException("document_not_found", $"No open document matched '{rawQuery}'.");
+        throw new CommandErrorException(DocumentNotFoundCode, $"No open document matched '{rawQuery}'.");
+    }
+
+    private static List<Document> PreferSingleDocumentMatch(DTE2 dte, List<Document> matches)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (matches.Count <= 1)
+        {
+            return matches;
+        }
+
+        if (TryGetDocumentFullName(dte.ActiveDocument) is string activeDocumentPath &&
+            !string.IsNullOrWhiteSpace(activeDocumentPath))
+        {
+            var activeMatches = matches.Where(document => MatchesDocumentExactPath(document, activeDocumentPath)).ToList();
+            if (activeMatches.Count == 1)
+            {
+                return activeMatches;
+            }
+        }
+
+        matches = PreferMatches(matches, IsProjectBackedDocument);
+        matches = PreferMatches(matches, document => !IsReviewArtifactDocument(document));
+        matches = PreferMatches(matches, document => !IsOutputDocument(document));
+        return matches;
+    }
+
+    private static List<Document> PreferMatches(List<Document> matches, Func<Document, bool> predicate)
+    {
+        var preferred = matches.Where(predicate).ToList();
+        return preferred.Count == 0 ? matches : preferred;
     }
 
     private static (List<Document> Documents, string MatchedBy) FinalizeMatches(List<Document> matches, bool allowMultiple, string matchedBy)
@@ -1145,13 +1373,9 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
 
         var openDocument = TryFindOpenDocumentByPath(dte, resolvedPath);
 
-        if (openDocument?.Object("TextDocument") is TextDocument textDocument)
-        {
-            var editPoint = textDocument.StartPoint.CreateEditPoint();
-            return editPoint.GetText(textDocument.EndPoint);
-        }
+        var editorText = TryReadDocumentText(openDocument);
 
-        return File.ReadAllText(resolvedPath);
+        return editorText ?? File.ReadAllText(resolvedPath);
     }
 
     private static bool HasDocumentPath(Document document)
@@ -1204,10 +1428,46 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         return
         [
             .. matches
-                .Select(document => TryGetDocumentName(document) ?? Path.GetFileName(TryGetDocumentFullName(document) ?? string.Empty))
+                .Select(GetDocumentLabel)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase),
         ];
+    }
+
+    private static string GetDocumentLabel(Document document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var fullName = TryGetDocumentFullName(document) ?? string.Empty;
+        var project = TryGetDocumentProjectUniqueName(document);
+        if (!string.IsNullOrWhiteSpace(fullName) && !string.IsNullOrWhiteSpace(project))
+        {
+            return $"{Path.GetFileName(fullName)} [{project}]";
+        }
+
+        return TryGetDocumentName(document) ?? Path.GetFileName(fullName);
+    }
+
+    private static bool IsProjectBackedDocument(Document document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        return !string.IsNullOrWhiteSpace(TryGetDocumentProjectUniqueName(document));
+    }
+
+    private static bool IsReviewArtifactDocument(Document document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var fullName = TryGetDocumentFullName(document) ?? string.Empty;
+        return fullName.IndexOf("\\output\\pr-review\\", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool IsOutputDocument(Document document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var fullName = TryGetDocumentFullName(document) ?? string.Empty;
+        return fullName.IndexOf("\\output\\", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private static Document? TryFindOpenDocumentByPath(DTE2 dte, string resolvedPath)
@@ -1258,6 +1518,9 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             ["tabIndex"] = tabIndex,
             ["isActive"] = !string.IsNullOrWhiteSpace(normalizedPath) &&
                 string.Equals(normalizedPath, normalizedActivePath, StringComparison.OrdinalIgnoreCase),
+            ["project"] = TryGetDocumentProjectUniqueName(document) ?? string.Empty,
+            ["isProjectBacked"] = IsProjectBackedDocument(document),
+            ["isReviewArtifact"] = IsReviewArtifactDocument(document),
             ["saved"] = (JToken?)saved ?? JValue.CreateNull(),
         };
     }
@@ -1301,6 +1564,26 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         }
     }
 
+    private static string? TryGetDocumentProjectUniqueName(Document? document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (document is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var project = document.ProjectItem?.ContainingProject?.UniqueName;
+            return string.IsNullOrWhiteSpace(project) ? null : project;
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
     private static bool? TryGetDocumentSaved(Document? document)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -1331,8 +1614,20 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         {
             await PositionTextSelectionAsync(dte, filePath, null, line, column, selectWord: false).ConfigureAwait(true);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine(ex);
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+

@@ -34,8 +34,9 @@ internal sealed class FailureContextService
             state = await context.Runtime.IdeStateService.GetStateAsync(context.Dte).ConfigureAwait(true);
             data["state"] = state;
         }
-        catch
+        catch (Exception ex)
         {
+            ActivityLog.LogWarning(nameof(FailureContextService), $"Failed to capture state: {ex.Message}");
         }
 
         try
@@ -43,8 +44,9 @@ internal sealed class FailureContextService
             JObject? openTabs = await context.Runtime.DocumentService.ListOpenTabsAsync(context.Dte).ConfigureAwait(true);
             data["openTabs"] = openTabs;
         }
-        catch
+        catch (Exception ex)
         {
+            ActivityLog.LogWarning(nameof(FailureContextService), $"Failed to capture open tabs: {ex.Message}");
         }
 
         try
@@ -54,8 +56,9 @@ internal sealed class FailureContextService
                 .ConfigureAwait(true);
             data["errorList"] = errorList;
         }
-        catch
+        catch (Exception ex)
         {
+            ActivityLog.LogWarning(nameof(FailureContextService), $"Failed to capture error list: {ex.Message}");
         }
 
         var outlineCache = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
@@ -74,8 +77,9 @@ internal sealed class FailureContextService
                         ["outline"] = outline,
                     });
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ActivityLog.LogWarning(nameof(FailureContextService), $"Failed to capture outline for '{file}': {ex.Message}");
                 }
             }
 

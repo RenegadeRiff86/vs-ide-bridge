@@ -32,7 +32,7 @@ internal static class PipeCommandNames
         ["Tools.IdeShowCallHierarchy"] = ["call-hierarchy"],
         ["Tools.IdeGetDocumentSlice"] = ["document-slice"],
         ["Tools.IdeGetSmartContextForQuery"] = ["smart-context"],
-        ["Tools.IdeApplyUnifiedDiff"] = ["apply-diff"],
+        ["Tools.IdeApplyUnifiedDiff"] = ["apply-diff", "apply-patch"],
         ["Tools.IdeGoToDefinition"] = ["goto-definition"],
         ["Tools.IdeGoToImplementation"] = ["goto-implementation"],
         ["Tools.IdeGetFileOutline"] = ["file-outline"],

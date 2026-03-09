@@ -21,7 +21,7 @@ internal sealed class BuildService(ReadinessService readinessService)
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
         var dte = context.Dte;
-        if (dte.Solution is null || !dte.Solution.IsOpen)
+        if (dte.Solution?.IsOpen != true)
         {
             throw new CommandErrorException("solution_not_open", "No solution is open.");
         }
@@ -71,7 +71,7 @@ internal sealed class BuildService(ReadinessService readinessService)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        if (dte.Solution is null || !dte.Solution.IsOpen)
+        if (dte.Solution?.IsOpen != true)
         {
             throw new CommandErrorException("solution_not_open", "No solution is open.");
         }
@@ -113,7 +113,7 @@ internal sealed class BuildService(ReadinessService readinessService)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        if (dte.Solution is null || !dte.Solution.IsOpen)
+        if (dte.Solution?.IsOpen != true)
         {
             throw new CommandErrorException("solution_not_open", "No solution is open.");
         }
@@ -148,7 +148,7 @@ internal sealed class BuildService(ReadinessService readinessService)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        if (dte.Solution is null || !dte.Solution.IsOpen)
+        if (dte.Solution?.IsOpen != true)
         {
             throw new CommandErrorException("solution_not_open", "No solution is open.");
         }

@@ -1,6 +1,10 @@
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
+using System.Diagnostics;
+using VsIdeBridge.Shared;
 
 namespace VsIdeBridgeService;
 
@@ -15,13 +19,52 @@ internal static class Program
             return;
         }
 
-        ServiceBase.Run(new BridgeService(args));
+        try
+        {
+            ServiceBase.Run(new BridgeService(args));
+        }
+        catch (Exception ex)
+        {
+            BootstrapLog($"fatal startup error: {ex}");
+
+            if (Environment.UserInteractive)
+            {
+                Console.Error.WriteLine($"VsIdeBridgeService failed to start: {ex.Message}");
+            }
+            else
+            {
+                try
+                {
+                    EventLog.WriteEntry("Application", $"VsIdeBridgeService failed to start: {ex}", EventLogEntryType.Error);
+                }
+                catch
+                {
+                    // best effort event logging
+                }
+            }
+
+            Environment.ExitCode = 1;
+        }
+    }
+
+    private static void BootstrapLog(string message)
+    {
+        try
+        {
+            var logPath = Path.Combine(Path.GetTempPath(), "VsIdeBridgeService-bootstrap.log");
+            File.AppendAllText(logPath, $"{DateTime.Now:O} {message}{Environment.NewLine}");
+        }
+        catch
+        {
+            // best effort logging
+        }
     }
 }
 
 internal sealed class BridgeService : ServiceBase
 {
     private const string ServiceControlPipeName = "VsIdeBridgeServiceControl";
+    private const int ControlPipeBufferSize = 4096;
 
     private readonly TimeSpan _idleSoftTimeout;
     private readonly TimeSpan _idleHardTimeout;
@@ -46,11 +89,7 @@ internal sealed class BridgeService : ServiceBase
 
         _idleSoftTimeout = TimeSpan.FromSeconds(GetIntArg(args, "idle-soft-seconds", 900));
         _idleHardTimeout = TimeSpan.FromSeconds(GetIntArg(args, "idle-hard-seconds", 1200));
-
-        var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
-        var logDir = Path.Combine(programData, "VsIdeBridge");
-        Directory.CreateDirectory(logDir);
-        _logPath = Path.Combine(logDir, "service.log");
+        _logPath = ResolveLogPath();
     }
 
     protected override void OnStart(string[] args)
@@ -82,18 +121,47 @@ internal sealed class BridgeService : ServiceBase
         _stopCts = null;
     }
 
+    private static PipeSecurity CreateControlPipeSecurity()
+    {
+        var security = new PipeSecurity();
+        AddPipeAccessRule(security, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), PipeAccessRights.FullControl);
+        AddPipeAccessRule(security, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), PipeAccessRights.FullControl);
+        AddPipeAccessRule(security, new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null), NamedPipeAccessDefaults.ClientReadWriteRights);
+        TryAddPipeAccessRule(security, "S-1-15-2-1", NamedPipeAccessDefaults.ClientReadWriteRights);
+        return security;
+    }
+
+    private static void AddPipeAccessRule(PipeSecurity security, SecurityIdentifier sid, PipeAccessRights rights)
+    {
+        security.AddAccessRule(new PipeAccessRule(sid, rights, AccessControlType.Allow));
+    }
+
+    private static void TryAddPipeAccessRule(PipeSecurity security, string sidValue, PipeAccessRights rights)
+    {
+        try
+        {
+            AddPipeAccessRule(security, new SecurityIdentifier(sidValue), rights);
+        }
+        catch
+        {
+            // Older Windows builds can reject some well-known SIDs. Fall back gracefully.
+        }
+    }
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                using var server = new NamedPipeServerStream(
+                using var server = NamedPipeServerStreamAcl.Create(
                     ServiceControlPipeName,
                     PipeDirection.In,
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
+                    PipeOptions.Asynchronous,
+                    ControlPipeBufferSize,
+                    ControlPipeBufferSize,
+                    CreateControlPipeSecurity());
 
                 await server.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 using var reader = new StreamReader(server, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, leaveOpen: true);
@@ -116,7 +184,14 @@ internal sealed class BridgeService : ServiceBase
             catch (Exception ex)
             {
                 Log($"control pipe error: {ex.Message}");
-                await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
     }
@@ -259,5 +334,33 @@ internal sealed class BridgeService : ServiceBase
         }
 
         return defaultValue;
+    }
+
+    private static string ResolveLogPath()
+    {
+        var commonAppData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+        var candidates = new[]
+        {
+            Path.Combine(commonAppData, "VsIdeBridge"),
+            Path.Combine(localAppData, "VsIdeBridge"),
+            Path.GetTempPath()
+        };
+
+        foreach (var directory in candidates)
+        {
+            try
+            {
+                Directory.CreateDirectory(directory);
+                return Path.Combine(directory, "service.log");
+            }
+            catch
+            {
+                // try next location
+            }
+        }
+
+        return Path.Combine(Path.GetTempPath(), "service.log");
     }
 }

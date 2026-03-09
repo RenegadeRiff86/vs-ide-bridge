@@ -104,7 +104,7 @@ internal sealed class IdeBridgeRuntime
         var failureContextService = new FailureContextService();
         var readinessService = new ReadinessService();
         var searchService = new SearchService();
-        var errorListService = new ErrorListService(readinessService);
+        var errorListService = new ErrorListService(package, readinessService, uiSettings);
         var buildService = new BuildService(readinessService);
         var bridgeWatchdogService = new BridgeWatchdogService(package);
 

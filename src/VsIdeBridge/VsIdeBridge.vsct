@@ -51,6 +51,15 @@
           <LocCanonicalName>.Tools.VsIdeBridgeToggleGoToEditedParts</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeToggleBestPracticeDiagnosticsMenu" priority="0x0130" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <Strings>
+          <ButtonText>Best Practice Diagnostics</ButtonText>
+          <CommandName>IdeToggleBestPracticeDiagnosticsMenu</CommandName>
+          <CanonicalName>Tools.VsIdeBridgeToggleBestPracticeDiagnostics</CanonicalName>
+          <LocCanonicalName>.Tools.VsIdeBridgeToggleBestPracticeDiagnostics</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeHelp" priority="0x01F0" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -749,6 +758,7 @@
       <IDSymbol name="cmdidIdeHelpMenu" value="0x0102" />
       <IDSymbol name="cmdidIdeToggleAllowBridgeEditsMenu" value="0x0103" />
       <IDSymbol name="cmdidIdeToggleGoToEditedPartsMenu" value="0x0104" />
+      <IDSymbol name="cmdidIdeToggleBestPracticeDiagnosticsMenu" value="0x0105" />
       <IDSymbol name="cmdidIdeGetState" value="0x0200" />
       <IDSymbol name="cmdidIdeWaitForReady" value="0x0201" />
       <IDSymbol name="cmdidIdeFindText" value="0x0202" />

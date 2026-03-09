@@ -10,6 +10,7 @@ internal sealed class BridgeUiSettingsService
     private const string CollectionPath = "VsIdeBridge";
     private const string AllowEditsKey = "AllowBridgeEdits";
     private const string GoToEditedPartsKey = "GoToEditedParts";
+    private const string BestPracticeDiagnosticsEnabledKey = "BestPracticeDiagnosticsEnabled";
 
     private readonly WritableSettingsStore? _store;
     private readonly Dictionary<string, bool> _fallback = new(StringComparer.OrdinalIgnoreCase);
@@ -43,6 +44,12 @@ internal sealed class BridgeUiSettingsService
         set => WriteBoolean(GoToEditedPartsKey, value);
     }
 
+    public bool BestPracticeDiagnosticsEnabled
+    {
+        get => ReadBoolean(BestPracticeDiagnosticsEnabledKey, defaultValue: true);
+        set => WriteBoolean(BestPracticeDiagnosticsEnabledKey, value);
+    }
+
     private bool ReadBoolean(string name, bool defaultValue)
     {
         if (_store is not null)
@@ -53,8 +60,9 @@ internal sealed class BridgeUiSettingsService
                     ? _store.GetBoolean(CollectionPath, name)
                     : defaultValue;
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine(ex);
             }
         }
 
@@ -70,8 +78,9 @@ internal sealed class BridgeUiSettingsService
                 _store.SetBoolean(CollectionPath, name, value);
                 return;
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine(ex);
             }
         }
 

@@ -7,7 +7,8 @@ internal static class Program
 {
     private const string DefaultInstallDir = @"C:\Program Files\VsIdeBridge";
     private const string DefaultServiceName = "VsIdeBridgeService";
-    private const string DefaultVsixId = "StanElston.VsIdeBridge";
+    private const string DefaultVsixId = "RenegadeRiff86.VsIdeBridge";
+    private const string LegacyVsixId = "StanElston.VsIdeBridge";
 
     private static int Main(string[] args)
     {
@@ -110,7 +111,7 @@ internal static class Program
             }
 
             InstallOrUpdateService(serviceName, installedServiceExe, idleSoftSeconds, idleHardSeconds);
-            Console.WriteLine($"Service '{serviceName}' installed (StartType=Manual).");
+            Console.WriteLine($"Service '{serviceName}' installed (StartType=Automatic).");
         }
 
         if (!skipVsix)
@@ -120,6 +121,7 @@ internal static class Program
                 return Fail($"VSIX not found: {vsixPath}");
             }
 
+            UninstallVsix(LegacyVsixId);
             InstallVsix(vsixPath);
             Console.WriteLine($"VSIX installed/updated ({vsixId}).");
         }
@@ -145,6 +147,7 @@ internal static class Program
         if (!skipVsix)
         {
             UninstallVsix(vsixId);
+            UninstallVsix(LegacyVsixId);
             Console.WriteLine($"VSIX uninstall attempted ({vsixId}).");
         }
 
@@ -182,14 +185,14 @@ internal static class Program
     {
         RemoveService(serviceName);
         var binPath = $"\"{serviceExePath}\" --idle-soft-seconds {idleSoftSeconds} --idle-hard-seconds {idleHardSeconds}";
-        var createArgs = $"create \"{serviceName}\" binPath= \"{binPath}\" start= demand DisplayName= \"VS IDE Bridge Service\"";
+        var createArgs = $"create \"{serviceName}\" binPath= \"{binPath}\" start= auto DisplayName= \"VS IDE Bridge Service\"";
         var createExit = RunProcess("sc.exe", createArgs);
         if (createExit != 0)
         {
             throw new InvalidOperationException($"Failed to create service '{serviceName}'. Exit code: {createExit}");
         }
 
-        _ = RunProcess("sc.exe", $"description \"{serviceName}\" \"VS IDE Bridge background host (manual start, idle auto-stop).\"");
+        _ = RunProcess("sc.exe", $"description \"{serviceName}\" \"VS IDE Bridge background host (automatic start, idle auto-stop).\"");
     }
 
     private static void RemoveService(string serviceName)
@@ -378,7 +381,7 @@ internal static class Program
         Console.WriteLine("  --idle-soft-seconds <n>    Idle drain start (default: 900)");
         Console.WriteLine("  --idle-hard-seconds <n>    Idle stop timeout (default: 1200)");
         Console.WriteLine("  --vsix-path <path>         VSIX override path");
-        Console.WriteLine("  --vsix-id <id>             VSIX id (default: StanElston.VsIdeBridge)");
+        Console.WriteLine("  --vsix-id <id>             VSIX id (default: RenegadeRiff86.VsIdeBridge)");
         Console.WriteLine("  --skip-service             Do not install service");
         Console.WriteLine("  --skip-vsix                Do not install VSIX");
         Console.WriteLine("  --skip-admin-check         Bypass elevation check (automation only)");

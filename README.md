@@ -8,7 +8,7 @@ This project is experimental. Use it at your own risk.
 
 ## Purpose
 
-Lets you drive a running Visual Studio instance from outside the IDE: search code, navigate to symbols, slice documents, apply diffs, control the debugger, and capture build output — all without touching the keyboard.
+Lets you drive a running Visual Studio instance from outside the IDE: search code, navigate to symbols, slice documents, apply diffs, control the debugger, and capture build output - all without touching the keyboard.
 
 Commands are invoked through simple pipe names like `state`, `search-symbols`, and `quick-info`. The legacy `Tools.Ide*` names still work for compatibility. The native CLI can print `json`, `summary`, or `keyvalue` to stdout and can also write envelopes to a caller-specified output file.
 
@@ -97,15 +97,15 @@ src\VsIdeBridgeInstaller\bin\Release\net8.0-windows\vs-ide-bridge-installer.exe 
 Default installer behavior:
 
 - Copies bridge CLI + service binaries to `C:\Program Files\VsIdeBridge`
-- Registers `VsIdeBridgeService` as a manual-start Windows service
-- Installs/updates VSIX `StanElston.VsIdeBridge`
+- Registers `VsIdeBridgeService` as an automatic-start Windows service
+- Installs/updates VSIX `RenegadeRiff86.VsIdeBridge` and removes the legacy `StanElston.VsIdeBridge` identity if present
 
 Idle policy enforced by service host:
 
 - Activity tracked from MCP request traffic, in-flight commands, and connected client stream state
 - Never stops while commands are in-flight
 - Logs final `service going idle` event before stop
-- Restarts only on explicit start (`sc start VsIdeBridgeService`) or next client activation path
+- Restarts automatically with Windows service startup, or on manual recovery if the service is stopped
 
 Logs and recovery:
 
@@ -136,22 +136,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-setup.ps1
 
 Installer output:
 
-- `installer\output\vs-ide-bridge-setup-2.0.3.exe`
+- `installer\output\vs-ide-bridge-setup-<version>.exe`
 
 What users see:
 
-- Standard installer wizard pages (welcome/license/install folder/progress/finish)
+- Standard installer wizard pages (welcome/license/install folder/progress/finish) plus a post-install stage that names the active service/VSIX step
 - Installed app appears in Apps & Features with uninstall entry
-- Installs bridge files, registers service (`Manual`), and installs VSIX
+- Installs bridge files, registers the service (`Automatic`), starts it after install, removes the legacy VSIX identity if present, and installs the current VSIX
 ### Legacy Manual VSIX Update (Troubleshooting)
 
-**Prerequisites — before running the installer:**
+**Prerequisites - before running the installer:**
 
-1. Close Visual Studio (`send --command close-ide` via bridge, or File → Exit).
-2. Kill any lingering helper processes — `clangd.exe`, `ServiceHub.RoslynCodeAnalysisService.exe`, `DevHub.exe` — they block the installer even after VS exits.
-3. If the version in `source.extension.vsixmanifest` has not changed since the last install, bump it (e.g. `0.1.0` → `0.1.1`); the installer exits 209 ("already installed") otherwise and copies nothing.
+1. Close Visual Studio (`send --command close-ide` via bridge, or File -> Exit).
+2. Kill any lingering helper processes - `clangd.exe`, `ServiceHub.RoslynCodeAnalysisService.exe`, `DevHub.exe` - they block the installer even after VS exits.
+3. If the version in `source.extension.vsixmanifest` has not changed since the last install, bump it (for example `0.1.0` -> `0.1.1`); the installer exits 209 ("already installed") otherwise and copies nothing.
 
-**Install command — use PowerShell, not `cmd.exe /c`:**
+**Install command - use PowerShell, not `cmd.exe /c`:**
 
 `cmd.exe /c` silently swallows errors and returns exit 0 without running the installer. Use PowerShell `Start-Process` with an argument array instead:
 
@@ -182,9 +182,9 @@ Start Visual Studio after either method; it picks up the updated extension on th
 After install, verify the bridge with:
 
 ```bat
-src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"
-src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current --format keyvalue
-src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe catalog --instance <instanceId>
+"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" ensure --solution "C:\path\to\Your.sln"
+"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" current --format keyvalue
+"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" catalog --instance <instanceId>
 ```
 
 ## Start The Bridge
@@ -192,7 +192,7 @@ src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe catalog --instance <instan
 Preferred:
 
 ```bat
-src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"
+"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" ensure --solution "C:\path\to\Your.sln"
 ```
 
 Optional PowerShell wrapper:
@@ -202,7 +202,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start_bridge.ps1 `
   -SolutionPath "C:\path\to\Your.sln"
 ```
 
-After the VSIX is installed, the bridge starts automatically with Visual Studio. The native `ensure` command:
+After install, the service is started immediately and the bridge starts automatically with Visual Studio. The native `ensure` command:
 
 - reuses an already-running bridge if it matches the solution
 - otherwise starts Visual Studio with the requested solution
@@ -234,11 +234,11 @@ Optional parameters:
 1. Close Visual Studio.
 2. Build with `scripts\build.bat`.
 3. If that fails in a non-bridge native project, use the managed-only fallback build above.
-4. Install `src\VsIdeBridge\bin\Debug\net472\VsIdeBridge.vsix`.
-5. Start/reuse a bridged instance with `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe ensure --solution "C:\path\to\Your.sln"`.
+4. Install `installer\output\vs-ide-bridge-setup-<version>.exe`.
+5. Start/reuse a bridged instance with `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" ensure --solution "C:\path\to\Your.sln"`.
 6. For agent workflows, prefer MCP tools first (`mcp-server` facade) and use CLI commands as fallback.
-7. Verify targeting with `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current`.
-8. Use `src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe help` for CLI verb reference.
+7. Verify targeting with `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" current`.
+8. Use `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" help` for CLI verb reference.
 
 ## MCP Command Catalog
 
@@ -402,9 +402,9 @@ Compatibility fields (`commands[]`, `legacyCommands[]`, `commandDetails[]`) are 
 
 ## Argument Contract
 
-- `--out "C:\path\result.json"` — output path (falls back to `%TEMP%\vs-ide-bridge\<command>.json`)
-- `--request-id "abc123"` — optional correlation id echoed in the envelope
-- `--timeout-ms 120000` — timeout on wait/build commands
+- `--out "C:\path\result.json"` - output path (falls back to `%TEMP%\vs-ide-bridge\<command>.json`)
+- `--request-id "abc123"` - optional correlation id echoed in the envelope
+- `--timeout-ms 120000` - timeout on wait/build commands
 - boolean flags: `--flag` (bare, implies `true`) or `--flag true` / `--flag false`
 - enum values: lowercase kebab-case
 
@@ -451,10 +451,31 @@ build --configuration Debug --platform x64 --out "C:\temp\build.json"
 build-errors --timeout-ms 600000 --out "C:\temp\build-errors.json"
 ```
 
+### `apply-diff` format
+
+`apply-diff` accepts either standard unified diff text with `---` / `+++` file headers and `@@` hunks, or editor patch text with `*** Begin Patch` / `*** End Patch` blocks. `apply-patch` is an alias for the same command.
+
+```diff
+--- a/src/foo.cpp
++++ b/src/foo.cpp
+@@ -1 +1 @@
+-old text
++new text
+```
+
+```text
+*** Begin Patch
+*** Update File: src/foo.cpp
+@@
+-old text
++new text
+*** End Patch
+```
+
 ### `errors` flags
 
-- `--wait-for-intellisense true` (default) — waits for IntelliSense to finish loading before reading
-- `--quick` — reads the current diagnostics snapshot immediately; skips the stability polling loop (use after a build has finished)
+- `--wait-for-intellisense true` (default) - waits for IntelliSense to finish loading before reading
+- `--quick` - reads the current diagnostics snapshot immediately; skips the stability polling loop (use after a build has finished)
 
 On large C++ solutions, `errors` and `warnings` may return diagnostics from Build Output when the Error List is empty or too slow to enumerate.
 
@@ -567,7 +588,7 @@ When the VSIX auto-loads, it writes:
   "pid": 12345,
   "startedAtUtc": "2026-03-03T04:02:44.0000000Z",
   "pipeName": "VsIdeBridge18_12345",
-  "solutionPath": "C:\\path\\to\\Your.sln",
+  "solutionPath": "C:\path\to\Your.sln",
   "solutionName": "Your.sln"
 }
 ```
@@ -586,7 +607,7 @@ Resolve the current instance:
 
 ```bat
 src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current
-src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe current --format keyvalue
+"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" current --format keyvalue
 ```
 
 Built-in help and command catalog:
@@ -701,7 +722,7 @@ Recommended agent pattern:
 Run a stdio MCP server on Windows next to Visual Studio:
 
 ```bat
-src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe mcp-server --instance <instanceId>
+"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" mcp-server --instance <instanceId>
 ```
 
 Exposed MCP tools use simple names:
@@ -792,11 +813,151 @@ Example MCP client registration (Claude Code and Codex CLI use the same stdio co
 {
   "mcpServers": {
     "vs-ide-bridge": {
-      "command": "C:\\path\\to\\vs-ide-bridge.exe",
+      "command": "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
       "args": [
         "mcp-server",
         "--instance",
         "<instanceId>"
+      ]
+    }
+  }
+}
+```
+
+### Cross-platform clients
+
+The bridge runtime itself is Windows-only because it automates Visual Studio and talks to the `VsIdeBridgeService` Windows service. Other client platforms are still supported when they treat Windows as the host machine:
+
+- Windows host: install the VSIX, service, and CLI with `vs-ide-bridge-setup-<version>.exe`
+- macOS/Linux/WSL client: start the MCP server on that Windows host and connect to it from your agent workflow
+- keep the Visual Studio instance and `VsIdeBridgeService` on the same Windows machine
+
+Recommended pattern:
+
+1. Install the bridge on the Windows box.
+2. Verify the service is running: `sc.exe query VsIdeBridgeService`
+3. Start or reuse the target IDE session: `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" ensure --solution "C:\path\to\Your.sln"`
+4. Run the MCP server on that Windows box: `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" mcp-server --tools-only`
+5. Point your non-Windows client at that Windows command through your normal remote-shell path.
+
+Example using `ssh` from macOS/Linux/WSL to a Windows host with OpenSSH enabled:
+
+```json
+{
+  "mcpServers": {
+    "vs-ide-bridge": {
+      "command": "ssh",
+      "args": [
+        "your-windows-host",
+        "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
+        "mcp-server",
+        "--tools-only"
+      ]
+    }
+  }
+}
+```
+
+Notes:
+
+- the Windows machine still needs Visual Studio 18 and the installed bridge stack
+- the remote client does not need the VSIX; it only needs a way to launch the installed Windows CLI
+- if you target a specific IDE instance from a remote client, add `--instance <instanceId>` after confirming the instance with `current` or `instances` on Windows
+
+### MCP client examples
+
+All of the examples below use the same installed Windows CLI as the MCP server host:
+
+`C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe mcp-server --tools-only`
+
+Before using any client:
+
+1. Install the bridge with `vs-ide-bridge-setup-<version>.exe` on Windows.
+2. Verify the service is running: `sc.exe query VsIdeBridgeService`
+3. Start or reuse the Visual Studio session you want to target: `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" ensure --solution "C:\path\to\Your.sln"`
+
+#### Codex
+
+`%USERPROFILE%\.codex\config.toml`:
+
+```toml
+[mcp_servers.vs-ide-bridge]
+command = "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe"
+args = ["mcp-server", "--tools-only"]
+```
+
+If you keep a compatibility alias around for older sessions, point it at the same installed CLI:
+
+```toml
+[mcp_servers.vs-ide-bridge-pr]
+command = "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe"
+args = ["mcp-server", "--tools-only"]
+```
+
+#### Continue
+
+Workspace block file at `.continue/mcpServers/vs-ide-bridge.yaml`:
+
+```yaml
+name: VS IDE Bridge
+version: 0.0.1
+schema: v1
+mcpServers:
+  - name: vs-ide-bridge
+    command: C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe
+    args:
+      - mcp-server
+      - --tools-only
+```
+
+Continue can also ingest JSON MCP configs copied into `.continue/mcpServers/` if you prefer the same JSON shape used by Claude Desktop, Cursor, or Cline.
+
+#### Claude Code / Claude Desktop
+
+Project-local `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "vs-ide-bridge": {
+      "command": "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
+      "args": ["mcp-server", "--tools-only"]
+    }
+  }
+}
+```
+
+Claude Desktop uses the same JSON `mcpServers` shape in `claude_desktop_config.json`.
+
+#### Generic JSON-based clients
+
+For tools that expect a JSON MCP config, use:
+
+```json
+{
+  "mcpServers": {
+    "vs-ide-bridge": {
+      "command": "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
+      "args": ["mcp-server", "--tools-only"]
+    }
+  }
+}
+```
+
+#### macOS, Linux, or WSL client talking to a Windows host
+
+If the client is not running on Windows, keep the bridge installed on the Windows machine that is running Visual Studio and launch the installed CLI remotely:
+
+```json
+{
+  "mcpServers": {
+    "vs-ide-bridge": {
+      "command": "ssh",
+      "args": [
+        "your-windows-host",
+        "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
+        "mcp-server",
+        "--tools-only"
       ]
     }
   }
@@ -864,3 +1025,6 @@ output/                   Local smoke-test artifacts (git-ignored)
 ## Third-Party Notices
 
 See `THIRD_PARTY_NOTICES.md` for third-party attributions used by the build and packaging workflow.
+
+
+

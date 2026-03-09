@@ -16,6 +16,9 @@ namespace VsIdeBridge.Services;
 
 internal sealed class SearchService
 {
+    private const string FunctionKind = "function";
+    private const string InterfaceKind = "interface";
+
     private sealed class SearchHit
     {
         public string Path { get; set; } = string.Empty;
@@ -213,9 +216,9 @@ internal sealed class SearchService
         string resolvedKind;
         switch (kind.ToLowerInvariant())
         {
-            case "function":
+            case FunctionKind:
                 pattern = $@"\b{escaped}\s*\(";
-                resolvedKind = "function";
+                resolvedKind = FunctionKind;
                 break;
             case "class":
                 pattern = $@"\bclass\s+{escaped}\b";
@@ -233,9 +236,9 @@ internal sealed class SearchService
                 pattern = $@"\bnamespace\s+{escaped}\b";
                 resolvedKind = "namespace";
                 break;
-            case "interface":
+            case InterfaceKind:
                 pattern = $@"\binterface\s+{escaped}\b";
-                resolvedKind = "interface";
+                resolvedKind = InterfaceKind;
                 break;
             case "member":
                 pattern = $@"\b{escaped}\b";
@@ -246,7 +249,7 @@ internal sealed class SearchService
                 resolvedKind = "type";
                 break;
             default:
-                // "all" — whole-word match; kind is inferred per-hit
+                // "all" Ã¢â‚¬â€ whole-word match; kind is inferred per-hit
                 pattern = $@"\b{escaped}\b";
                 resolvedKind = "all";
                 break;
@@ -293,7 +296,7 @@ internal sealed class SearchService
     private static string InferSymbolKind(string lineText, string name)
     {
         var trimmed = lineText.TrimStart();
-        // Class/struct/enum/namespace — look for keyword immediately before name
+        // Class/struct/enum/namespace Ã¢â‚¬â€ look for keyword immediately before name
         if (Regex.IsMatch(trimmed, $@"\bclass\s+{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
             return "class";
         if (Regex.IsMatch(trimmed, $@"\bstruct\s+{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
@@ -303,10 +306,10 @@ internal sealed class SearchService
         if (Regex.IsMatch(trimmed, $@"\bnamespace\s+{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
             return "namespace";
         if (Regex.IsMatch(trimmed, $@"\binterface\s+{Regex.Escape(name)}\b", RegexOptions.IgnoreCase))
-            return "interface";
+            return InterfaceKind;
         // Function: name followed by (
         if (Regex.IsMatch(trimmed, $@"\b{Regex.Escape(name)}\s*\(", RegexOptions.IgnoreCase))
-            return "function";
+            return FunctionKind;
         return "unknown";
     }
 
@@ -340,17 +343,14 @@ internal sealed class SearchService
                 scope,
                 projectUniqueName).ConfigureAwait(true);
 
-        if (useRegex)
-        {
-            searchTerms = new[] { query };
-        }
-        else
-        {
-            searchTerms = ExtractSmartQueryTerms(query)
-                .Select(term => term.Text)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-        }
+        searchTerms = useRegex
+            ? [query]
+            :
+            [
+                .. ExtractSmartQueryTerms(query)
+                    .Select(term => term.Text)
+                    .Distinct(StringComparer.OrdinalIgnoreCase),
+            ];
 
         if (populateResultsWindow)
         {
@@ -358,10 +358,6 @@ internal sealed class SearchService
         }
 
         var contexts = BuildSmartContexts(
-            query,
-            matchCase,
-            wholeWord,
-            useRegex,
             Matches,
             contextBefore,
             contextAfter,
@@ -435,17 +431,19 @@ internal sealed class SearchService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
+        var normalizedPathFilter = NormalizeSearchPathFilter(context.Dte, pathFilter);
+
         var allFiles = scope switch
         {
-            "document" => new[] { await GetDocumentTargetAsync(context).ConfigureAwait(true) },
+            "document" => new[] { await GetDocumentTargetAsync(context, normalizedPathFilter).ConfigureAwait(true) },
             "open" => [.. EnumerateOpenFiles(context.Dte)],
             "project" => [.. EnumerateSolutionFiles(context.Dte).Where(item => string.Equals(item.ProjectUniqueName, projectUniqueName, StringComparison.OrdinalIgnoreCase))],
             _ => [.. EnumerateSolutionFiles(context.Dte)],
         };
 
-        var files = string.IsNullOrWhiteSpace(pathFilter)
+        var files = string.IsNullOrWhiteSpace(normalizedPathFilter)
             ? allFiles
-            : [.. allFiles.Where(f => f.Path.IndexOf(pathFilter, StringComparison.OrdinalIgnoreCase) >= 0)];
+            : [.. allFiles.Where(file => MatchesPathFilter(file.Path, normalizedPathFilter))];
 
         var regex = BuildRegex(query, matchCase, wholeWord, useRegex);
         var hits = new List<SearchHit>();
@@ -513,7 +511,7 @@ internal sealed class SearchService
 
             foreach (var hit in Matches)
             {
-                var key = string.Concat(hit.Path, "|", hit.Line.ToString(), "|", hit.Column.ToString());
+                var key = $"{hit.Path}|{hit.Line}|{hit.Column}";
 
                 if (!hitMap.TryGetValue(key, out var existing))
                 {
@@ -554,10 +552,6 @@ internal sealed class SearchService
     }
 
     private static JArray BuildSmartContexts(
-        string query,
-        bool matchCase,
-        bool wholeWord,
-        bool useRegex,
         IReadOnlyList<SearchHit> hits,
         int contextBefore,
         int contextAfter,
@@ -766,7 +760,7 @@ internal sealed class SearchService
             "call", "calls", "show", "find", "open", "close", "line", "file", "files", "query", "context",
         };
 
-        foreach (Match match in Regex.Matches(query, @"[A-Za-z][A-Za-z0-9_]{3,}"))
+        foreach (Match match in Regex.Matches(query, "[A-Za-z][A-Za-z0-9_]{3,}"))
         {
             if (!stopWords.Contains(match.Value))
             {
@@ -782,9 +776,15 @@ internal sealed class SearchService
         return terms;
     }
 
-    private async Task<(string Path, string ProjectUniqueName)> GetDocumentTargetAsync(IdeCommandContext context)
+    private async Task<(string Path, string ProjectUniqueName)> GetDocumentTargetAsync(IdeCommandContext context, string? pathFilter = null)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+
+        var explicitTarget = TryResolveExplicitDocumentTarget(context.Dte, pathFilter);
+        if (!string.IsNullOrWhiteSpace(explicitTarget.Path))
+        {
+            return explicitTarget;
+        }
 
         var activeDocument = context.Dte.ActiveDocument;
         if (activeDocument is null || string.IsNullOrWhiteSpace(activeDocument.FullName))
@@ -809,7 +809,12 @@ internal sealed class SearchService
         ThreadHelper.ThrowIfNotOnUIThread();
 
         var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-        var activeDocument = TryGetActiveDocumentTarget(dte);
+        var normalizedPathFilter = NormalizeSearchPathFilter(dte, pathFilter);
+        var activeDocument = TryResolveExplicitDocumentTarget(dte, normalizedPathFilter);
+        if (string.IsNullOrWhiteSpace(activeDocument.Path))
+        {
+            activeDocument = TryGetActiveDocumentTarget(dte);
+        }
         var files = scope switch
         {
             "document" => string.IsNullOrWhiteSpace(activeDocument.Path)
@@ -821,9 +826,9 @@ internal sealed class SearchService
             _ => EnumerateSolutionFiles(dte),
         };
 
-        if (!string.IsNullOrWhiteSpace(pathFilter))
+        if (!string.IsNullOrWhiteSpace(normalizedPathFilter))
         {
-            files = files.Where(item => item.Path.IndexOf(pathFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+            files = files.Where(item => MatchesPathFilter(item.Path, normalizedPathFilter));
         }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -842,8 +847,9 @@ internal sealed class SearchService
                 projectItem = dte.Solution.FindProjectItem(file.Path);
                 elements = projectItem?.FileCodeModel?.CodeElements;
             }
-            catch
+            catch (Exception ex)
             {
+                TraceSearchFailure("FindProjectItem", ex);
             }
 
             if (projectItem is null || elements is null)
@@ -899,7 +905,7 @@ internal sealed class SearchService
                     var line = TryGetLine(element.StartPoint);
                     var endLine = TryGetLine(element.EndPoint);
                     var signature = TryGetSignature(element, fullName, name);
-                    var key = string.Concat(path, "|", normalizedKind, "|", fullName, "|", line.ToString());
+                    var key = $"{path}|{normalizedKind}|{fullName}|{line}";
                     if (seen.Add(key))
                     {
                         hits.Add(new CodeModelHit
@@ -942,8 +948,9 @@ internal sealed class SearchService
                 _ => null,
             };
         }
-        catch
+        catch (Exception ex)
         {
+            TraceSearchFailure("EnumerateChildren", ex);
         }
 
         if (children is null)
@@ -961,12 +968,12 @@ internal sealed class SearchService
     {
         return kind switch
         {
-            vsCMElement.vsCMElementFunction => "function",
+            vsCMElement.vsCMElementFunction => FunctionKind,
             vsCMElement.vsCMElementClass => "class",
             vsCMElement.vsCMElementStruct => "struct",
             vsCMElement.vsCMElementEnum => "enum",
             vsCMElement.vsCMElementNamespace => "namespace",
-            vsCMElement.vsCMElementInterface => "interface",
+            vsCMElement.vsCMElementInterface => InterfaceKind,
             vsCMElement.vsCMElementProperty => "member",
             vsCMElement.vsCMElementVariable => "member",
             _ => "unknown",
@@ -1021,12 +1028,15 @@ internal sealed class SearchService
             if (element is CodeFunction function)
             {
                 return function.get_Prototype(
-                    (int)(vsCMPrototype.vsCMPrototypeFullname | vsCMPrototype.vsCMPrototypeParamTypes | vsCMPrototype.vsCMPrototypeType))
+                    ((int)vsCMPrototype.vsCMPrototypeFullname)
+                    | ((int)vsCMPrototype.vsCMPrototypeParamTypes)
+                    | ((int)vsCMPrototype.vsCMPrototypeType))
                     ?? fullName;
             }
         }
-        catch
+        catch (Exception ex)
         {
+            TraceSearchFailure("TryGetSignature", ex);
         }
 
         return string.IsNullOrWhiteSpace(fullName) ? name : fullName;
@@ -1102,7 +1112,7 @@ internal sealed class SearchService
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        if (dte.Solution is null || !dte.Solution.IsOpen)
+        if (dte.Solution?.IsOpen != true)
         {
             yield break;
         }
@@ -1191,8 +1201,9 @@ internal sealed class SearchService
             {
                 fullName = document.FullName;
             }
-            catch
+            catch (Exception ex)
             {
+                TraceSearchFailure("EnumerateOpenDocumentTargets", ex);
             }
 
             if (string.IsNullOrWhiteSpace(fullName))
@@ -1200,7 +1211,7 @@ internal sealed class SearchService
                 continue;
             }
 
-            var normalizedPath = PathNormalization.NormalizeFilePath(fullName!);
+            var normalizedPath = PathNormalization.NormalizeFilePath(fullName);
             yield return (normalizedPath, document.ProjectItem?.ContainingProject?.UniqueName ?? string.Empty);
         }
     }
@@ -1216,6 +1227,98 @@ internal sealed class SearchService
         }
 
         return (PathNormalization.NormalizeFilePath(activeDocument.FullName), activeDocument.ProjectItem?.ContainingProject?.UniqueName ?? string.Empty);
+    }
+
+    private static string? NormalizeSearchPathFilter(DTE2 dte, string? pathFilter)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (string.IsNullOrWhiteSpace(pathFilter))
+        {
+            return null;
+        }
+
+        var trimmedPath = pathFilter!.Trim();
+        if (Path.IsPathRooted(trimmedPath))
+        {
+            return PathNormalization.NormalizeFilePath(trimmedPath);
+        }
+
+        var normalizedRelativePath = trimmedPath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        var solutionDirectory = TryGetSolutionDirectory(dte);
+        if (!string.IsNullOrWhiteSpace(solutionDirectory))
+        {
+            var rootedCandidate = Path.GetFullPath(Path.Combine(solutionDirectory, normalizedRelativePath));
+            if (File.Exists(rootedCandidate) || Directory.Exists(rootedCandidate))
+            {
+                return PathNormalization.NormalizeFilePath(rootedCandidate);
+            }
+        }
+
+        return normalizedRelativePath;
+    }
+
+    private static bool MatchesPathFilter(string path, string? pathFilter)
+    {
+        if (string.IsNullOrWhiteSpace(pathFilter))
+        {
+            return true;
+        }
+
+        var normalizedPath = PathNormalization.NormalizeFilePath(path);
+        if (!Path.IsPathRooted(pathFilter))
+        {
+            var normalizedFilter = pathFilter!.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+            return normalizedPath.IndexOf(normalizedFilter, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        if (Directory.Exists(pathFilter))
+        {
+            var normalizedDirectory = pathFilter!;
+            normalizedDirectory = normalizedDirectory.TrimEnd('\\');
+            return string.Equals(normalizedPath, normalizedDirectory, StringComparison.OrdinalIgnoreCase)
+                || normalizedPath.StartsWith(normalizedDirectory + "\\", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(normalizedPath, pathFilter, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? TryGetSolutionDirectory(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var solutionFullName = dte.Solution?.FullName;
+        return string.IsNullOrWhiteSpace(solutionFullName)
+            ? null
+            : Path.GetDirectoryName(solutionFullName);
+    }
+
+    private static (string Path, string ProjectUniqueName) TryResolveExplicitDocumentTarget(DTE2 dte, string? pathFilter)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (string.IsNullOrWhiteSpace(pathFilter) || !Path.IsPathRooted(pathFilter) || !File.Exists(pathFilter))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        foreach (var item in EnumerateSolutionFiles(dte))
+        {
+            if (string.Equals(item.Path, pathFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                return item;
+            }
+        }
+
+        foreach (var item in EnumerateOpenFiles(dte))
+        {
+            if (string.Equals(item.Path, pathFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                return item;
+            }
+        }
+
+        return (pathFilter!, string.Empty);
     }
 
     private static string[] ReadSearchLines(DTE2 dte, string path)
@@ -1239,11 +1342,17 @@ internal sealed class SearchService
                     return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                TraceSearchFailure("ReadSearchLines", ex);
             }
         }
 
         return File.ReadAllLines(normalizedPath);
+    }
+
+    private static void TraceSearchFailure(string operation, Exception ex)
+    {
+        System.Diagnostics.Debug.WriteLine($"VsIdeBridge.SearchService {operation}: {ex}");
     }
 }

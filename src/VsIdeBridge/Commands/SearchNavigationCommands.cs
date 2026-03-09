@@ -12,6 +12,18 @@ namespace VsIdeBridge.Commands;
 
 internal static class SearchNavigationCommands
 {
+    private const string CountKey = "count";
+    private const string DocumentArgument = "document";
+    private const string DocumentScope = "document";
+    private const string ProjectScope = "project";
+    private const string SolutionScope = "solution";
+    private const string OpenScope = "open";
+
+    private static CommandExecutionResult CreateFoundResult(string itemLabel, JObject data)
+    {
+        return new CommandExecutionResult($"Found {data[CountKey]} {itemLabel}.", data);
+    }
+
     internal sealed class IdeFindTextCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0202)
     {
         protected override string CanonicalName => "Tools.IdeFindText";
@@ -19,7 +31,7 @@ internal static class SearchNavigationCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             var query = args.GetRequiredString("query");
-            var scope = args.GetEnum("scope", "solution", "solution", "project", "document", "open");
+            var scope = args.GetEnum("scope", SolutionScope, SolutionScope, ProjectScope, DocumentScope, OpenScope);
             var project = args.GetString("project");
             var data = await context.Runtime.SearchService.FindTextAsync(
                 context,
@@ -32,7 +44,7 @@ internal static class SearchNavigationCommands
                 project,
                 args.GetString("path")).ConfigureAwait(true);
 
-            return new CommandExecutionResult($"Found {data["count"]} match(es).", data);
+            return CreateFoundResult("match(es)", data);
         }
     }
 
@@ -58,7 +70,7 @@ internal static class SearchNavigationCommands
                 extensions,
                 args.GetInt32("max-results", 200),
                 args.GetBoolean("include-non-project", true)).ConfigureAwait(true);
-            return new CommandExecutionResult($"Found {data["count"]} file(s).", data);
+            return CreateFoundResult("file(s)", data);
         }
     }
 
@@ -214,7 +226,7 @@ internal static class SearchNavigationCommands
                     args.GetRequiredString("command"),
                     args.GetString("args"),
                     args.GetString("file"),
-                    args.GetString("document"),
+                    args.GetString(DocumentArgument),
                     args.GetNullableInt32("line"),
                     args.GetNullableInt32("column"),
                     args.GetBoolean("select-word", false))
@@ -237,7 +249,7 @@ internal static class SearchNavigationCommands
                     context.Runtime.WindowService,
                     CandidateCommands,
                     args.GetString("file"),
-                    args.GetString("document"),
+                    args.GetString(DocumentArgument),
                     args.GetNullableInt32("line"),
                     args.GetNullableInt32("column"),
                     args.GetBoolean("select-word", false),
@@ -265,7 +277,7 @@ internal static class SearchNavigationCommands
                     context.Runtime.WindowService,
                     CandidateCommands,
                     args.GetString("file"),
-                    args.GetString("document"),
+                    args.GetString(DocumentArgument),
                     args.GetNullableInt32("line"),
                     args.GetNullableInt32("column"),
                     args.GetBoolean("select-word", false),
@@ -358,7 +370,7 @@ internal static class SearchNavigationCommands
             var data = await context.Runtime.SearchService.GetSmartContextForQueryAsync(
                 context,
                 args.GetRequiredString("query"),
-                args.GetEnum("scope", "solution", "solution", "project", "document"),
+                args.GetEnum("scope", SolutionScope, SolutionScope, ProjectScope, DocumentScope),
                 args.GetBoolean("match-case", false),
                 args.GetBoolean("whole-word", false),
                 args.GetBoolean("regex", false),
@@ -384,7 +396,7 @@ internal static class SearchNavigationCommands
             var data = await context.Runtime.DocumentService.GoToDefinitionAsync(
                     context.Dte,
                     args.GetString("file"),
-                    args.GetString("document"),
+                    args.GetString(DocumentArgument),
                     args.GetNullableInt32("line"),
                     args.GetNullableInt32("column"))
                 .ConfigureAwait(true);
@@ -405,7 +417,7 @@ internal static class SearchNavigationCommands
             var data = await context.Runtime.DocumentService.GoToImplementationAsync(
                     context.Dte,
                     args.GetString("file"),
-                    args.GetString("document"),
+                    args.GetString(DocumentArgument),
                     args.GetNullableInt32("line"),
                     args.GetNullableInt32("column"))
                 .ConfigureAwait(true);
@@ -430,7 +442,7 @@ internal static class SearchNavigationCommands
                     args.GetString("kind"))
                 .ConfigureAwait(true);
 
-            return new CommandExecutionResult($"Found {data["count"]} symbol(s).", data);
+            return CreateFoundResult("symbol(s)", data);
         }
     }
 
@@ -450,13 +462,13 @@ internal static class SearchNavigationCommands
                 context,
                 symbolQuery!,
                 args.GetEnum("kind", "all", "all", "function", "class", "struct", "enum", "namespace", "interface", "member", "type"),
-                args.GetEnum("scope", "solution", "solution", "project", "document", "open"),
+                args.GetEnum("scope", SolutionScope, SolutionScope, ProjectScope, DocumentScope, OpenScope),
                 args.GetBoolean("match-case", false),
                 args.GetString("project"),
                 args.GetString("path"),
                 args.GetInt32("max", 50)).ConfigureAwait(true);
 
-            return new CommandExecutionResult($"Found {data["count"]} symbol match(es).", data);
+            return CreateFoundResult("symbol match(es)", data);
         }
     }
 
@@ -469,7 +481,7 @@ internal static class SearchNavigationCommands
             var data = await context.Runtime.DocumentService.GetQuickInfoAsync(
                 context.Dte,
                 args.GetString("file"),
-                args.GetString("document"),
+                args.GetString(DocumentArgument),
                 args.GetNullableInt32("line"),
                 args.GetNullableInt32("column"),
                 args.GetInt32("context-lines", 10)).ConfigureAwait(true);
@@ -541,7 +553,7 @@ internal static class SearchNavigationCommands
                     args.GetString("kind"))
                 .ConfigureAwait(true);
 
-            return new CommandExecutionResult($"Found {data["count"]} symbol(s).", data);
+            return CreateFoundResult("symbol(s)", data);
         }
     }
 }

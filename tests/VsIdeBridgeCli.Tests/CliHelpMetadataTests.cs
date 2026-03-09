@@ -8,6 +8,7 @@ public sealed class CliHelpMetadataTests
     [Theory]
     [InlineData("ready", "Canonical: Tools.IdeWaitForReady", "vs-ide-bridge ready --timeout-ms 120000")]
     [InlineData("find-files", "Canonical: Tools.IdeFindFiles", "vs-ide-bridge find-files --query \"CMakeLists.txt\"")]
+    [InlineData("apply-patch", "Canonical: Tools.IdeApplyUnifiedDiff", "vs-ide-bridge apply-diff --patch-file \"C:\\temp\\change.diff\"")]
     [InlineData("apply-diff", "Canonical: Tools.IdeApplyUnifiedDiff", "vs-ide-bridge apply-diff --patch-file \"C:\\temp\\change.diff\"")]
     [InlineData("set-breakpoint", "Canonical: Tools.IdeSetBreakpoint", "vs-ide-bridge set-breakpoint --file \"C:\\repo\\src\\foo.cpp\" --line 42")]
     [InlineData("close", "Canonical: Tools.IdeCloseIde", "vs-ide-bridge close-ide")]
@@ -70,6 +71,8 @@ public sealed class CliHelpMetadataTests
         Assert.Equal(0, process.ExitCode);
         Assert.Contains("--open-changed-files <true|false> (default: true)", stdout);
         Assert.Contains("Changed files are opened by default", stdout);
+        Assert.Contains("---/+++ file headers and @@ hunks", stdout);
+        Assert.Contains("*** Begin Patch", stdout);
         Assert.True(string.IsNullOrWhiteSpace(stderr), $"Unexpected stderr: {stderr}");
     }
 

@@ -9,11 +9,14 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using VsIdeBridge.Commands;
 using VsIdeBridge.Infrastructure;
+using VsIdeBridge.Shared;
 
 namespace VsIdeBridge.Services;
 
@@ -216,6 +219,39 @@ internal sealed class PipeServerService : IDisposable
         }
     }
 
+    private static PipeSecurity CreatePipeSecurity()
+    {
+        var security = new PipeSecurity();
+        using var identity = WindowsIdentity.GetCurrent();
+        AddPipeAccessRule(security, identity.User, PipeAccessRights.FullControl);
+        AddPipeAccessRule(security, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), PipeAccessRights.FullControl);
+        AddPipeAccessRule(security, new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), PipeAccessRights.FullControl);
+        AddPipeAccessRule(security, new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null), NamedPipeAccessDefaults.ClientReadWriteRights);
+        TryAddPipeAccessRule(security, "S-1-15-2-1", NamedPipeAccessDefaults.ClientReadWriteRights);
+        return security;
+    }
+
+    private static void AddPipeAccessRule(PipeSecurity security, SecurityIdentifier? sid, PipeAccessRights rights)
+    {
+        if (sid is null)
+        {
+            return;
+        }
+
+        security.AddAccessRule(new PipeAccessRule(sid, rights, AccessControlType.Allow));
+    }
+
+    private static void TryAddPipeAccessRule(PipeSecurity security, string sidValue, PipeAccessRights rights)
+    {
+        try
+        {
+            AddPipeAccessRule(security, new SecurityIdentifier(sidValue), rights);
+        }
+        catch
+        {
+            // Older Windows builds can reject some well-known SIDs. Fall back gracefully.
+        }
+    }
     private static string GetSolutionPath(DTE2 dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -273,7 +309,10 @@ internal sealed class PipeServerService : IDisposable
                     PipeDirection.InOut,
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
+                    PipeOptions.Asynchronous,
+                    PipeStreamBufferSize,
+                    PipeStreamBufferSize,
+                    CreatePipeSecurity());
             }
             catch (Exception ex)
             {
@@ -424,14 +463,14 @@ internal sealed class PipeServerService : IDisposable
         {
             await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} start (timeout={timeoutMilliseconds}ms)", commandToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine(ex);
         }
 
         try
         {
-            CommandExecutionResult result = null!;
-            var executionTask = Task.Run(async () =>
+            var executionTask = Task.Run<CommandExecutionResult>(async () =>
             {
                 var dte = await GetDteAsync(commandToken).ConfigureAwait(false);
                 Assumes.Present(dte);
@@ -446,15 +485,14 @@ internal sealed class PipeServerService : IDisposable
                 if (hasBatch)
                 {
                     var steps = BuildBatchSteps(request);
-                    result = await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(false);
-                    return;
+                    return await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(false);
                 }
 
                 if (!_runtime.TryGetCommand(commandName, out var cmd))
                     throw new CommandErrorException("command_not_found", $"Unknown command: '{commandName}'.");
 
                 var args = CommandArgumentParser.Parse(request.Args);
-                result = await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
+                return await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
             }, commandToken);
 
             var completed = await Task.WhenAny(
@@ -476,7 +514,7 @@ internal sealed class PipeServerService : IDisposable
                 throw new OperationCanceledException(commandToken);
             }
 
-            await executionTask.ConfigureAwait(false);
+            var result = await executionTask.ConfigureAwait(false);
 
             await _runtime.Logger.LogAsync(
                 $"IDE Bridge: {commandName} OK - {result.Summary}",
@@ -509,8 +547,9 @@ internal sealed class PipeServerService : IDisposable
             {
                 await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} timeout (duration={commandStopwatch.ElapsedMilliseconds}ms)", CancellationToken.None, activatePane: true).ConfigureAwait(false);
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine(ex);
             }
 
             _runtime.BridgeWatchdogService.RecordCommandCompleted(commandName, requestId, success: false, durationMs: commandStopwatch.Elapsed.TotalMilliseconds, errorCode);
@@ -678,6 +717,7 @@ internal sealed class PipeServerService : IDisposable
     public void Dispose()
     {
         _cts.Cancel();
+        _cts.Dispose();
         _commandQueue.Dispose();
         _memoryDiscoveryStore.Dispose();
         try
@@ -685,7 +725,10 @@ internal sealed class PipeServerService : IDisposable
             if (_emitDiscoveryJson && File.Exists(_discoveryFile))
                 File.Delete(_discoveryFile);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+        }
 
         if (_emitMemoryDiscovery)
         {
@@ -700,3 +743,4 @@ internal sealed class PipeServerService : IDisposable
         }
     }
 }
+

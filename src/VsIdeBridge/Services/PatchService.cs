@@ -6,14 +6,19 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
+using VsIdeBridge.Shared;
 
 namespace VsIdeBridge.Services;
 
 internal sealed class PatchService
 {
+    private const string InvalidArgumentsCode = "invalid_arguments";
+    private const string DevNullPath = "/dev/null";
+    private const int EditorPatchHeaderPrefixLength = 2;
     private static readonly string[] HunkBoundaryPrefixes =
     [
         "@@ ",
@@ -46,6 +51,17 @@ internal sealed class PatchService
         public string NewPath { get; set; } = string.Empty;
 
         public List<Hunk> Hunks { get; set; } = [];
+
+        public List<SearchBlock> SearchBlocks { get; set; } = [];
+
+        public string Format { get; set; } = "unified-diff";
+    }
+
+    private sealed class SearchBlock
+    {
+        public string Header { get; set; } = string.Empty;
+
+        public List<HunkLine> Lines { get; set; } = [];
     }
 
     private sealed class Hunk
@@ -79,6 +95,23 @@ internal sealed class PatchService
         public List<ChangedRange> ChangedRanges { get; set; } = [];
 
         public List<int> DeletedLineMarkers { get; set; } = [];
+
+        public int MatchedLineCount { get; set; }
+
+        public int MutationLineCount { get; set; }
+    }
+
+    private sealed class PatchPaths
+    {
+        public string SourcePath { get; set; } = string.Empty;
+
+        public string TargetPath { get; set; } = string.Empty;
+
+        public bool IsNewFile { get; set; }
+
+        public bool IsMove =>
+            !string.IsNullOrWhiteSpace(SourcePath) &&
+            !PathNormalization.AreEquivalent(SourcePath, TargetPath);
     }
 
     public async Task<JObject> ApplyUnifiedDiffAsync(
@@ -96,7 +129,7 @@ internal sealed class PatchService
 
         if (string.IsNullOrWhiteSpace(patchFilePath) == string.IsNullOrWhiteSpace(patchText))
         {
-            throw new CommandErrorException("invalid_arguments", "Specify exactly one of --patch-file or --patch-text-base64.");
+            throw new CommandErrorException(InvalidArgumentsCode, "Specify exactly one of --patch-file or --patch-text-base64.");
         }
 
         string patchSource;
@@ -116,10 +149,10 @@ internal sealed class PatchService
             patchText ??= string.Empty;
         }
 
-        var filePatches = ParseUnifiedDiff(patchText);
+        var (filePatches, patchFormat) = ParseSupportedPatchFormat(patchText);
         if (filePatches.Count == 0)
         {
-            throw new CommandErrorException("invalid_arguments", "Patch file did not contain any unified diff file entries.");
+            throw new CommandErrorException(InvalidArgumentsCode, BuildMissingPatchFormatMessage(patchText));
         }
 
         var resolvedBaseDirectory = ResolveBaseDirectory(dte, baseDirectory);
@@ -128,49 +161,179 @@ internal sealed class PatchService
 
         foreach (var filePatch in filePatches)
         {
-            var target = ResolveTargetPath(dte, resolvedBaseDirectory, filePatch);
-            EnsureSafeToModifyOpenDocument(dte, target.Path);
+            var paths = ResolvePatchPaths(dte, resolvedBaseDirectory, filePatch);
+            EnsurePatchHasMeaningfulOperations(filePatch, paths);
+            EnsureSafeToModifyOpenDocument(dte, paths.SourcePath);
+            if (paths.IsMove)
+            {
+                EnsureSafeToModifyOpenDocument(dte, paths.TargetPath);
+                if (File.Exists(paths.TargetPath))
+                {
+                    throw new CommandErrorException("unsupported_operation", $"Patch move target already exists: {paths.TargetPath}");
+                }
+            }
 
-            var result = ApplyFilePatch(target.Path, filePatch);
+            var targetExists = PatchTargetExists(dte, paths.TargetPath);
+            var sourceContent = paths.IsNewFile ? string.Empty : ReadContentFromEditorOrDisk(dte, paths.SourcePath);
+            var requestedTargetContent = PathNormalization.AreEquivalent(paths.SourcePath, paths.TargetPath) && !paths.IsNewFile
+                ? sourceContent
+                : ReadContentFromEditorOrDisk(dte, paths.TargetPath);
+            ApplyFilePatchResult result;
+            var alreadySatisfied = false;
+            if (paths.IsNewFile)
+            {
+                result = ApplyFilePatch(paths.TargetPath, string.Empty, filePatch);
+                var addFileDecision = AddFilePatchSemantics.Evaluate(result.Content, targetExists ? requestedTargetContent : null);
+                switch (addFileDecision)
+                {
+                    case AddFilePatchDecision.Create:
+                        break;
+                    case AddFilePatchDecision.AlreadySatisfied:
+                        result = CreateAlreadySatisfiedResult(requestedTargetContent, result);
+                        alreadySatisfied = true;
+                        break;
+                    default:
+                        throw new CommandErrorException("unsupported_operation", $"Patch add target already exists with different content: {paths.TargetPath}");
+                }
+            }
+            else
+            {
+                try
+                {
+                    result = ApplyFilePatch(paths.SourcePath, sourceContent, filePatch);
+                }
+                catch (CommandErrorException ex) when (!paths.IsMove && IsPatchContentMismatch(ex))
+                {
+                    if (!IsCurrentContentAlreadyPatched(paths.TargetPath, requestedTargetContent, filePatch))
+                    {
+                        throw;
+                    }
+
+                    var reverseResult = ApplyFilePatch(paths.TargetPath, requestedTargetContent, CreateReversePatch(filePatch));
+                    result = CreateAlreadySatisfiedResult(requestedTargetContent, reverseResult);
+                    alreadySatisfied = true;
+                }
+            }
 
             if (result.DeleteFile)
             {
-                CloseOpenDocumentIfPresent(dte, target.Path);
-                if (File.Exists(target.Path))
+                CloseOpenDocumentIfPresent(dte, paths.SourcePath);
+                if (File.Exists(paths.SourcePath))
                 {
-                    File.Delete(target.Path);
+                    File.Delete(paths.SourcePath);
                 }
 
                 appliedFiles.Add(new JObject
                 {
-                    ["path"] = target.Path,
+                    ["path"] = paths.SourcePath,
                     ["status"] = "deleted",
                     ["firstChangedLine"] = result.FirstChangedLine,
-                    ["hunkCount"] = filePatch.Hunks.Count,
+                    ["hunkCount"] = filePatch.Hunks.Count + filePatch.SearchBlocks.Count,
                     ["changedRanges"] = CreateChangedRangesArray(result.ChangedRanges),
                 });
             }
             else
             {
+                var requestedContentChange = !string.Equals(requestedTargetContent, result.Content, StringComparison.Ordinal);
+                if (!requestedContentChange && alreadySatisfied)
+                {
+                    filesToFocus.Add((paths.TargetPath, result.ChangedRanges));
+
+                    appliedFiles.Add(new JObject
+                    {
+                        ["path"] = paths.TargetPath,
+                        ["status"] = "already-satisfied",
+                        ["firstChangedLine"] = result.FirstChangedLine,
+                        ["hunkCount"] = filePatch.Hunks.Count + filePatch.SearchBlocks.Count,
+                        ["changedRanges"] = CreateChangedRangesArray(result.ChangedRanges),
+                        ["matchedLineCount"] = result.MatchedLineCount,
+                        ["mutationLineCount"] = result.MutationLineCount,
+                        ["editorBacked"] = false,
+                        ["verified"] = true,
+                        ["contentChanged"] = false,
+                        ["requestedContentChange"] = false,
+                        ["alreadySatisfied"] = true,
+                        ["saved"] = true,
+                    });
+                    continue;
+                }
+
+                if (!requestedContentChange && !paths.IsMove && !paths.IsNewFile)
+                {
+                    alreadySatisfied = IsCurrentContentAlreadyPatched(paths.TargetPath, requestedTargetContent, filePatch);
+                    if (!alreadySatisfied && result.MutationLineCount > 0 && result.MatchedLineCount == 0)
+                    {
+                        throw new CommandErrorException(
+                            InvalidArgumentsCode,
+                            $"Patch did not match the target content for {paths.TargetPath}.",
+                            new
+                            {
+                                path = paths.TargetPath,
+                                hunkCount = filePatch.Hunks.Count + filePatch.SearchBlocks.Count,
+                                result.MutationLineCount,
+                                result.MatchedLineCount,
+                            });
+                    }
+
+                    filesToFocus.Add((paths.TargetPath, result.ChangedRanges));
+
+                    appliedFiles.Add(new JObject
+                    {
+                        ["path"] = paths.TargetPath,
+                        ["status"] = "already-satisfied",
+                        ["firstChangedLine"] = result.FirstChangedLine,
+                        ["hunkCount"] = filePatch.Hunks.Count + filePatch.SearchBlocks.Count,
+                        ["changedRanges"] = CreateChangedRangesArray(result.ChangedRanges),
+                        ["matchedLineCount"] = result.MatchedLineCount,
+                        ["mutationLineCount"] = result.MutationLineCount,
+                        ["editorBacked"] = false,
+                        ["verified"] = true,
+                        ["contentChanged"] = false,
+                        ["requestedContentChange"] = false,
+                        ["alreadySatisfied"] = alreadySatisfied,
+                        ["saved"] = true,
+                    });
+                    continue;
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(paths.TargetPath)!);
                 var writeResult = await documentService.WriteDocumentTextAsync(
                     dte,
-                    target.Path,
+                    paths.TargetPath,
                     result.Content,
                     result.FirstChangedLine,
                     1,
                     saveChangedFiles,
                     [.. result.ChangedRanges.Select(range => (range.StartLine, range.EndLine))],
                     result.DeletedLineMarkers).ConfigureAwait(true);
-                filesToFocus.Add((target.Path, result.ChangedRanges));
+
+                var contentChanged = (bool?)writeResult["contentChanged"] ?? true;
+                var verified = (bool?)writeResult["verified"] ?? false;
+                alreadySatisfied = requestedContentChange && !contentChanged && verified;
+
+                if (paths.IsMove)
+                {
+                    CloseOpenDocumentIfPresent(dte, paths.SourcePath);
+                    if (File.Exists(paths.SourcePath))
+                    {
+                        File.Delete(paths.SourcePath);
+                    }
+                }
+
+                filesToFocus.Add((paths.TargetPath, result.ChangedRanges));
 
                 appliedFiles.Add(new JObject
                 {
-                    ["path"] = target.Path,
-                    ["status"] = target.IsNewFile ? "added" : "modified",
+                    ["path"] = paths.TargetPath,
+                    ["status"] = paths.IsMove ? "moved" : alreadySatisfied ? "already-satisfied" : paths.IsNewFile ? "added" : "modified",
                     ["firstChangedLine"] = result.FirstChangedLine,
-                    ["hunkCount"] = filePatch.Hunks.Count,
+                    ["hunkCount"] = filePatch.Hunks.Count + filePatch.SearchBlocks.Count,
                     ["changedRanges"] = CreateChangedRangesArray(result.ChangedRanges),
                     ["editorBacked"] = writeResult["editorBacked"] ?? false,
+                    ["verified"] = verified,
+                    ["contentChanged"] = contentChanged,
+                    ["requestedContentChange"] = requestedContentChange,
+                    ["alreadySatisfied"] = alreadySatisfied,
                     ["saved"] = writeResult["saved"] ?? saveChangedFiles,
                 });
             }
@@ -204,6 +367,7 @@ internal sealed class PatchService
             ["patchSource"] = patchSource,
             ["baseDirectory"] = resolvedBaseDirectory,
             ["count"] = appliedFiles.Count,
+            ["patchFormat"] = patchFormat,
             ["openChangedFiles"] = openChangedFiles,
             ["saveChangedFiles"] = saveChangedFiles,
             ["visibleEdits"] = true,
@@ -219,6 +383,114 @@ internal sealed class PatchService
             ["endLine"] = range.EndLine,
         }));
     }
+
+    private static void EnsurePatchHasMeaningfulOperations(FilePatch patch, PatchPaths paths)
+    {
+        var hunkCount = patch.Hunks.Count + patch.SearchBlocks.Count;
+        if (hunkCount == 0)
+        {
+            if (paths.IsMove || paths.IsNewFile || patch.NewPath == DevNullPath)
+            {
+                return;
+            }
+
+            throw new CommandErrorException(
+                InvalidArgumentsCode,
+                $"Patch for {paths.TargetPath} did not contain any hunks or search blocks.");
+        }
+
+        if (CountPatchMutationLines(patch) > 0 || paths.IsMove)
+        {
+            return;
+        }
+
+        throw new CommandErrorException(
+            InvalidArgumentsCode,
+            $"Patch for {paths.TargetPath} did not contain any additions or deletions.");
+    }
+
+    private static int CountPatchMutationLines(FilePatch patch)
+    {
+        return patch.Hunks.SelectMany(hunk => hunk.Lines)
+            .Concat(patch.SearchBlocks.SelectMany(block => block.Lines))
+            .Count(line => line.Kind == '+' || line.Kind == '-');
+    }
+
+    private static bool IsCurrentContentAlreadyPatched(string path, string currentContent, FilePatch patch)
+    {
+        try
+        {
+            var reverseResult = ApplyFilePatch(path, currentContent, CreateReversePatch(patch));
+            return reverseResult.MutationLineCount > 0 && reverseResult.MatchedLineCount > 0;
+        }
+        catch (CommandErrorException)
+        {
+            return false;
+        }
+    }
+
+    private static FilePatch CreateReversePatch(FilePatch patch)
+    {
+        return new FilePatch
+        {
+            OldPath = patch.NewPath,
+            NewPath = patch.OldPath,
+            Hunks = [.. patch.Hunks.Select(CreateReverseHunk)],
+            SearchBlocks = [.. patch.SearchBlocks.Select(CreateReverseSearchBlock)],
+            Format = patch.Format,
+        };
+    }
+
+    private static Hunk CreateReverseHunk(Hunk hunk)
+    {
+        return new Hunk
+        {
+            OriginalStart = hunk.NewStart,
+            OriginalCount = hunk.NewCount,
+            NewStart = hunk.OriginalStart,
+            NewCount = hunk.OriginalCount,
+            Lines = [.. hunk.Lines.Select(CreateReverseHunkLine)],
+        };
+    }
+
+    private static SearchBlock CreateReverseSearchBlock(SearchBlock block)
+    {
+        return new SearchBlock
+        {
+            Header = block.Header,
+            Lines = [.. block.Lines.Select(CreateReverseHunkLine)],
+        };
+    }
+
+    private static HunkLine CreateReverseHunkLine(HunkLine line)
+    {
+        return new HunkLine
+        {
+            Kind = line.Kind switch
+            {
+                '+' => '-',
+                '-' => '+',
+                _ => line.Kind,
+            },
+            Text = line.Text,
+        };
+    }
+
+    private static bool IsPatchContentMismatch(CommandErrorException ex)
+        => string.Equals(ex.Code, InvalidArgumentsCode, StringComparison.Ordinal)
+            && ex.Message.Contains("mismatch", StringComparison.OrdinalIgnoreCase);
+
+    private static ApplyFilePatchResult CreateAlreadySatisfiedResult(string content, ApplyFilePatchResult reverseResult)
+        => new()
+        {
+            Content = content,
+            FirstChangedLine = reverseResult.FirstChangedLine,
+            DeleteFile = false,
+            ChangedRanges = reverseResult.ChangedRanges,
+            DeletedLineMarkers = [],
+            MatchedLineCount = reverseResult.MatchedLineCount,
+            MutationLineCount = reverseResult.MutationLineCount,
+        };
 
     private static void EnsureSafeToModifyOpenDocument(DTE2 dte, string path)
     {
@@ -279,20 +551,44 @@ internal sealed class PatchService
         return null;
     }
 
-    private static (string Path, bool IsNewFile) ResolveTargetPath(DTE2 dte, string baseDirectory, FilePatch patch)
+    private static PatchPaths ResolvePatchPaths(DTE2 dte, string baseDirectory, FilePatch patch)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var targetRelativePath = patch.NewPath == "/dev/null" ? patch.OldPath : patch.NewPath;
-        var isNewFile = patch.OldPath == "/dev/null";
-        if (string.IsNullOrWhiteSpace(targetRelativePath) || targetRelativePath == "/dev/null")
+        var isNewFile = patch.OldPath == DevNullPath;
+        var isDelete = patch.NewPath == DevNullPath;
+        var sourceRelativePath = isNewFile ? patch.NewPath : patch.OldPath;
+        var targetRelativePath = isDelete ? patch.OldPath : patch.NewPath;
+        if (string.IsNullOrWhiteSpace(sourceRelativePath) || sourceRelativePath == DevNullPath)
         {
-            throw new CommandErrorException("invalid_arguments", "Patch entry did not contain a usable target path.");
+            throw new CommandErrorException(InvalidArgumentsCode, "Patch entry did not contain a usable source path.");
         }
 
-        if (Path.IsPathRooted(targetRelativePath))
+        if (string.IsNullOrWhiteSpace(targetRelativePath) || targetRelativePath == DevNullPath)
         {
-            return (PathNormalization.NormalizeFilePath(targetRelativePath), isNewFile);
+            throw new CommandErrorException(InvalidArgumentsCode, "Patch entry did not contain a usable target path.");
+        }
+
+        var sourcePath = ResolvePatchPath(dte, baseDirectory, sourceRelativePath, allowCreate: isNewFile);
+        var targetPath = isDelete
+            ? sourcePath
+            : ResolvePatchPath(dte, baseDirectory, targetRelativePath, allowCreate: true);
+
+        return new PatchPaths
+        {
+            SourcePath = sourcePath,
+            TargetPath = targetPath,
+            IsNewFile = isNewFile,
+        };
+    }
+
+    private static string ResolvePatchPath(DTE2 dte, string baseDirectory, string relativeOrAbsolutePath, bool allowCreate)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (Path.IsPathRooted(relativeOrAbsolutePath))
+        {
+            return PathNormalization.NormalizeFilePath(relativeOrAbsolutePath);
         }
 
         var solutionDirectory = dte.Solution?.IsOpen == true
@@ -300,57 +596,61 @@ internal sealed class PatchService
             : baseDirectory;
 
         var searchRoots = new List<string>();
-        if (!string.IsNullOrWhiteSpace(baseDirectory))
-        {
-            searchRoots.Add(baseDirectory);
-        }
+        AddDistinctPath(searchRoots, baseDirectory);
 
         var current = solutionDirectory;
         for (var depth = 0; depth < 6 && !string.IsNullOrWhiteSpace(current); depth++)
         {
-            searchRoots.Add(current);
+            AddDistinctPath(searchRoots, current);
             current = Path.GetDirectoryName(current);
         }
 
-        foreach (var root in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var root in searchRoots)
         {
-            var candidate = PathNormalization.NormalizeFilePath(Path.Combine(root, targetRelativePath));
+            var candidate = PathNormalization.NormalizeFilePath(Path.Combine(root, relativeOrAbsolutePath));
             if (File.Exists(candidate))
             {
-                return (candidate, isNewFile);
+                return candidate;
             }
 
-            if (isNewFile && Directory.Exists(Path.GetDirectoryName(candidate)!))
+            if (allowCreate)
             {
-                return (candidate, true);
+                var candidateDirectory = Path.GetDirectoryName(candidate);
+                if (!string.IsNullOrWhiteSpace(candidateDirectory) && Directory.Exists(candidateDirectory))
+                {
+                    return candidate;
+                }
             }
         }
 
         // Filesystem walk did not find the file. Search open VS documents as a fallback.
         // This handles bare filenames (e.g. "connect.cpp") and relative paths from projects
         // whose source tree is not under the solution directory.
-        var normalizedTarget = targetRelativePath.Replace('/', Path.DirectorySeparatorChar);
+        var normalizedTarget = relativeOrAbsolutePath.Replace('/', Path.DirectorySeparatorChar);
         var targetFileName = System.IO.Path.GetFileName(normalizedTarget);
         string? filenameMatch = null;
 
         foreach (Document document in dte.Documents)
         {
             var docPath = document.FullName;
-            if (string.IsNullOrWhiteSpace(docPath) || !File.Exists(docPath))
+            if (string.IsNullOrWhiteSpace(docPath))
             {
                 continue;
             }
 
             // Prefer a document whose full path ends with the relative path from the patch.
             var normalizedDocPath = docPath.Replace('/', Path.DirectorySeparatorChar);
-            if (normalizedDocPath.EndsWith(Path.DirectorySeparatorChar + normalizedTarget, StringComparison.OrdinalIgnoreCase) ||
+            if (File.Exists(docPath) &&
+                (normalizedDocPath.EndsWith(Path.DirectorySeparatorChar + normalizedTarget, StringComparison.OrdinalIgnoreCase) ||
                 normalizedDocPath.EndsWith(normalizedTarget, StringComparison.OrdinalIgnoreCase))
+            )
             {
-                return (PathNormalization.NormalizeFilePath(docPath), isNewFile);
+                return PathNormalization.NormalizeFilePath(docPath);
             }
 
             // Keep the first filename-only match as a lower-priority fallback.
             if (filenameMatch is null &&
+                File.Exists(docPath) &&
                 System.IO.Path.GetFileName(docPath).Equals(targetFileName, StringComparison.OrdinalIgnoreCase))
             {
                 filenameMatch = docPath;
@@ -359,10 +659,24 @@ internal sealed class PatchService
 
         if (filenameMatch is not null)
         {
-            return (PathNormalization.NormalizeFilePath(filenameMatch), isNewFile);
+            return PathNormalization.NormalizeFilePath(filenameMatch);
         }
 
-        return (PathNormalization.NormalizeFilePath(Path.Combine(baseDirectory, targetRelativePath)), isNewFile);
+        return PathNormalization.NormalizeFilePath(Path.Combine(baseDirectory, relativeOrAbsolutePath));
+    }
+
+    private static void AddDistinctPath(List<string> paths, string? value)
+    {
+        var normalizedValue = value;
+        if (string.IsNullOrWhiteSpace(normalizedValue))
+        {
+            return;
+        }
+
+        if (!paths.Contains(normalizedValue, StringComparer.OrdinalIgnoreCase))
+        {
+            paths.Add(normalizedValue!);
+        }
     }
 
     private static string ResolveBaseDirectory(DTE2 dte, string? baseDirectory)
@@ -386,6 +700,55 @@ internal sealed class PatchService
         return PathNormalization.NormalizeFilePath(Environment.CurrentDirectory);
     }
 
+    /// <summary>
+    /// Reads file content from the VS editor buffer if the file is open, otherwise from disk.
+    /// The editor buffer is the source of truth ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it may contain unsaved changes from a
+    /// previous apply_diff or user edits that haven't been flushed to disk yet.
+    /// </summary>
+    private static string ReadContentFromEditorOrDisk(DTE2 dte, string path)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            foreach (Document doc in dte.Documents)
+            {
+                try
+                {
+                    if (!PathNormalization.AreEquivalent(doc.FullName, path))
+                    {
+                        continue;
+                    }
+
+                    if (doc.Object("TextDocument") is TextDocument textDoc)
+                    {
+                        var start = textDoc.StartPoint.CreateEditPoint();
+                        return start.GetText(textDoc.EndPoint);
+                    }
+                }
+                catch (COMException)
+                {
+                    // Document may be in a transient state; skip it.
+                }
+            }
+        }
+        catch (COMException)
+        {
+            // dte.Documents can throw if VS is shutting down or busy.
+        }
+
+        return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+    }
+
+    private static bool PatchTargetExists(DTE2 dte, string path)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var normalizedPath = PathNormalization.NormalizeFilePath(path);
+        return File.Exists(normalizedPath)
+            || TryFindOpenDocumentByPath(dte, normalizedPath) is not null;
+    }
+
     private static (string Path, int Line, int Column)? CaptureActiveDocumentLocation(DTE2 dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -406,8 +769,9 @@ internal sealed class PatchService
                 column = Math.Max(1, textDocument.Selection.ActivePoint.DisplayColumn);
             }
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine(ex);
         }
 
         return (PathNormalization.NormalizeFilePath(activeDocument.FullName), line, column);
@@ -437,9 +801,13 @@ internal sealed class PatchService
             previousActiveDocument.Value.Column).ConfigureAwait(true);
     }
 
-    private static ApplyFilePatchResult ApplyFilePatch(string path, FilePatch patch)
+    private static ApplyFilePatchResult ApplyFilePatch(string path, string existingText, FilePatch patch)
     {
-        var existingText = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        if (patch.SearchBlocks.Count > 0)
+        {
+            return ApplySearchBlockPatch(path, existingText, patch);
+        }
+
         var newline = DetectNewline(existingText);
         var existingLines = SplitLines(existingText, out var hadFinalNewline);
         var resultLines = new List<string>();
@@ -448,21 +816,23 @@ internal sealed class PatchService
         var firstChangeCaptured = false;
         var changedRanges = new List<ChangedRange>();
         var deletedLineMarkers = new List<int>();
+        var matchedLineCount = 0;
+        var mutationLineCount = 0;
 
         foreach (var hunk in patch.Hunks)
         {
             var targetIndex = Math.Max(0, hunk.OriginalStart - 1);
             if (targetIndex < sourceIndex)
             {
-                throw new CommandErrorException("invalid_arguments", $"Patch hunks overlap for file: {path}");
+                throw new CommandErrorException(InvalidArgumentsCode, $"Patch hunks overlap for file: {path}");
             }
 
             // Fuzzy position search: if the hunk's nominal start line doesn't match
-            // the first context/deletion line, scan ±FuzzLines to find the real position.
+            // the first context/deletion line, scan Ãƒâ€šÃ‚Â±FuzzLines to find the real position.
             const int FuzzLines = 3;
             var firstCheckLine = hunk.Lines.FirstOrDefault(l => l.Kind == ' ' || l.Kind == '-');
             if (firstCheckLine is not null && targetIndex < existingLines.Count
-                && !string.Equals(existingLines[targetIndex], firstCheckLine.Text, StringComparison.Ordinal))
+                && !LinesMatchFuzzy(existingLines[targetIndex], firstCheckLine.Text))
             {
                 var found = false;
                 for (var fuzz = 1; fuzz <= FuzzLines && !found; fuzz++)
@@ -470,7 +840,7 @@ internal sealed class PatchService
                     foreach (var candidate in new[] { targetIndex + fuzz, targetIndex - fuzz })
                     {
                         if (candidate >= sourceIndex && candidate < existingLines.Count
-                            && string.Equals(existingLines[candidate], firstCheckLine.Text, StringComparison.Ordinal))
+                            && LinesMatchFuzzy(existingLines[candidate], firstCheckLine.Text))
                         {
                             targetIndex = candidate;
                             found = true;
@@ -495,11 +865,14 @@ internal sealed class PatchService
                 {
                     case ' ':
                         EnsureLineMatches(path, existingLines, sourceIndex, line.Text, "context");
+                        matchedLineCount++;
                         resultLines.Add(existingLines[sourceIndex]);
                         sourceIndex++;
                         break;
                     case '-':
                         EnsureLineMatches(path, existingLines, sourceIndex, line.Text, "deletion");
+                        matchedLineCount++;
+                        mutationLineCount++;
                         if (!firstChangeCaptured)
                         {
                             firstChangedLine = Math.Max(1, resultLines.Count + 1);
@@ -512,6 +885,7 @@ internal sealed class PatchService
                         sourceIndex++;
                         break;
                     case '+':
+                        mutationLineCount++;
                         if (!firstChangeCaptured)
                         {
                             firstChangedLine = Math.Max(1, resultLines.Count + 1);
@@ -523,7 +897,7 @@ internal sealed class PatchService
                         resultLines.Add(line.Text);
                         break;
                     default:
-                        throw new CommandErrorException("invalid_arguments", $"Unsupported hunk line prefix '{line.Kind}' in patch for {path}.");
+                        throw new CommandErrorException(InvalidArgumentsCode, $"Unsupported hunk line prefix '{line.Kind}' in patch for {path}.");
                 }
             }
 
@@ -547,8 +921,8 @@ internal sealed class PatchService
             sourceIndex++;
         }
 
-        var deleteFile = patch.NewPath == "/dev/null";
-        var content = JoinLines(resultLines, newline, !deleteFile && (hadFinalNewline || patch.OldPath == "/dev/null"));
+        var deleteFile = patch.NewPath == DevNullPath;
+        var content = JoinLines(resultLines, newline, !deleteFile && (hadFinalNewline || patch.OldPath == DevNullPath));
         return new ApplyFilePatchResult
         {
             Content = content,
@@ -556,23 +930,449 @@ internal sealed class PatchService
             DeleteFile = deleteFile,
             ChangedRanges = changedRanges,
             DeletedLineMarkers = deletedLineMarkers,
+            MatchedLineCount = matchedLineCount,
+            MutationLineCount = mutationLineCount,
         };
+    }
+
+    private static ApplyFilePatchResult ApplySearchBlockPatch(string path, string existingText, FilePatch patch)
+    {
+        var newline = DetectNewline(existingText);
+        var existingLines = SplitLines(existingText, out var hadFinalNewline);
+        var resultLines = new List<string>();
+        var sourceIndex = 0;
+        var firstChangedLine = 1;
+        var firstChangeCaptured = false;
+        var changedRanges = new List<ChangedRange>();
+        var deletedLineMarkers = new List<int>();
+        var matchedLineCount = 0;
+        var mutationLineCount = 0;
+
+        foreach (var block in patch.SearchBlocks)
+        {
+            var targetIndex = FindSearchBlockStart(path, existingLines, sourceIndex, block);
+            while (sourceIndex < targetIndex && sourceIndex < existingLines.Count)
+            {
+                resultLines.Add(existingLines[sourceIndex]);
+                sourceIndex++;
+            }
+
+            int? blockStartLine = null;
+            var blockAddedLineCount = 0;
+
+            foreach (var line in block.Lines)
+            {
+                switch (line.Kind)
+                {
+                    case ' ':
+                        EnsureLineMatches(path, existingLines, sourceIndex, line.Text, "context");
+                        matchedLineCount++;
+                        resultLines.Add(existingLines[sourceIndex]);
+                        sourceIndex++;
+                        break;
+                    case '-':
+                        EnsureLineMatches(path, existingLines, sourceIndex, line.Text, "deletion");
+                        matchedLineCount++;
+                        mutationLineCount++;
+                        if (!firstChangeCaptured)
+                        {
+                            firstChangedLine = Math.Max(1, resultLines.Count + 1);
+                            firstChangeCaptured = true;
+                        }
+
+                        blockStartLine ??= Math.Max(1, resultLines.Count + 1);
+                        deletedLineMarkers.Add(Math.Max(1, resultLines.Count + 1));
+                        sourceIndex++;
+                        break;
+                    case '+':
+                        mutationLineCount++;
+                        if (!firstChangeCaptured)
+                        {
+                            firstChangedLine = Math.Max(1, resultLines.Count + 1);
+                            firstChangeCaptured = true;
+                        }
+
+                        blockStartLine ??= Math.Max(1, resultLines.Count + 1);
+                        blockAddedLineCount++;
+                        resultLines.Add(line.Text);
+                        break;
+                    default:
+                        throw new CommandErrorException(InvalidArgumentsCode, $"Unsupported editor patch line prefix '{line.Kind}' in patch for {path}.");
+                }
+            }
+
+            if (blockStartLine.HasValue)
+            {
+                var startLine = blockStartLine.Value;
+                var endLine = blockAddedLineCount > 0
+                    ? startLine + blockAddedLineCount - 1
+                    : startLine;
+                changedRanges.Add(new ChangedRange
+                {
+                    StartLine = startLine,
+                    EndLine = endLine,
+                });
+            }
+        }
+
+        while (sourceIndex < existingLines.Count)
+        {
+            resultLines.Add(existingLines[sourceIndex]);
+            sourceIndex++;
+        }
+
+        var deleteFile = patch.NewPath == DevNullPath;
+        var content = JoinLines(resultLines, newline, !deleteFile && (hadFinalNewline || patch.OldPath == DevNullPath));
+        return new ApplyFilePatchResult
+        {
+            Content = content,
+            FirstChangedLine = firstChangedLine,
+            DeleteFile = deleteFile,
+            ChangedRanges = changedRanges,
+            DeletedLineMarkers = deletedLineMarkers,
+            MatchedLineCount = matchedLineCount,
+            MutationLineCount = mutationLineCount,
+        };
+    }
+
+    private static int FindSearchBlockStart(string path, IReadOnlyList<string> existingLines, int sourceIndex, SearchBlock block)
+    {
+        var matchLines = block.Lines
+            .Where(line => line.Kind != '+')
+            .Select(line => line.Text)
+            .ToArray();
+
+        if (matchLines.Length == 0)
+        {
+            return sourceIndex;
+        }
+
+        var maxStart = existingLines.Count - matchLines.Length;
+
+        // Pass 1: exact match.
+        for (var candidate = Math.Max(0, sourceIndex); candidate <= maxStart; candidate++)
+        {
+            var matches = true;
+            for (var offset = 0; offset < matchLines.Length; offset++)
+            {
+                if (!string.Equals(existingLines[candidate + offset], matchLines[offset], StringComparison.Ordinal))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                return candidate;
+            }
+        }
+
+        // Second pass: fuzzy match to handle LLM escape artifacts.
+        for (var candidate = Math.Max(0, sourceIndex); candidate <= maxStart; candidate++)
+        {
+            var matches = true;
+            for (var offset = 0; offset < matchLines.Length; offset++)
+            {
+                if (!LinesMatchFuzzy(existingLines[candidate + offset], matchLines[offset]))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (matches)
+            {
+                return candidate;
+            }
+        }
+
+        var descriptor = string.IsNullOrWhiteSpace(block.Header)
+            ? "editor patch block"
+            : $"editor patch block '{block.Header}'";
+        throw new CommandErrorException(
+            InvalidArgumentsCode,
+            $"Could not locate {descriptor} in {path}.",
+            new
+            {
+                block = block.Header,
+                sourceIndex = sourceIndex + 1,
+                matchLines,
+            });
+    }
+
+    /// <summary>
+    /// Compares two lines with tolerance for JSON/C# escape artifacts that LLMs
+    /// commonly introduce.  Tries exact match first, then falls back to a
+    /// normalized comparison that strips one level of backslash-escaping and
+    /// trims trailing whitespace.
+    /// </summary>
+    private static bool LinesMatchFuzzy(string actual, string expected)
+    {
+        if (string.Equals(actual, expected, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Normalize: unescape one layer of backslash sequences and trim trailing ws.
+        return string.Equals(
+            NormalizeLine(actual),
+            NormalizeLine(expected),
+            StringComparison.Ordinal);
+    }
+
+    private static string NormalizeLine(string line)
+    {
+        // Fast path: no backslashes at all ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â just trim trailing whitespace.
+        if (line.IndexOf('\\') < 0)
+        {
+            return line.TrimEnd();
+        }
+
+        // Strip one level of backslash-escaping (\\\" ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ \", \\\\ ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ \\, \\n ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ \n, etc.)
+        var sb = new System.Text.StringBuilder(line.Length);
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] == '\\' && i + 1 < line.Length)
+            {
+                var next = line[i + 1];
+                if (next == '"' || next == '\\' || next == 'n' || next == 'r' || next == 't')
+                {
+                    sb.Append(next);
+                    i++;
+                    continue;
+                }
+            }
+
+            sb.Append(line[i]);
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     private static void EnsureLineMatches(string path, IReadOnlyList<string> existingLines, int index, string expected, string operation)
     {
         if (index >= existingLines.Count)
         {
-            throw new CommandErrorException("invalid_arguments", $"Patch {operation} exceeded file length for {path}.");
+            throw new CommandErrorException(InvalidArgumentsCode, $"Patch {operation} exceeded file length for {path}.");
         }
 
-        if (!string.Equals(existingLines[index], expected, StringComparison.Ordinal))
+        if (!LinesMatchFuzzy(existingLines[index], expected))
         {
             throw new CommandErrorException(
-                "invalid_arguments",
+                InvalidArgumentsCode,
                 $"Patch {operation} mismatch in {path} at line {index + 1}.",
                 new { expected, actual = existingLines[index], line = index + 1 });
         }
+    }
+
+    private static (List<FilePatch> FilePatches, string PatchFormat) ParseSupportedPatchFormat(string patchText)
+    {
+        if (LooksLikeEditorPatchEnvelope(patchText))
+        {
+            return (ParseEditorPatch(patchText), "editor-patch");
+        }
+
+        return (ParseUnifiedDiff(patchText), "unified-diff");
+    }
+
+    private static string BuildMissingPatchFormatMessage(string patchText)
+    {
+        if (LooksLikeEditorPatchEnvelope(patchText))
+        {
+            return "Patch used the editor wrapper format but did not contain any valid file entries. Use *** Add File, *** Delete File, or *** Update File blocks inside *** Begin Patch / *** End Patch.";
+        }
+
+        return "Patch did not contain a supported format. Use unified diff syntax with ---/+++ file headers and @@ hunks, or editor patch syntax with *** Begin Patch / *** End Patch.";
+    }
+
+    private static bool LooksLikeEditorPatchEnvelope(string patchText)
+    {
+        if (string.IsNullOrWhiteSpace(patchText))
+        {
+            return false;
+        }
+
+        var normalized = patchText.Replace("\r\n", "\n").Replace('\r', '\n').TrimStart();
+        return normalized.StartsWith("*** Begin Patch", StringComparison.Ordinal);
+    }
+
+    private static List<FilePatch> ParseEditorPatch(string patchText)
+    {
+        var normalized = patchText.Replace("\r\n", "\n").Replace('\r', '\n').TrimEnd('\n');
+        var lines = normalized.Split('\n');
+        if (lines.Length == 0 || !string.Equals(lines[0], "*** Begin Patch", StringComparison.Ordinal))
+        {
+            throw new CommandErrorException(InvalidArgumentsCode, "Editor patch is missing the *** Begin Patch header.");
+        }
+
+        var patches = new List<FilePatch>();
+        var lineIndex = 1;
+        while (lineIndex < lines.Length)
+        {
+            var line = lines[lineIndex];
+            if (string.Equals(line, "*** End of File", StringComparison.Ordinal))
+            {
+                // Accept Codex-style EOF sentinels as no-op markers so apply_patch envelopes
+                // can be replayed without rewriting them into a second patch dialect.
+                lineIndex++;
+                continue;
+            }
+
+            if (string.Equals(line, "*** End Patch", StringComparison.Ordinal))
+            {
+                return patches;
+            }
+
+            if (line.StartsWith("*** Add File: ", StringComparison.Ordinal))
+            {
+                patches.Add(ParseEditorAddFile(lines, ref lineIndex));
+                continue;
+            }
+
+            if (line.StartsWith("*** Delete File: ", StringComparison.Ordinal))
+            {
+                patches.Add(ParseEditorDeleteFile(lines, ref lineIndex));
+                continue;
+            }
+
+            if (line.StartsWith("*** Update File: ", StringComparison.Ordinal))
+            {
+                patches.Add(ParseEditorUpdateFile(lines, ref lineIndex));
+                continue;
+            }
+
+            throw new CommandErrorException(InvalidArgumentsCode, $"Unsupported editor patch directive: {line}");
+        }
+
+        throw new CommandErrorException(InvalidArgumentsCode, "Editor patch is missing the *** End Patch footer.");
+    }
+
+    private static FilePatch ParseEditorAddFile(string[] lines, ref int lineIndex)
+    {
+        var path = ParseEditorPatchPath(lines[lineIndex], "*** Add File: ");
+        lineIndex++;
+        var addedLines = new List<HunkLine>();
+        while (lineIndex < lines.Length && !IsEditorPatchDirective(lines[lineIndex]))
+        {
+            var line = lines[lineIndex];
+            if (line.Length == 0 || line[0] != '+')
+            {
+                throw new CommandErrorException(InvalidArgumentsCode, $"Added file entries must use '+' lines only: {line}");
+            }
+
+            addedLines.Add(new HunkLine { Kind = '+', Text = line.Length > 1 ? line.Substring(1) : string.Empty });
+            lineIndex++;
+        }
+
+        if (addedLines.Count == 0)
+        {
+            throw new CommandErrorException(InvalidArgumentsCode, $"Added file patch did not contain any content: {path}");
+        }
+
+        return new FilePatch
+        {
+            OldPath = DevNullPath,
+            NewPath = path,
+            Hunks =
+            [
+                new Hunk
+                {
+                    OriginalStart = 1,
+                    OriginalCount = 0,
+                    NewStart = 1,
+                    NewCount = addedLines.Count,
+                    Lines = addedLines,
+                },
+            ],
+            Format = "editor-patch",
+        };
+    }
+
+    private static FilePatch ParseEditorDeleteFile(string[] lines, ref int lineIndex)
+    {
+        var path = ParseEditorPatchPath(lines[lineIndex], "*** Delete File: ");
+        lineIndex++;
+        return new FilePatch
+        {
+            OldPath = path,
+            NewPath = DevNullPath,
+            Format = "editor-patch",
+        };
+    }
+
+    private static FilePatch ParseEditorUpdateFile(string[] lines, ref int lineIndex)
+    {
+        var oldPath = ParseEditorPatchPath(lines[lineIndex], "*** Update File: ");
+        lineIndex++;
+        var newPath = oldPath;
+        if (lineIndex < lines.Length && lines[lineIndex].StartsWith("*** Move to: ", StringComparison.Ordinal))
+        {
+            newPath = ParseEditorPatchPath(lines[lineIndex], "*** Move to: ");
+            lineIndex++;
+        }
+
+        var blocks = new List<SearchBlock>();
+        SearchBlock? currentBlock = null;
+        while (lineIndex < lines.Length && !IsEditorPatchDirective(lines[lineIndex]))
+        {
+            var line = lines[lineIndex];
+            if (line == "@@" || line.StartsWith("@@ ", StringComparison.Ordinal))
+            {
+                if (currentBlock?.Lines.Count > 0)
+                {
+                    blocks.Add(currentBlock);
+                }
+
+                currentBlock = new SearchBlock { Header = line.Length > EditorPatchHeaderPrefixLength ? line.Substring(EditorPatchHeaderPrefixLength).Trim() : string.Empty };
+                lineIndex++;
+                continue;
+            }
+
+            if (line.Length == 0)
+            {
+                throw new CommandErrorException(InvalidArgumentsCode, "Editor patch lines must start with ' ', '+', '-', or '@@'.");
+            }
+
+            var prefix = line[0];
+            if (prefix != ' ' && prefix != '+' && prefix != '-')
+            {
+                throw new CommandErrorException(InvalidArgumentsCode, $"Unsupported editor patch line prefix '{prefix}'.");
+            }
+
+            currentBlock ??= new SearchBlock();
+            currentBlock.Lines.Add(new HunkLine { Kind = prefix, Text = line.Length > 1 ? line.Substring(1) : string.Empty });
+            lineIndex++;
+        }
+
+        if (currentBlock?.Lines.Count > 0)
+        {
+            blocks.Add(currentBlock);
+        }
+
+        return new FilePatch
+        {
+            OldPath = oldPath,
+            NewPath = newPath,
+            SearchBlocks = blocks,
+            Format = "editor-patch",
+        };
+    }
+
+    private static bool IsEditorPatchDirective(string line)
+    {
+        return line.StartsWith("*** ", StringComparison.Ordinal);
+    }
+
+    private static string ParseEditorPatchPath(string line, string prefix)
+    {
+        var path = NormalizePatchPath(line.Substring(prefix.Length));
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new CommandErrorException(InvalidArgumentsCode, $"Editor patch directive is missing a path: {line}");
+        }
+
+        return path;
     }
 
     private static List<FilePatch> ParseUnifiedDiff(string patchText)
@@ -592,7 +1392,7 @@ internal sealed class PatchService
                 lineIndex++;
                 if (lineIndex >= lines.Length || !lines[lineIndex].StartsWith("+++ ", StringComparison.Ordinal))
                 {
-                    throw new CommandErrorException("invalid_arguments", "Unified diff is missing a +++ header.");
+                    throw new CommandErrorException(InvalidArgumentsCode, "Unified diff is missing a +++ header.");
                 }
 
                 var newPath = NormalizePatchPath(lines[lineIndex].Substring(4));
@@ -611,7 +1411,7 @@ internal sealed class PatchService
             {
                 if (currentFile is null)
                 {
-                    throw new CommandErrorException("invalid_arguments", "Encountered a hunk before a file header.");
+                    throw new CommandErrorException(InvalidArgumentsCode, "Encountered a hunk before a file header.");
                 }
 
                 var hunk = ParseHunkHeader(line);
@@ -643,7 +1443,7 @@ internal sealed class PatchService
                     var prefix = hunkLine[0];
                     if (prefix != ' ' && prefix != '+' && prefix != '-')
                     {
-                        throw new CommandErrorException("invalid_arguments", $"Unsupported hunk line prefix '{prefix}'.");
+                        throw new CommandErrorException(InvalidArgumentsCode, $"Unsupported hunk line prefix '{prefix}'.");
                     }
 
                     hunk.Lines.Add(new HunkLine
@@ -682,7 +1482,7 @@ internal sealed class PatchService
         var match = Regex.Match(line, @"^@@ -(?<oldStart>\d+)(,(?<oldCount>\d+))? \+(?<newStart>\d+)(,(?<newCount>\d+))? @@");
         if (!match.Success)
         {
-            throw new CommandErrorException("invalid_arguments", $"Invalid unified diff hunk header: {line}");
+            throw new CommandErrorException(InvalidArgumentsCode, $"Invalid unified diff hunk header: {line}");
         }
 
         return new Hunk
@@ -703,14 +1503,14 @@ internal sealed class PatchService
     private static string NormalizePatchPath(string value)
     {
         var trimmed = value.Trim();
-        if (trimmed == "/dev/null")
+        if (trimmed == DevNullPath)
         {
             return trimmed;
         }
 
-        if ((trimmed.StartsWith("a/", StringComparison.Ordinal) || trimmed.StartsWith("b/", StringComparison.Ordinal)) && trimmed.Length > 2)
+        if ((trimmed.StartsWith("a/", StringComparison.Ordinal) || trimmed.StartsWith("b/", StringComparison.Ordinal)) && trimmed.Length > EditorPatchHeaderPrefixLength)
         {
-            return trimmed.Substring(2);
+            return trimmed.Substring(EditorPatchHeaderPrefixLength);
         }
 
         return trimmed;
@@ -744,3 +1544,10 @@ internal sealed class PatchService
         return content;
     }
 }
+
+
+
+
+
+
+

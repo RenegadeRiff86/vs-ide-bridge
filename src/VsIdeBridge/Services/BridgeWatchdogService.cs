@@ -228,8 +228,9 @@ internal sealed class BridgeWatchdogService(AsyncPackage package, int probeInter
         {
             _monitorTask?.Wait(TimeSpan.FromSeconds(2));
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine(ex);
         }
 
         _cts.Dispose();

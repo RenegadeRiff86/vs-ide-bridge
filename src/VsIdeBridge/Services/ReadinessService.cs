@@ -18,7 +18,7 @@ internal sealed class ReadinessService
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
-        if (context.Dte.Solution is null || !context.Dte.Solution.IsOpen)
+        if (context.Dte.Solution?.IsOpen != true)
         {
             throw new CommandErrorException("solution_not_open", "No solution is open.");
         }
@@ -33,7 +33,7 @@ internal sealed class ReadinessService
         var readyStatusSamples = 0;
         var lastStatusBarText = string.Empty;
         var statusBarReady = false;
-        var intellisenseCompleted = stage is not null && !stage.IsInProgress;
+        var intellisenseCompleted = stage?.IsInProgress == false;
         var satisfiedBy = intellisenseCompleted ? "intellisense" : "pending";
 
         while (DateTimeOffset.UtcNow < deadline)
@@ -110,6 +110,6 @@ internal sealed class ReadinessService
 
     private static bool IsReadyStatusText(string text)
     {
-        return string.Equals(text?.Trim(), "Ready", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(text.Trim(), "Ready", StringComparison.OrdinalIgnoreCase);
     }
 }

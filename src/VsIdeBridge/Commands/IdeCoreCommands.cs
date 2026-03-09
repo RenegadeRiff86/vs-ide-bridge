@@ -15,6 +15,17 @@ namespace VsIdeBridge.Commands;
 
 internal static class IdeCoreCommands
 {
+    private const string WarningsCommandName = "warnings";
+    private const string ExampleCppPath = @"C:\repo\src\foo.cpp";
+    private const string WarningsCommandExample = WarningsCommandName + " --group-by code";
+    private const string ExampleLineNumber = "42";
+    private const string ExampleLineColumnSuffix = " --line " + ExampleLineNumber + " --column 13";
+
+    private static string CreateExampleFileCommand(string commandName)
+    {
+        return commandName + " --file \"" + ExampleCppPath + "\"";
+    }
+
     internal static async Task<CommandExecutionResult> ExecuteBatchAsync(IdeCommandContext context, JArray steps, bool stopOnError)
     {
         var results = new JArray();
@@ -191,13 +202,13 @@ internal static class IdeCoreCommands
                     {
                         ["name"] = "inspect-symbol-at-location",
                         ["summary"] = "Use quick info to get the destination location and nearby definition context.",
-                        ["command"] = @"quick-info --file ""C:\repo\src\foo.cpp"" --line 42 --column 13"
+                        ["command"] = CreateExampleFileCommand("quick-info") + ExampleLineColumnSuffix
                     },
                     new JObject
                     {
                         ["name"] = "group-current-warnings",
                         ["summary"] = "Filter the Error List down to warnings and group them by code.",
-                        ["command"] = "warnings --group-by code"
+                        ["command"] = WarningsCommandExample
                     },
                     new JObject
                     {
@@ -207,15 +218,16 @@ internal static class IdeCoreCommands
                     }
                 },
                 ["example"] = @"state --out ""C:\temp\ide-state.json""",
-                ["documentSliceExample"] = @"document-slice --file ""C:\repo\src\foo.cpp"" --start-line 120 --end-line 180 --out ""C:\temp\slice.json""",
+                ["documentSliceExample"] = CreateExampleFileCommand("document-slice") + " --start-line 120 --end-line 180 --out \"C:\\temp\\slice.json\"",
                 ["documentSlicesExample"] = @"document-slices --ranges ""[{\""file\"":\""C:\\repo\\src\\foo.cpp\"",\""line\"":42,\""contextBefore\"":8,\""contextAfter\"":20}]""",
                 ["searchSymbolsExample"] = @"search-symbols --query ""propose_export_file_name_and_path"" --kind function",
-                ["quickInfoExample"] = @"quick-info --file ""C:\repo\src\foo.cpp"" --line 42 --column 13",
+                ["quickInfoExample"] = CreateExampleFileCommand("quick-info") + ExampleLineColumnSuffix,
                 ["findTextPathExample"] = @"find-text --query ""OnInit"" --path ""src\libslic3r""",
                 ["fileSymbolsExample"] = @"file-symbols --file ""C:\repo\src\foo.cpp"" --kind function",
                 ["smartContextExample"] = @"smart-context --query ""where is GUI_App::OnInit used"" --max-contexts 3 --out ""C:\temp\smart-context.json""",
-                ["referencesExample"] = @"find-references --file ""C:\repo\src\foo.cpp"" --line 42 --column 13 --out ""C:\temp\references.json""",
-                ["callHierarchyExample"] = @"call-hierarchy --file ""C:\repo\src\foo.cpp"" --line 42 --column 13 --out ""C:\temp\call-hierarchy.json""",
+                ["referencesExample"] = CreateExampleFileCommand("find-references") + ExampleLineColumnSuffix + " --out \"C:\\temp\\references.json\"",
+                ["callHierarchyExample"] = CreateExampleFileCommand("call-hierarchy") + ExampleLineColumnSuffix + " --out \"C:\\temp\\call-hierarchy.json\"",
+                ["applyDiffFormat"] = "Use unified diff text with ---/+++ file headers and @@ hunks, or editor patch text with *** Begin Patch / *** End Patch and *** Update File / *** Add File / *** Delete File blocks.",
                 ["applyDiffExample"] = @"apply-diff --patch-file ""C:\temp\change.diff"" --out ""C:\temp\apply-diff.json""",
                 ["openSolutionExample"] = @"open-solution --solution ""C:\path\to\solution.sln"" --out ""C:\temp\open-solution.json"""
             }));
@@ -268,6 +280,7 @@ internal static class IdeCoreCommands
         return new JObject
         {
             ["allowBridgeEdits"] = context.Runtime.UiSettings.AllowBridgeEdits,
+            ["bestPracticeDiagnostics"] = context.Runtime.UiSettings.BestPracticeDiagnosticsEnabled,
             ["goToEditedParts"] = context.Runtime.UiSettings.GoToEditedParts,
         };
     }
@@ -288,6 +301,16 @@ internal static class IdeCoreCommands
         return Task.FromResult(new CommandExecutionResult(
             enabled ? "Go To Edited Parts enabled." : "Go To Edited Parts disabled.",
             GetUiSettingsData(context)));
+    }
+
+    private static async Task<CommandExecutionResult> ToggleBestPracticeDiagnosticsAsync(IdeCommandContext context)
+    {
+        var enabled = !context.Runtime.UiSettings.BestPracticeDiagnosticsEnabled;
+        context.Runtime.UiSettings.BestPracticeDiagnosticsEnabled = enabled;
+        await context.Runtime.ErrorListService.RefreshBestPracticeDiagnosticsAsync(context).ConfigureAwait(true);
+        return new CommandExecutionResult(
+            enabled ? "Best practice diagnostics enabled." : "Best practice diagnostics disabled.",
+            GetUiSettingsData(context));
     }
 
     private static string? TryResolveReadmePath(IdeCommandContext context)
@@ -394,6 +417,24 @@ internal static class IdeCoreCommands
         protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             return ToggleGoToEditedPartsAsync(context);
+        }
+    }
+
+    internal sealed class IdeToggleBestPracticeDiagnosticsMenuCommand : IdeCommandBase
+    {
+        public IdeToggleBestPracticeDiagnosticsMenuCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0105, acceptsParameters: false)
+        {
+            MenuCommand.BeforeQueryStatus += (_, _) => MenuCommand.Checked = Runtime.UiSettings.BestPracticeDiagnosticsEnabled;
+        }
+
+        protected override string CanonicalName => "Tools.VsIdeBridgeToggleBestPracticeDiagnostics";
+
+        internal override bool AllowAutomationInvocation => false;
+
+        protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            return ToggleBestPracticeDiagnosticsAsync(context);
         }
     }
 
@@ -520,3 +561,6 @@ internal static class IdeCoreCommands
         }
     }
 }
+
+
+
