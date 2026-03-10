@@ -1,7 +1,7 @@
 #define MyAppName "VS IDE Bridge"
 #define MyAppPublisher "RenegadeRiff86"
 #define MyAppURL "https://github.com/RenegadeRiff86/vs-ide-bridge"
-#define MyAppVersion "2.0.31"
+#define MyAppVersion "2.0.32"
 #define ServiceName "VsIdeBridgeService"
 #define VsixId "RenegadeRiff86.VsIdeBridge"
 #define LegacyVsixId "StanElston.VsIdeBridge"

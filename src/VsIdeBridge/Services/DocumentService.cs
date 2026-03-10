@@ -65,6 +65,16 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
         var normalizedPath = ResolveDocumentPath(dte, filePath, allowDiskFallback);
+        if (!File.Exists(normalizedPath))
+        {
+            normalizedPath = TryFindExistingOpenDocumentPathByFileName(dte, normalizedPath) ?? normalizedPath;
+            if (!File.Exists(normalizedPath))
+            {
+                throw new CommandErrorException(
+                    DocumentNotFoundCode,
+                    $"File does not exist on disk: {normalizedPath}");
+            }
+        }
 
         var window = dte.ItemOperations.OpenFile(normalizedPath);
         window.Activate();
@@ -1479,6 +1489,34 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             if (MatchesDocumentExactPath(document, resolvedPath))
             {
                 return document;
+            }
+        }
+
+        return null;
+    }
+
+
+    private static string? TryFindExistingOpenDocumentPathByFileName(DTE2 dte, string filePath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        var fileName = Path.GetFileName(filePath);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return null;
+        }
+
+        foreach (var document in EnumerateOpenDocuments(dte))
+        {
+            var documentPath = TryGetDocumentFullName(document);
+            if (string.IsNullOrWhiteSpace(documentPath) || !File.Exists(documentPath))
+            {
+                continue;
+            }
+
+            if (string.Equals(Path.GetFileName(documentPath), fileName, StringComparison.OrdinalIgnoreCase))
+            {
+                return documentPath;
             }
         }
 
