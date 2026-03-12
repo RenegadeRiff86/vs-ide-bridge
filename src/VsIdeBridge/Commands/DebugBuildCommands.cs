@@ -486,7 +486,8 @@ internal static class DebugBuildCommands
                 context,
                 false,
                 timeout,
-                query: CreateErrorListQuery(args)).ConfigureAwait(true);
+                query: CreateErrorListQuery(args),
+                includeBuildOutputFallback: true).ConfigureAwait(true);
 
             var data = new JObject
             {

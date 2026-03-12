@@ -48,6 +48,51 @@ internal static class SearchNavigationCommands
         }
     }
 
+    internal sealed class IdeFindTextBatchCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x024A)
+    {
+        protected override string CanonicalName => "Tools.IdeFindTextBatch";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var queriesJson = args.GetRequiredString("queries");
+            JArray queriesArray;
+            try
+            {
+                queriesArray = JArray.Parse(queriesJson);
+            }
+            catch (Exception ex)
+            {
+                throw new CommandErrorException("invalid_json", $"Failed to parse --queries JSON: {ex.Message}");
+            }
+
+            var queries = queriesArray
+                .Values<string>()
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .Select(item => item!.Trim())
+                .ToArray();
+            if (queries.Length == 0)
+            {
+                throw new CommandErrorException("invalid_arguments", "Missing required argument --queries with at least one query string.");
+            }
+
+            var scope = args.GetEnum("scope", SolutionScope, SolutionScope, ProjectScope, DocumentScope, OpenScope);
+            var project = args.GetString("project");
+            var data = await context.Runtime.SearchService.FindTextBatchAsync(
+                context,
+                queries,
+                scope,
+                args.GetBoolean("match-case", false),
+                args.GetBoolean("whole-word", false),
+                args.GetBoolean("regex", false),
+                args.GetInt32("results-window", 1),
+                project,
+                args.GetString("path"),
+                args.GetInt32("max-queries-per-chunk", 5)).ConfigureAwait(true);
+
+            return CreateFoundResult("match(es)", data);
+        }
+    }
+
     internal sealed class IdeFindFilesCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0203)
     {
         protected override string CanonicalName => "Tools.IdeFindFiles";

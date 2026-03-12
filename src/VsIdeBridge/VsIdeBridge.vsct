@@ -19,6 +19,7 @@
         <Strings>
           <ButtonText>IDE Bridge</ButtonText>
           <CommandName>IdeBridgeMenu</CommandName>
+          <LocCanonicalName>.Tools.VsIdeBridgeMenu</LocCanonicalName>
         </Strings>
       </Menu>
     </Menus>
@@ -40,6 +41,15 @@
           <CommandName>IdeToggleAllowBridgeEditsMenu</CommandName>
           <CanonicalName>Tools.VsIdeBridgeToggleAllowBridgeEdits</CanonicalName>
           <LocCanonicalName>.Tools.VsIdeBridgeToggleAllowBridgeEdits</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeToggleAllowBridgeShellExecMenu" priority="0x0115" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <Strings>
+          <ButtonText>Allow Bridge Shell Exec</ButtonText>
+          <CommandName>IdeToggleAllowBridgeShellExecMenu</CommandName>
+          <CanonicalName>Tools.VsIdeBridgeToggleAllowBridgeShellExec</CanonicalName>
+          <LocCanonicalName>.Tools.VsIdeBridgeToggleAllowBridgeShellExec</LocCanonicalName>
         </Strings>
       </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeToggleGoToEditedPartsMenu" priority="0x0120" type="Button">
@@ -69,6 +79,27 @@
           <CommandName>IdeHelp</CommandName>
           <CanonicalName>Tools.IdeHelp</CanonicalName>
           <LocCanonicalName>.Tools.IdeHelp</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeRequestApproval" priority="0x024B" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Request Approval</ButtonText>
+          <CommandName>IdeRequestApproval</CommandName>
+          <CanonicalName>Tools.VsIdeBridgeRequestApproval</CanonicalName>
+          <LocCanonicalName>.Tools.VsIdeBridgeRequestApproval</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetUiSettings" priority="0x024C" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <Strings>
+          <ButtonText>IDE UI Settings</ButtonText>
+          <CommandName>IdeGetUiSettings</CommandName>
+          <CanonicalName>Tools.IdeGetUiSettings</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGetUiSettings</LocCanonicalName>
         </Strings>
       </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSmokeTest" priority="0x01F1" type="Button">
@@ -710,6 +741,17 @@
           <LocCanonicalName>.Tools.IdeBatchCommands</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeFindTextBatch" priority="0x024A" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Find Text Batch</ButtonText>
+          <CommandName>IdeFindTextBatch</CommandName>
+          <CanonicalName>Tools.IdeFindTextBatch</CanonicalName>
+          <LocCanonicalName>.Tools.IdeFindTextBatch</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSearchSymbols" priority="0x0226" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -834,6 +876,7 @@
       <IDSymbol name="cmdidIdeSmokeTest" value="0x0101" />
       <IDSymbol name="cmdidIdeHelpMenu" value="0x0102" />
       <IDSymbol name="cmdidIdeToggleAllowBridgeEditsMenu" value="0x0103" />
+      <IDSymbol name="cmdidIdeToggleAllowBridgeShellExecMenu" value="0x0106" />
       <IDSymbol name="cmdidIdeToggleGoToEditedPartsMenu" value="0x0104" />
       <IDSymbol name="cmdidIdeToggleBestPracticeDiagnosticsMenu" value="0x0105" />
       <IDSymbol name="cmdidIdeGetState" value="0x0200" />
@@ -903,6 +946,9 @@
       <IDSymbol name="cmdidIdeSetStartupProject" value="0x0241" />
       <IDSymbol name="cmdidIdeAddFileToProject" value="0x0242" />
       <IDSymbol name="cmdidIdeRemoveFileFromProject" value="0x0243" />
+      <IDSymbol name="cmdidIdeFindTextBatch" value="0x024A" />
+      <IDSymbol name="cmdidIdeRequestApproval" value="0x024B" />
+      <IDSymbol name="cmdidIdeGetUiSettings" value="0x024C" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

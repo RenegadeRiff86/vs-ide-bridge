@@ -750,18 +750,18 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         {
             if (rangeToken is not Newtonsoft.Json.Linq.JObject range) continue;
             var file = range["file"]?.Value<string>();
-            var line = range["line"]?.Value<int>() ?? 1;
-            var before = range["contextBefore"]?.Value<int>()
-                ?? range["context-before"]?.Value<int>()
+            var line = range["line"]?.Value<int?>() ?? 1;
+            var before = range["contextBefore"]?.Value<int?>()
+                ?? range["context-before"]?.Value<int?>()
                 ?? 0;
-            var after = range["contextAfter"]?.Value<int>()
-                ?? range["context-after"]?.Value<int>()
+            var after = range["contextAfter"]?.Value<int?>()
+                ?? range["context-after"]?.Value<int?>()
                 ?? 0;
-            var startLine = range["startLine"]?.Value<int>()
-                ?? range["start-line"]?.Value<int>()
+            var startLine = range["startLine"]?.Value<int?>()
+                ?? range["start-line"]?.Value<int?>()
                 ?? Math.Max(1, line - before);
-            var endLine = range["endLine"]?.Value<int>()
-                ?? range["end-line"]?.Value<int>()
+            var endLine = range["endLine"]?.Value<int?>()
+                ?? range["end-line"]?.Value<int?>()
                 ?? line + after;
 
             try

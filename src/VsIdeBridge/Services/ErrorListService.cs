@@ -53,13 +53,19 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private const int StableSampleCount = 3;
     private const int PopulationPollIntervalMilliseconds = 2000;
     private const int DefaultWaitTimeoutMilliseconds = 90_000;
+    private const int BuildOutputReadAttemptCount = 2;
+    private const int CoordinateSuffixTrimLength = 2;
+    private const int MaximumBuildOutputCoordinateCount = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
     private const int MaxBestPracticeFiles = 64;
     private const int MaxBestPracticeFindingsPerFile = 25;
+    private const int MinimumSymbolLength = 2;
+    private const int DiagnosticLineQualityScore = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
+    private const int DiagnosticColumnQualityScore = CoordinateSuffixTrimLength;
     private const int RepeatedStringThreshold = 5;
-    private const int RepeatedNumberThreshold = 4;
+    private const int RepeatedNumberThreshold = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
     private const int MaxSuppressionFindingsPerFile = 5;
 
-    private const int LinkerCodePrefixLength = 4;
+    private const int LinkerCodePrefixLength = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
     private const string SeverityKey = "severity";
     private const string CodeKey = "code";
     private const string ProjectKey = "project";
@@ -88,7 +94,8 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private const string BP1010HelpUri = "https://docs.python.org/3/reference/compound_stmts.html#function-definitions";
     private const string BP1011HelpUri = "https://peps.python.org/pep-0008/#imports";
 
-    private static readonly HashSet<string> BestPracticeCodeExtensions = new(StringComparer.OrdinalIgnoreCase) { ".cs", ".vb", ".fs", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".py" };
+    private static readonly string[] BestPracticeCodeExtensionValues = [".cs", ".vb", ".fs", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".py"];
+    private static readonly HashSet<string> BestPracticeCodeExtensions = new(BestPracticeCodeExtensionValues, StringComparer.OrdinalIgnoreCase);
     private static readonly string[] IgnoredBestPracticePathFragments = ["\\.vs\\", "\\bin\\", "\\obj\\", "\\output\\"];
     private static readonly string[] BuildOutputPaneNames = ["Build", "Build Order"];
     private static readonly string[] BestPracticeTableColumns =
@@ -144,7 +151,8 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         bool waitForIntellisense,
         int timeoutMilliseconds,
         bool quickSnapshot = false,
-        ErrorListQuery? query = null)
+        ErrorListQuery? query = null,
+        bool includeBuildOutputFallback = false)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
@@ -172,7 +180,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
                 rows = [];
             }
 
-            if (rows.Count == 0)
+            if (includeBuildOutputFallback && rows.Count == 0)
             {
                 rows = ReadBuildOutputRows(context.Dte);
             }
@@ -180,11 +188,16 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         else
         {
             rows = await WaitForRowsAsync(context, timeoutMilliseconds, intellisenseReady: waitForIntellisense).ConfigureAwait(true);
-            if (rows.Count == 0)
+            if (includeBuildOutputFallback && rows.Count == 0)
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
                 rows = ReadBuildOutputRows(context.Dte);
             }
+        }
+
+        if (!includeBuildOutputFallback)
+        {
+            rows = ExcludeBuildOutputRows(rows);
         }
 
         if (!quickSnapshot)
@@ -697,15 +710,11 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             _bestPracticeProvider.Refresh();
         }
 
+        // Keep the custom table source empty so stale rows do not linger, but use ErrorTask
+        // publishing for live best-practice diagnostics because it already supports navigation.
         if (TryEnsureBestPracticeTableSource() && _bestPracticeTableSource is not null)
         {
-            _bestPracticeTableSource.UpdateRows(rows);
-            if (rows.Count > 0)
-            {
-                ShowErrorListWindow(dte);
-            }
-
-            return;
+            _bestPracticeTableSource.UpdateRows([]);
         }
 
         _bestPracticeProvider.Tasks.Clear();
@@ -827,7 +836,12 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         return [.. rows
             .Concat(additionalRows)
             .GroupBy(CreateDiagnosticIdentity, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())];
+            .Select(SelectPreferredDiagnosticRow)];
+    }
+
+    private static IReadOnlyList<JObject> ExcludeBuildOutputRows(IReadOnlyList<JObject> rows)
+    {
+        return [.. rows.Where(row => !string.Equals((string?)row[SourceKey], "build-output", StringComparison.OrdinalIgnoreCase))];
     }
 
     private static int GetLineNumber(string content, int index)
@@ -930,7 +944,12 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             var item = items.Item(i);
             var severity = MapSeverity(item.ErrorLevel);
             var description = item.Description ?? string.Empty;
-            var code = InferCode(description, item.Project ?? string.Empty, item.FileName ?? string.Empty, item.Line);
+            var project = item.Project ?? string.Empty;
+            var file = item.FileName ?? string.Empty;
+            var line = item.Line;
+            var column = item.Column;
+            NormalizeBuildOutputLocation(ref file, ref line, ref column);
+            var code = InferCode(description, project, file, line);
             dteRows.Add(new JObject
             {
                 [SeverityKey] = severity,
@@ -938,10 +957,10 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
                 ["codeFamily"] = InferCodeFamily(code),
                 ["tool"] = InferTool(code, description),
                 ["message"] = description,
-                ["project"] = item.Project ?? string.Empty,
-                ["file"] = item.FileName ?? string.Empty,
-                ["line"] = item.Line,
-                ["column"] = item.Column,
+                ["project"] = project,
+                ["file"] = file,
+                ["line"] = line,
+                ["column"] = column,
                 ["symbols"] = new JArray(ExtractSymbols(description)),
             });
         }
@@ -1010,6 +1029,8 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         var project = GetTableString(tryGetValue, StandardTableKeyNames.ProjectName);
         var file = GetTableString(tryGetValue, StandardTableKeyNames.Path, StandardTableKeyNames.DocumentName);
         var line = GetTableCoordinate(tryGetValue, StandardTableKeyNames.Line);
+        var column = GetTableCoordinate(tryGetValue, StandardTableKeyNames.Column);
+        NormalizeBuildOutputLocation(ref file, ref line, ref column);
         var code = GetTableString(tryGetValue, StandardTableKeyNames.ErrorCode, StandardTableKeyNames.ErrorCodeToolTip);
         if (string.IsNullOrWhiteSpace(code))
         {
@@ -1026,7 +1047,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             [ProjectKey] = project,
             [FileKey] = file,
             [LineKey] = line,
-            [ColumnKey] = GetTableCoordinate(tryGetValue, StandardTableKeyNames.Column),
+            [ColumnKey] = column,
             ["symbols"] = new JArray(ExtractSymbols(message)),
         };
     }
@@ -1152,7 +1173,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
         ActivateBuildOutputPane(dte, pane);
 
-        for (var attempt = 0; attempt < 2; attempt++)
+        for (var attempt = 0; attempt < BuildOutputReadAttemptCount; attempt++)
         {
             try
             {
@@ -1269,6 +1290,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         var file = NormalizeFilePath(match.Groups["file"].Value.Trim());
         var lineNumber = ParseOptionalInt(match.Groups["line"].Value);
         var columnNumber = ParseOptionalInt(match.Groups["column"].Value);
+        NormalizeBuildOutputLocation(ref file, ref lineNumber, ref columnNumber);
         var code = NormalizeCode(match.Groups["code"].Value, description, project, file, lineNumber);
 
         row = new JObject
@@ -1310,6 +1332,52 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             // so diagnostics still flow without failing the entire error-list request.
             return value;
         }
+    }
+
+    private static void NormalizeBuildOutputLocation(ref string file, ref int lineNumber, ref int columnNumber)
+    {
+        if (lineNumber > 0 && columnNumber > 0)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(file) || !file.EndsWith(")", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var openParenIndex = file.LastIndexOf('(');
+        if (openParenIndex <= 0 || openParenIndex >= file.Length - 1)
+        {
+            return;
+        }
+
+        var coordinates = file.Substring(openParenIndex + 1, file.Length - openParenIndex - CoordinateSuffixTrimLength).Split(',');
+        if (coordinates.Length < 1 || coordinates.Length > MaximumBuildOutputCoordinateCount)
+        {
+            return;
+        }
+
+        if (!int.TryParse(coordinates[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedLine))
+        {
+            return;
+        }
+
+        var parsedColumn = 1;
+        if (coordinates.Length > 1 && !int.TryParse(coordinates[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out parsedColumn))
+        {
+            return;
+        }
+
+        var normalizedFile = NormalizeFilePath(file.Substring(0, openParenIndex));
+        if (string.IsNullOrWhiteSpace(normalizedFile))
+        {
+            return;
+        }
+
+        file = normalizedFile;
+        lineNumber = parsedLine;
+        columnNumber = parsedColumn;
     }
 
     private static int ParseOptionalInt(string value)
@@ -1483,9 +1551,11 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     {
         var symbols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (Match match in Regex.Matches(description, "\"([^\"]+)\"|'([^']+)'"))
+        foreach (Match match in Regex.Matches(description, "\"(?<doubleQuoted>[^\"]+)\"|'(?<singleQuoted>[^']+)'"))
         {
-            var value = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+            var value = match.Groups["doubleQuoted"].Success
+                ? match.Groups["doubleQuoted"].Value
+                : match.Groups["singleQuoted"].Value;
             if (LooksLikeSymbol(value))
             {
                 symbols.Add(value);
@@ -1506,7 +1576,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
     private static bool LooksLikeSymbol(string value)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Length < 2)
+        if (string.IsNullOrWhiteSpace(value) || value.Length < MinimumSymbolLength)
         {
             return false;
         }
@@ -1581,13 +1651,61 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
     private static string CreateDiagnosticIdentity(JObject row)
     {
+        var file = GetRowString(row, FileKey);
+        var line = GetNullableRowInt(row, LineKey) ?? 0;
+        var column = GetNullableRowInt(row, ColumnKey) ?? 0;
+        NormalizeBuildOutputLocation(ref file, ref line, ref column);
+
         return string.Join(
             "|",
             GetRowString(row, SeverityKey),
             GetRowString(row, CodeKey),
-            GetRowString(row, FileKey),
-            (GetNullableRowInt(row, LineKey) ?? 0).ToString(CultureInfo.InvariantCulture),
+            file,
+            line.ToString(CultureInfo.InvariantCulture),
             GetRowString(row, MessageKey));
+    }
+
+    private static JObject SelectPreferredDiagnosticRow(IGrouping<string, JObject> group)
+    {
+        return group
+            .OrderByDescending(GetDiagnosticLocationQuality)
+            .First();
+    }
+
+    private static int GetDiagnosticLocationQuality(JObject row)
+    {
+        var file = GetRowString(row, FileKey);
+        var line = GetNullableRowInt(row, LineKey) ?? 0;
+        var column = GetNullableRowInt(row, ColumnKey) ?? 0;
+        NormalizeBuildOutputLocation(ref file, ref line, ref column);
+
+        var score = 0;
+        if (!string.IsNullOrWhiteSpace(file))
+        {
+            score += 1;
+        }
+
+        if (line > 0)
+        {
+            score += DiagnosticLineQualityScore;
+        }
+
+        if (column > 0)
+        {
+            score += DiagnosticColumnQualityScore;
+        }
+
+        if (!string.IsNullOrWhiteSpace(GetRowString(row, HelpUriKey)))
+        {
+            score += 1;
+        }
+
+        if (!string.Equals(GetRowString(row, SourceKey), "build-output", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 1;
+        }
+
+        return score;
     }
 
     private static string GetRowString(JObject row, string key)
@@ -1638,7 +1756,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             return [];
         }
 
-        return new JArray(rows
+        var groups = rows
             .GroupBy(keySelector, StringComparer.OrdinalIgnoreCase)
             .Where(group => !string.IsNullOrWhiteSpace(group.Key))
             .OrderByDescending(group => group.Count())
@@ -1651,7 +1769,9 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
                 ["sampleMessage"] = (string?)group.First()["message"] ?? string.Empty,
                 ["sampleFile"] = (string?)group.First()["file"] ?? string.Empty,
                 ["sampleCode"] = (string?)group.First()["code"] ?? string.Empty,
-            }));
+            });
+
+        return [.. groups];
     }
 
     private sealed class ErrorTableCollector : ITableDataSink, IDisposable
@@ -1685,7 +1805,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
             return [.. rows
                 .GroupBy(CreateDiagnosticIdentity, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())];
+                .Select(SelectPreferredDiagnosticRow)];
         }
 
         public void AddEntries(IReadOnlyList<ITableEntry> newEntries, bool removeAllEntries)

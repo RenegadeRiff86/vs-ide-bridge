@@ -86,6 +86,7 @@ internal static partial class CliApp
         public const string Line = "line";
         public const string MatchCase = "match-case";
         public const string Max = "max";
+        public const string MaxQueriesPerChunk = "max-queries-per-chunk";
         public const string MaxDepth = "max-depth";
         public const string MaxFrames = "max-frames";
         public const string MaxResults = "max-results";
@@ -96,6 +97,7 @@ internal static partial class CliApp
         public const string Platform = "platform";
         public const string Project = "project";
         public const string Query = "query";
+        public const string Queries = "queries";
         public const string Quick = "quick";
         public const string Ranges = "ranges";
         public const string RangesFile = "ranges-file";
@@ -123,6 +125,7 @@ internal static partial class CliApp
         public const string DocumentSlice = "document-slice";
         public const string DocumentSlices = "document-slices";
         public const string Errors = "errors";
+        public const string FindTextBatch = "find-text-batch";
         public const string PeekDefinition = "peek-definition";
         public const string Ready = "ready";
         public const string SearchSymbols = "search-symbols";
@@ -192,6 +195,18 @@ internal static partial class CliApp
                 builder.Add(Args.Project, cli.GetValue(Args.Project));
                 builder.Add(Args.Path, cli.GetValue(Args.Path));
                 builder.Add(Args.ResultsWindow, cli.GetValue(Args.ResultsWindow));
+                builder.AddFlag(Args.MatchCase, cli.GetFlag(Args.MatchCase));
+                builder.AddFlag(Args.WholeWord, cli.GetFlag(Args.WholeWord));
+                builder.AddFlag(Args.Regex, cli.GetFlag(Args.Regex));
+            }),
+            Cmds.FindTextBatch => await RunStructuredCommandAsync(Cmds.FindTextBatch, options, static (builder, cli) =>
+            {
+                builder.AddRequired(Args.Queries, cli.GetValue(Args.Queries));
+                builder.Add(Args.Scope, cli.GetValue(Args.Scope));
+                builder.Add(Args.Project, cli.GetValue(Args.Project));
+                builder.Add(Args.Path, cli.GetValue(Args.Path));
+                builder.Add(Args.ResultsWindow, cli.GetValue(Args.ResultsWindow));
+                builder.Add(Args.MaxQueriesPerChunk, cli.GetValue(Args.MaxQueriesPerChunk));
                 builder.AddFlag(Args.MatchCase, cli.GetFlag(Args.MatchCase));
                 builder.AddFlag(Args.WholeWord, cli.GetFlag(Args.WholeWord));
                 builder.AddFlag(Args.Regex, cli.GetFlag(Args.Regex));
@@ -1191,6 +1206,7 @@ internal static partial class CliApp
             Cmds.BuildErrors => CombineHelpWithCommandMetadata(Cmds.BuildErrors, HelpText.BuildErrors),
             "find-files" => CombineHelpWithCommandMetadata("find-files", HelpText.FindFiles),
             "find-text" => CombineHelpWithCommandMetadata("find-text", HelpText.FindText),
+            Cmds.FindTextBatch => CombineHelpWithCommandMetadata(Cmds.FindTextBatch, HelpText.FindTextBatch),
             "open-document" => CombineHelpWithCommandMetadata("open-document", HelpText.OpenDocument),
             "list-documents" => CombineHelpWithCommandMetadata("list-documents", HelpText.ListDocuments),
             "list-tabs" => CombineHelpWithCommandMetadata("list-tabs", HelpText.ListTabs),
@@ -1293,6 +1309,7 @@ internal static class HelpText
           catalog         List bridge commands from the live IDE
           find-files      Find files by name
           find-text       Find text with optional subtree filtering
+          find-text-batch Find text for multiple queries in one call
           goto-definition Jump to one definition
           peek-definition Get definition context without leaving the source location
           goto-implementation Jump to one implementation
@@ -1378,6 +1395,7 @@ internal static class HelpText
           vs-ide-bridge help activate-window
           vs-ide-bridge help close-file
           vs-ide-bridge help apply-diff
+          vs-ide-bridge help find-text-batch
           vs-ide-bridge help send
           vs-ide-bridge help batch
         """;
@@ -1700,6 +1718,34 @@ internal static class HelpText
         Examples
           vs-ide-bridge find-text --instance <instanceId> --query OnInit
           vs-ide-bridge find-text --instance <instanceId> --query OnInit --path src\libslic3r
+        """;
+
+    public const string FindTextBatch =
+        """
+        find-text-batch
+
+        Purpose
+          Search text for multiple queries in one bridge request.
+
+        Required
+          --queries <json-array>
+
+        Optional
+          --path <subdir>
+          --scope solution|project|document|open
+          --project <name>
+          --results-window <n>
+          --max-queries-per-chunk <n>
+          --match-case
+          --whole-word
+          --regex
+
+        Notes
+          The bridge splits large query sets into internal chunks. The default chunk size is 5 queries.
+
+        Examples
+          vs-ide-bridge find-text-batch --instance <instanceId> --queries "[\"OnInit\",\"RunAsync\",\"BridgeHealth\"]"
+          vs-ide-bridge find-text-batch --instance <instanceId> --queries "[\"OnInit\",\"RunAsync\",\"BridgeHealth\",\"McpServer\",\"ToolHelp\",\"BuildFindTextArgs\"]" --max-queries-per-chunk 5 --path src\VsIdeBridgeCli
         """;
 
     public const string OpenDocument =

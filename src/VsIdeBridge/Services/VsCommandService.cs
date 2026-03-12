@@ -187,8 +187,9 @@ internal sealed class VsCommandService
         {
             return dte.Commands.Item(commandName, 0);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine(ex);
         }
 
         return dte.Commands

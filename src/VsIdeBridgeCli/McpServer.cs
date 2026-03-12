@@ -43,7 +43,9 @@ internal static partial class CliApp
         private const int HeaderTerminatorLength = 4;
         private const string LineArgumentName = "line";
         private const string MaxArgumentName = "max";
+        private const string MatchCaseArgumentName = "match_case";
         private const string NameArgumentName = "name";
+        private const string OptionalProjectFilterDescription = "Optional project filter.";
         private const string PathArgumentName = "path";
         private const string PlatformArgumentName = "platform";
         private const string ProjectArgumentName = "project";
@@ -54,8 +56,10 @@ internal static partial class CliApp
         private const string SampleCliProjectPath = "src\\VsIdeBridgeCli\\VsIdeBridgeCli.csproj";
         private const string QueryArgumentName = "query";
         private const string QuickArgumentName = "quick";
+        private const string UiSettingsToolName = "ui_settings";
         private const int RawJsonInitialDepth = 1;
         private const string ApplyDiffToolName = "apply_diff";
+        private const string BridgeApprovalCommandName = "Tools.VsIdeBridgeRequestApproval";
         private const string CondaExecutableName = "conda";
         private const string DescriptionPropertyName = "description";
         private const string AbsoluteOrSolutionRelativeFilePathDescription = "Absolute or solution-relative file path.";
@@ -666,6 +670,7 @@ internal static partial class CliApp
         private static JsonArray ListTools() =>
         [
             Tool("state", "Capture current Visual Studio bridge state.", EmptySchema()),
+            Tool(UiSettingsToolName, "Read current IDE Bridge UI/security settings. This is read-only and does not change them.", EmptySchema()),
             Tool("ready", "Wait for Visual Studio/IntelliSense readiness before semantic diagnostics.", EmptySchema()),
             Tool(
                 ToolHelpToolName,
@@ -698,7 +703,7 @@ internal static partial class CliApp
                     OptionalBooleanProperty("quick", "Read current snapshot immediately without stability polling (default false)."),
                     OptionalIntegerProperty("max", "Optional max rows."),
                     OptionalStringProperty("code", "Optional diagnostic code prefix filter."),
-                    OptionalStringProperty("project", "Optional project filter."),
+                    OptionalStringProperty("project", OptionalProjectFilterDescription),
                     OptionalStringProperty("path", "Optional path filter."),
                     OptionalStringProperty("text", "Optional message text filter."),
                     OptionalStringProperty("group_by", "Optional grouping mode."),
@@ -712,7 +717,7 @@ internal static partial class CliApp
                     OptionalBooleanProperty("quick", "Read current snapshot immediately without stability polling (default false)."),
                     OptionalIntegerProperty("max", "Optional max rows."),
                     OptionalStringProperty("code", "Optional diagnostic code prefix filter."),
-                    OptionalStringProperty("project", "Optional project filter."),
+                    OptionalStringProperty("project", OptionalProjectFilterDescription),
                     OptionalStringProperty("path", "Optional path filter."),
                     OptionalStringProperty("text", "Optional message text filter."),
                     OptionalStringProperty("group_by", "Optional grouping mode."),
@@ -736,16 +741,29 @@ internal static partial class CliApp
                     OptionalIntegerProperty("max_results", $"Optional max result count (default {DefaultLargeMaxCount})."),
                     OptionalBooleanProperty("include_non_project", "Include disk files under solution root that are not in projects (default true)."))),
             Tool(
+                "find_text_batch",
+                "Find text for multiple queries in one bridge round-trip, internally chunked when needed.",
+                ObjectSchema(
+                    RequiredStringArrayProperty("queries", "Queries to search for in order."),
+                    OptionalStringProperty("scope", "Optional scope: solution, project, document, or open."),
+                    OptionalStringProperty("project", OptionalProjectFilterDescription),
+                    OptionalStringProperty("path", "Optional path or directory filter."),
+                    OptionalIntegerProperty("results_window", "Optional Find Results window number."),
+                    OptionalIntegerProperty("max_queries_per_chunk", "Optional max query count per internal chunk (default 5)."),
+                    OptionalBooleanProperty(MatchCaseArgumentName, "Case-sensitive match (default false)."),
+                    OptionalBooleanProperty("whole_word", "Match whole word only (default false)."),
+                    OptionalBooleanProperty("regex", "Treat queries as regular expressions (default false)."))),
+            Tool(
                 "search_symbols",
                 "Search symbol definitions by name across solution scope.",
                 ObjectSchema(
                     RequiredStringProperty("query", "Symbol search text."),
                     OptionalStringProperty("kind", "Optional symbol kind filter."),
                     OptionalStringProperty("scope", "Optional scope: solution, project, document, or open."),
-                    OptionalStringProperty("project", "Optional project filter."),
+                    OptionalStringProperty("project", OptionalProjectFilterDescription),
                     OptionalStringProperty("path", "Optional path or directory filter."),
                     OptionalIntegerProperty("max", "Optional max result count."),
-                    OptionalBooleanProperty("match_case", "Case-sensitive match (default false)."))),
+                    OptionalBooleanProperty(MatchCaseArgumentName, "Case-sensitive match (default false)."))),
             Tool(
                 "count_references",
                 "Count symbol references at file/line/column with exact-or-explicit semantics.",
@@ -1013,7 +1031,7 @@ internal static partial class CliApp
                     OptionalBooleanProperty("yes", "Auto-confirm remove (default true)."))),
             Tool(
                 "shell_exec",
-                "Execute a process and capture its stdout, stderr, and exit code. Working directory defaults to the solution directory.",
+                "Execute a process and capture its stdout, stderr, and exit code. Working directory defaults to the solution directory. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Shell Exec is enabled.",
                 ObjectSchema(
                     RequiredStringProperty("exe", "Executable path or name (e.g. 'powershell', 'cmd', 'ISCC.exe')."),
                     OptionalStringProperty("args", "Arguments string to pass to the executable."),
@@ -1021,7 +1039,7 @@ internal static partial class CliApp
                     OptionalIntegerProperty(TimeoutMillisecondsArgumentName, "Timeout in milliseconds (default 60000)."))),
             Tool(
                 "set_version",
-                "Update the version string across all version files (Directory.Build.props, source.extension.vsixmanifest, and installer/inno/vs-ide-bridge.iss). Keeps every version location in sync.",
+                "Update the version string across all version files (Directory.Build.props, source.extension.vsixmanifest, and installer/inno/vs-ide-bridge.iss). Keeps every version location in sync. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Edits is enabled.",
                 ObjectSchema(
                     RequiredStringProperty("version", "New version string, e.g. '2.1.0'."))),
             Tool(
@@ -1049,9 +1067,9 @@ internal static partial class CliApp
                     RequiredStringProperty(QueryArgumentName, "Search text or regex pattern."),
                     OptionalStringProperty(PathArgumentName, "Optional path or directory filter (solution-relative or absolute)."),
                     OptionalStringProperty("scope", "Scope: solution (default), project, or document."),
-                    OptionalStringProperty(ProjectArgumentName, "Optional project filter."),
+                    OptionalStringProperty(ProjectArgumentName, OptionalProjectFilterDescription),
                     OptionalIntegerProperty("results_window", "Optional Find Results window number."),
-                    OptionalBooleanProperty("match_case", "Case-sensitive match (default false)."),
+                    OptionalBooleanProperty(MatchCaseArgumentName, "Case-sensitive match (default false)."),
                     OptionalBooleanProperty("whole_word", "Match whole word only (default false)."),
                     OptionalBooleanProperty("regex", "Treat query as a regular expression (default false)."))),
             Tool(
@@ -1065,6 +1083,21 @@ internal static partial class CliApp
                     OptionalIntegerProperty("context_before", "Lines before anchor (default 10)."),
                     OptionalIntegerProperty("context_after", "Lines after anchor (default 30)."),
                     OptionalBooleanProperty("reveal_in_editor", "Whether to reveal the slice in the editor (default true)."))),
+            Tool(
+                "read_file_batch",
+                "Read multiple file slices in one bridge request. Each range may use start_line/end_line or line with context_before/context_after.",
+                ObjectSchema(
+                    ("ranges", ArraySchema(
+                        "Ranges to read in order.",
+                        ObjectSchema(
+                            RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
+                            OptionalIntegerProperty("start_line", "First 1-based line to read. Use with end_line for a range."),
+                            OptionalIntegerProperty("end_line", "Last 1-based line to read (inclusive). Use with start_line."),
+                            OptionalIntegerProperty(LineArgumentName, "Anchor 1-based line. Use with context_before/context_after."),
+                            OptionalIntegerProperty("context_before", "Lines before anchor when line is used."),
+                            OptionalIntegerProperty("context_after", "Lines after anchor when line is used.")),
+                        minItems: 1),
+                     true))),
             Tool(
                 "find_references",
                 "Find all references to the symbol at file/line/column using VS IntelliSense.",
@@ -1354,12 +1387,14 @@ internal static partial class CliApp
             var (command, commandArgs) = toolName switch
             {
                 "state" => ("state", string.Empty),
+                UiSettingsToolName => ("ui-settings", string.Empty),
                 "ready" => ("ready", string.Empty),
                 "errors" => ("errors", BuildDiagnosticsArgs(args)),
                 WarningsToolName => (WarningsToolName, BuildDiagnosticsArgs(args)),
                 "list_tabs" => ("list-tabs", string.Empty),
                 "open_file" => ("open-document", BuildOpenFileArgs(args)),
                 "find_files" => ("find-files", BuildFindFilesArgs(args)),
+                "find_text_batch" => ("find-text-batch", BuildFindTextBatchArgs(args)),
                 "search_symbols" => ("search-symbols", BuildSearchSymbolsArgs(args)),
                 "count_references" => ("count-references", BuildCountReferencesArgs(args)),
                 "quick_info" => ("quick-info", BuildFileLineColumnArgs(args)),
@@ -1389,6 +1424,7 @@ internal static partial class CliApp
                 "set_build_configuration" => ("set-build-configuration", BuildConfigurationPlatformArgs(args)),
                 "find_text" => ("find-text", BuildFindTextArgs(args)),
                 "read_file" => ("document-slice", BuildReadFileArgs(args)),
+                "read_file_batch" => ("document-slices", BuildReadFileBatchArgs(args)),
                 "find_references" => ("find-references", BuildFileLineColumnArgs(args)),
                 "peek_definition" => ("peek-definition", BuildFileLineColumnArgs(args)),
                 "file_outline" => ("file-outline", BuildSingleStringSwitchArg(args, FileArgumentName, FileArgumentName)),
@@ -1583,6 +1619,84 @@ internal static partial class CliApp
             };
         }
 
+        private static async Task<JsonObject> RequestBridgeApprovalAsync(
+            JsonNode? id,
+            BridgeBinding bridgeBinding,
+            string operation,
+            string? subject,
+            string? details)
+        {
+            var approvalArgs = BuildArgs(
+                ("operation", operation),
+                ("subject", subject),
+                ("details", details));
+            return await SendBridgeAsync(id, bridgeBinding, BridgeApprovalCommandName, approvalArgs).ConfigureAwait(false);
+        }
+
+        private static void AttachApprovalMetadata(JsonObject payload, JsonObject approvalResponse)
+        {
+            if (approvalResponse["Data"] is not JsonObject approvalData)
+            {
+                return;
+            }
+
+            payload["approval"] = approvalData["approval"]?.DeepClone();
+            payload["approvalChoice"] = approvalData["approvalChoice"]?.DeepClone();
+            payload["approvalOperation"] = approvalData["operation"]?.DeepClone();
+            payload["approvalPromptShown"] = approvalData["promptShown"]?.DeepClone();
+            payload["approvalPersistentSettingEnabled"] = approvalData["persistentSettingEnabled"]?.DeepClone();
+            payload["approvalResultCode"] = approvalData["resultCode"]?.DeepClone();
+        }
+
+        private static JsonObject BuildApprovalFailurePayload(JsonObject approvalResponse)
+        {
+            var payload = new JsonObject
+            {
+                ["success"] = false,
+                ["message"] = approvalResponse["Summary"]?.GetValue<string>() ?? "Bridge approval was denied.",
+                ["bridgeResponse"] = approvalResponse.DeepClone(),
+            };
+
+            if (approvalResponse["Error"] is JsonObject error)
+            {
+                payload["error"] = error.DeepClone();
+                payload["errorCode"] = error["code"]?.DeepClone();
+                payload["errorDetails"] = error["details"]?.DeepClone();
+                if (error["details"] is JsonObject errorDetails)
+                {
+                    payload["approvalChoice"] = errorDetails["approvalChoice"]?.DeepClone();
+                    payload["approvalPromptShown"] = errorDetails["promptShown"]?.DeepClone();
+                    payload["approvalPersistentSettingEnabled"] = errorDetails["persistentSettingEnabled"]?.DeepClone();
+                    payload["approvalResultCode"] = errorDetails["resultCode"]?.DeepClone();
+                }
+            }
+
+            if (approvalResponse["Data"] is JsonNode data)
+            {
+                payload["context"] = data.DeepClone();
+            }
+
+            return payload;
+        }
+
+        private static string BuildShellExecApprovalDetails(string arguments, string workingDirectory, int timeoutMs)
+        {
+            var detailBuilder = new StringBuilder();
+            detailBuilder.Append("cwd=").Append(workingDirectory);
+            detailBuilder.Append(", timeoutMs=").Append(timeoutMs);
+            if (!string.IsNullOrWhiteSpace(arguments))
+            {
+                detailBuilder.Append(", args=").Append(arguments);
+            }
+
+            return detailBuilder.ToString();
+        }
+
+        private static string BuildSetVersionApprovalDetails(string version)
+        {
+            return $"Update Directory.Build.props, src/VsIdeBridge/source.extension.vsixmanifest, and installer/inno/vs-ide-bridge.iss to version {version}.";
+        }
+
         private static string GetToolExample(string name, JsonObject inputSchema)
         {
             var overrideExample = name switch
@@ -1677,6 +1791,7 @@ internal static partial class CliApp
             {
                 "help" => "help",
                 "state" => "state",
+                UiSettingsToolName => "ui-settings",
                 "ready" => "ready",
                 "errors" => "errors",
                 "warnings" => "warnings",
@@ -1697,7 +1812,9 @@ internal static partial class CliApp
                 "build_configurations" => "build-configurations",
                 "set_build_configuration" => "set-build-configuration",
                 "find_text" => "find-text",
+                "find_text_batch" => "find-text-batch",
                 "read_file" => "document-slice",
+                "read_file_batch" => "document-slices",
                 "find_references" => "find-references",
                 "peek_definition" => "quick-info",
                 "file_outline" => "file-outline",
@@ -1952,7 +2069,7 @@ internal static partial class CliApp
             var name = p?["name"]?.GetValue<string>() ?? throw new McpRequestException(id, JsonRpcInvalidParamsCode, "prompts/get missing name.");
             var text = name switch
             {
-                "help" => "Key tools: bind_solution or bind_instance to connect, open_solution to load a .sln, state/ready/bridge_health for status. Navigation: find_files, find_text, open_file, search_symbols, count_references, quick_info, read_file, find_references, peek_definition, file_outline, goto_definition, goto_implementation, call_hierarchy. Editing: apply_diff (optionally post_check). Documents: list_documents, activate_document, close_document, save_document, close_file, close_others. Windows: list_windows, activate_window. Diagnostics: errors, warnings, diagnostics_snapshot, build (pre-build diagnostics auto-included), build_errors, build_configurations, set_build_configuration. Dependencies: nuget_restore, nuget_add_package, nuget_remove_package, conda_install, conda_remove. Debug: debug_threads, debug_stack, debug_locals, debug_modules, debug_watch, debug_exceptions. Use tool_help for per-tool schemas and examples.",
+                "help" => "Key tools: bind_solution or bind_instance to connect, open_solution to load a .sln, state/ready/bridge_health for status. Navigation: find_files, find_text, find_text_batch, open_file, search_symbols, count_references, quick_info, read_file, find_references, peek_definition, file_outline, goto_definition, goto_implementation, call_hierarchy. Editing: apply_diff (optionally post_check). Documents: list_documents, activate_document, close_document, save_document, close_file, close_others. Windows: list_windows, activate_window. Diagnostics: errors, warnings, diagnostics_snapshot, build (pre-build diagnostics auto-included), build_errors, build_configurations, set_build_configuration. Dependencies: nuget_restore, nuget_add_package, nuget_remove_package, conda_install, conda_remove. Debug: debug_threads, debug_stack, debug_locals, debug_modules, debug_watch, debug_exceptions. Use tool_help for per-tool schemas and examples.",
                 "fix_current_errors" => "Bind to the right solution first, call errors to list problems. Use read_file or find_text to inspect code, quick_info and find_references for context, then apply_diff to fix.",
                 "open_solution_and_wait_ready" => "Call open_solution with the absolute .sln path and wait_for_ready=true (default). Then call state or bridge_health.",
                 "git_review_before_commit" => "Call git_status, git_diff_unstaged, git_diff_staged, git_log, then git_add and git_commit when ready.",
@@ -2195,7 +2312,7 @@ internal static partial class CliApp
                 (ProjectArgumentName, project),
                 (PathArgumentName, path),
                 (MaxArgumentName, max),
-                .. BuildBooleanArgs(args, ("match-case", "match_case", false, false)),
+                .. BuildBooleanArgs(args, ("match-case", MatchCaseArgumentName, false, false)),
             ]);
         }
 
@@ -2324,7 +2441,24 @@ internal static partial class CliApp
                 (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)),
                 ("results-window", GetOptionalArgumentText(args, "results_window")),
                 .. BuildBooleanArgs(args,
-                    ("match-case", "match_case", false, false),
+                    ("match-case", MatchCaseArgumentName, false, false),
+                    ("whole-word", "whole_word", false, false),
+                    ("regex", "regex", false, false)),
+            ]);
+        }
+
+        private static string BuildFindTextBatchArgs(JsonObject? args)
+        {
+            return BuildArgs(
+            [
+                ("queries", args?["queries"]?.ToJsonString(JsonOptions)),
+                (PathArgumentName, GetOptionalStringArgument(args, PathArgumentName)),
+                ("scope", GetOptionalStringArgument(args, "scope")),
+                (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)),
+                ("results-window", GetOptionalArgumentText(args, "results_window")),
+                ("max-queries-per-chunk", GetOptionalArgumentText(args, "max_queries_per_chunk")),
+                .. BuildBooleanArgs(args,
+                    ("match-case", MatchCaseArgumentName, false, false),
                     ("whole-word", "whole_word", false, false),
                     ("regex", "regex", false, false)),
             ]);
@@ -2342,6 +2476,55 @@ internal static partial class CliApp
                 ("context-after", GetOptionalArgumentText(args, "context_after")),
                 .. BuildBooleanArgs(args, ("reveal-in-editor", "reveal_in_editor", true, true)),
             ]);
+        }
+
+        private static string BuildReadFileBatchArgs(JsonObject? args)
+        {
+            return BuildArgs(
+            [
+                ("ranges", BuildReadRangesJson(args?["ranges"] as JsonArray)),
+            ]);
+        }
+
+        private static string? BuildReadRangesJson(JsonArray? ranges)
+        {
+            if (ranges is null || ranges.Count == 0)
+            {
+                return null;
+            }
+
+            var normalized = new JsonArray();
+            foreach (var token in ranges)
+            {
+                if (token is not JsonObject range)
+                {
+                    continue;
+                }
+
+                var normalizedRange = new JsonObject();
+                AddOptionalProperty(normalizedRange, FileArgumentName, GetOptionalNodeClone(range, FileArgumentName));
+                AddOptionalProperty(normalizedRange, LineArgumentName, GetOptionalNodeClone(range, LineArgumentName));
+                AddOptionalProperty(normalizedRange, "startLine", GetOptionalNodeClone(range, "start_line"));
+                AddOptionalProperty(normalizedRange, "endLine", GetOptionalNodeClone(range, "end_line"));
+                AddOptionalProperty(normalizedRange, "contextBefore", GetOptionalNodeClone(range, "context_before"));
+                AddOptionalProperty(normalizedRange, "contextAfter", GetOptionalNodeClone(range, "context_after"));
+                normalized.Add(normalizedRange);
+            }
+
+            return normalized.ToJsonString(JsonOptions);
+        }
+
+        private static JsonNode? GetOptionalNodeClone(JsonObject source, string name)
+        {
+            return source.TryGetPropertyValue(name, out var value) ? value?.DeepClone() : null;
+        }
+
+        private static void AddOptionalProperty(JsonObject target, string name, JsonNode? value)
+        {
+            if (value is not null)
+            {
+                target[name] = value;
+            }
         }
 
         private static (string Name, string? Value)[] BuildBooleanArgs(JsonObject? args, params (string SwitchName, string ArgumentName, bool DefaultValue, bool EmitFalse)[] specs)
@@ -2471,6 +2654,23 @@ internal static partial class CliApp
             },
         };
 
+        private static JsonObject ArraySchema(string description, JsonObject itemSchema, int? minItems = null)
+        {
+            var schema = new JsonObject
+            {
+                ["type"] = "array",
+                [DescriptionPropertyName] = description,
+                ["items"] = itemSchema,
+            };
+
+            if (minItems.HasValue)
+            {
+                schema["minItems"] = minItems.Value;
+            }
+
+            return schema;
+        }
+
         private static async Task<JsonNode> CallGitToolAsync(JsonNode? id, string toolName, JsonObject? args, BridgeBinding bridgeBinding)
         {
             var workingDirectory = await ResolveSolutionWorkingDirectoryAsync(id, bridgeBinding).ConfigureAwait(false);
@@ -2547,7 +2747,19 @@ internal static partial class CliApp
                 ? cwdArg
                 : await ResolveSolutionWorkingDirectoryAsync(id, bridgeBinding).ConfigureAwait(false);
 
+            var approvalResponse = await RequestBridgeApprovalAsync(
+                id,
+                bridgeBinding,
+                operation: "shell_exec",
+                subject: exe,
+                details: BuildShellExecApprovalDetails(arguments, workingDirectory, timeoutMs)).ConfigureAwait(false);
+            if (!ResponseFormatter.IsSuccess(approvalResponse))
+            {
+                return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
+            }
+
             var result = await RunProcessAsync(exe, arguments, workingDirectory, timeoutMs).ConfigureAwait(false);
+            AttachApprovalMetadata(result, approvalResponse);
             return WrapToolResult(result, !(result["success"]?.GetValue<bool>() ?? false));
         }
 
@@ -2555,6 +2767,17 @@ internal static partial class CliApp
         {
             var version = GetRequiredString(args, id, "version");
             var solutionDir = await ResolveSolutionWorkingDirectoryAsync(id, bridgeBinding).ConfigureAwait(false);
+
+            var approvalResponse = await RequestBridgeApprovalAsync(
+                id,
+                bridgeBinding,
+                operation: "edit",
+                subject: "Update synced bridge version files.",
+                details: BuildSetVersionApprovalDetails(version)).ConfigureAwait(false);
+            if (!ResponseFormatter.IsSuccess(approvalResponse))
+            {
+                return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
+            }
 
             var updatedFiles = new JsonArray();
 
@@ -2593,10 +2816,12 @@ internal static partial class CliApp
 
             var result = new JsonObject
             {
+                ["success"] = true,
                 ["version"] = version,
                 ["updated_files"] = updatedFiles,
                 ["file_count"] = updatedFiles.Count,
             };
+            AttachApprovalMetadata(result, approvalResponse);
             return WrapToolResult(result, isError: false);
         }
 

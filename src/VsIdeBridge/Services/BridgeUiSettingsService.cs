@@ -9,11 +9,14 @@ internal sealed class BridgeUiSettingsService
 {
     private const string CollectionPath = "VsIdeBridge";
     private const string AllowEditsKey = "AllowBridgeEdits";
+    private const string AllowShellExecKey = "AllowBridgeShellExec";
     private const string GoToEditedPartsKey = "GoToEditedParts";
     private const string BestPracticeDiagnosticsEnabledKey = "BestPracticeDiagnosticsEnabled";
 
     private readonly WritableSettingsStore? _store;
+#pragma warning disable IDE0028 // Preserving the comparer requires the explicit dictionary constructor.
     private readonly Dictionary<string, bool> _fallback = new(StringComparer.OrdinalIgnoreCase);
+#pragma warning restore IDE0028
 
     public BridgeUiSettingsService(IServiceProvider serviceProvider)
     {
@@ -36,6 +39,12 @@ internal sealed class BridgeUiSettingsService
     {
         get => ReadBoolean(AllowEditsKey, defaultValue: false);
         set => WriteBoolean(AllowEditsKey, value);
+    }
+
+    public bool AllowBridgeShellExec
+    {
+        get => ReadBoolean(AllowShellExecKey, defaultValue: false);
+        set => WriteBoolean(AllowShellExecKey, value);
     }
 
     public bool GoToEditedParts

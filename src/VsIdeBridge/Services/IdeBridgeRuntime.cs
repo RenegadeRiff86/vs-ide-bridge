@@ -19,6 +19,7 @@ internal sealed class IdeBridgeRuntime
         DocumentService documentService,
         WindowService windowService,
         VsCommandService vsCommandService,
+        BridgeApprovalService bridgeApprovalService,
         PatchService patchService,
         BreakpointService breakpointService,
         DebuggerService debuggerService,
@@ -36,6 +37,7 @@ internal sealed class IdeBridgeRuntime
         DocumentService = documentService;
         WindowService = windowService;
         VsCommandService = vsCommandService;
+        BridgeApprovalService = bridgeApprovalService;
         PatchService = patchService;
         BreakpointService = breakpointService;
         DebuggerService = debuggerService;
@@ -64,6 +66,8 @@ internal sealed class IdeBridgeRuntime
     public WindowService WindowService { get; }
 
     public VsCommandService VsCommandService { get; }
+
+    public BridgeApprovalService BridgeApprovalService { get; }
 
     public PatchService PatchService { get; }
 
@@ -110,6 +114,7 @@ internal sealed class IdeBridgeRuntime
         var failureContextService = new FailureContextService();
         var readinessService = new ReadinessService();
         var searchService = new SearchService();
+        var bridgeApprovalService = new BridgeApprovalService();
         var errorListService = new ErrorListService(package, readinessService, uiSettings);
         var buildService = new BuildService(readinessService);
         var bridgeWatchdogService = new BridgeWatchdogService(package);
@@ -126,6 +131,7 @@ internal sealed class IdeBridgeRuntime
             documentService,
             new WindowService(),
             new VsCommandService(),
+            bridgeApprovalService,
             new PatchService(),
             new BreakpointService(),
             new DebuggerService(),

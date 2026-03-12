@@ -159,7 +159,7 @@ internal sealed class FailureContextService
 
         if (containing.Count > 0)
         {
-            return new JArray(containing.Select(CloneSymbol));
+            return [.. containing.Select(CloneSymbol)];
         }
 
         var nearby = symbols
@@ -174,7 +174,7 @@ internal sealed class FailureContextService
             .Take(MaxRelevantSymbolsPerRow)
             .Select(item => CloneSymbol(item.Symbol));
 
-        return new JArray(nearby);
+        return [.. nearby];
     }
 
     private static bool ContainsLine(JObject symbol, int line)

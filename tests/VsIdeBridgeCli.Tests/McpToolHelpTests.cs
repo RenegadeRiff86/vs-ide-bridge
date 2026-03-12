@@ -18,6 +18,8 @@ public sealed class McpToolHelpTests
     private const string WaitForInstanceToolName = "wait_for_instance";
     private const string WarningsToolName = "warnings";
     private const string SearchSymbolsToolName = "search_symbols";
+    private const string FindTextBatchToolName = "find_text_batch";
+    private const string ReadFileBatchToolName = "read_file_batch";
     private const string ExecuteCommandToolName = "execute_command";
     private const string FormatDocumentToolName = "format_document";
     private const string QueryProjectItemsToolName = "query_project_items";
@@ -25,6 +27,9 @@ public sealed class McpToolHelpTests
     private const string QueryProjectConfigurationsToolName = "query_project_configurations";
     private const string QueryProjectReferencesToolName = "query_project_references";
     private const string QueryProjectOutputsToolName = "query_project_outputs";
+    private const string ShellExecToolName = "shell_exec";
+    private const string SetVersionToolName = "set_version";
+    private const string UiSettingsToolName = "ui_settings";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -80,6 +85,7 @@ public sealed class McpToolHelpTests
         string[] requiredTools =
         [
             "ready",
+            UiSettingsToolName,
             ToolHelpName,
             "help",
             "debug_threads",
@@ -109,6 +115,8 @@ public sealed class McpToolHelpTests
             QueryProjectConfigurationsToolName,
             QueryProjectReferencesToolName,
             QueryProjectOutputsToolName,
+            FindTextBatchToolName,
+            ReadFileBatchToolName,
         ];
 
         foreach (var tool in requiredTools)
@@ -160,6 +168,10 @@ public sealed class McpToolHelpTests
         AssertContainsSchemaProperty(toolMap["find_text"], "project");
         AssertContainsSchemaProperty(toolMap["find_text"], "results_window");
         AssertContainsSchemaProperty(toolMap["find_text"], "regex");
+        AssertContainsSchemaProperty(toolMap[FindTextBatchToolName], "queries");
+        AssertContainsSchemaProperty(toolMap[FindTextBatchToolName], "results_window");
+        AssertContainsSchemaProperty(toolMap[FindTextBatchToolName], "max_queries_per_chunk");
+        AssertContainsSchemaProperty(toolMap[FindTextBatchToolName], "regex");
         AssertContainsSchemaProperty(toolMap[ExecuteCommandToolName], "command");
         AssertContainsSchemaProperty(toolMap[ExecuteCommandToolName], "args");
         AssertContainsSchemaProperty(toolMap[ExecuteCommandToolName], "document");
@@ -175,6 +187,7 @@ public sealed class McpToolHelpTests
         AssertContainsSchemaProperty(toolMap[SearchSymbolsToolName], "max");
         AssertContainsSchemaProperty(toolMap[SearchSymbolsToolName], "match_case");
         AssertContainsSchemaProperty(toolMap["read_file"], "reveal_in_editor");
+        AssertContainsSchemaProperty(toolMap[ReadFileBatchToolName], "ranges");
         AssertContainsSchemaProperty(toolMap["nuget_restore"], "path");
         AssertContainsSchemaProperty(toolMap[NugetAddPackageToolName], "project");
         AssertContainsSchemaProperty(toolMap[NugetAddPackageToolName], "package");
@@ -186,10 +199,19 @@ public sealed class McpToolHelpTests
         AssertContainsSchemaProperty(toolMap[CondaInstallToolName], "yes");
         AssertContainsSchemaProperty(toolMap["conda_remove"], "packages");
         AssertContainsSchemaProperty(toolMap["conda_remove"], "yes");
+        AssertContainsSchemaProperty(toolMap[ShellExecToolName], "exe");
+        AssertContainsSchemaProperty(toolMap[ShellExecToolName], "cwd");
+        AssertContainsSchemaProperty(toolMap[ShellExecToolName], "timeout_ms");
+        AssertContainsSchemaProperty(toolMap[SetVersionToolName], "version");
+        Assert.Contains("approval", toolMap[ShellExecToolName].GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("approval", toolMap[SetVersionToolName].GetProperty("description").GetString(), StringComparison.OrdinalIgnoreCase);
 
         AssertBridgeMetadata(toolMap["state"], "state");
+        AssertBridgeMetadata(toolMap[UiSettingsToolName], "ui-settings");
         AssertBridgeMetadata(toolMap["ready"], "ready");
         AssertBridgeMetadata(toolMap[FindFilesToolName], "find-files");
+        AssertBridgeMetadata(toolMap[FindTextBatchToolName], "find-text-batch");
+        AssertBridgeMetadata(toolMap[ReadFileBatchToolName], "document-slices");
         AssertBridgeMetadata(toolMap["open_file"], "open-document");
         AssertBridgeMetadata(toolMap[CreateSolutionToolName], "create-solution");
         AssertBridgeMetadata(toolMap[ExecuteCommandToolName], "execute-command");
@@ -208,6 +230,7 @@ public sealed class McpToolHelpTests
     [InlineData("help")]
     [InlineData(ToolHelpName)]
     [InlineData("bridge_health")]
+    [InlineData(UiSettingsToolName)]
     [InlineData(VsOpenToolName)]
     [InlineData(WaitForInstanceToolName)]
     [InlineData("count_references")]
@@ -215,12 +238,16 @@ public sealed class McpToolHelpTests
     [InlineData("diagnostics_snapshot")]
     [InlineData(ExecuteCommandToolName)]
     [InlineData(FormatDocumentToolName)]
+    [InlineData(FindTextBatchToolName)]
+    [InlineData(ReadFileBatchToolName)]
     [InlineData(QueryProjectConfigurationsToolName)]
     [InlineData(QueryProjectReferencesToolName)]
     [InlineData(NugetAddPackageToolName)]
     [InlineData("nuget_remove_package")]
     [InlineData(CondaInstallToolName)]
     [InlineData("conda_remove")]
+    [InlineData(ShellExecToolName)]
+    [InlineData(SetVersionToolName)]
     public async Task ToolHelp_FocusedLookup_ReturnsSingleMatch(string toolName)
     {
         using var response = await CallToolAsync(ToolHelpName, new { name = toolName });

@@ -18,16 +18,20 @@ internal static class CommandRegistrar
 
         runtime.RegisterCommand(new IdeCoreCommands.IdeHelpMenuCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeToggleAllowBridgeEditsMenuCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeToggleAllowBridgeShellExecMenuCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeToggleGoToEditedPartsMenuCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeToggleBestPracticeDiagnosticsMenuCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeRequestApprovalCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeHelpCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeSmokeTestCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeGetStateCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeGetUiSettingsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeWaitForReadyCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeOpenSolutionCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeCreateSolutionCommand(package, runtime, commandService));
 
         runtime.RegisterCommand(new SearchNavigationCommands.IdeFindTextCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new SearchNavigationCommands.IdeFindTextBatchCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeFindFilesCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeOpenDocumentCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeListDocumentsCommand(package, runtime, commandService));

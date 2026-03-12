@@ -281,9 +281,17 @@ internal static class IdeCoreCommands
         return new JObject
         {
             ["allowBridgeEdits"] = context.Runtime.UiSettings.AllowBridgeEdits,
+            ["allowBridgeShellExec"] = context.Runtime.UiSettings.AllowBridgeShellExec,
             ["bestPracticeDiagnostics"] = context.Runtime.UiSettings.BestPracticeDiagnosticsEnabled,
             ["goToEditedParts"] = context.Runtime.UiSettings.GoToEditedParts,
         };
+    }
+
+    private static Task<CommandExecutionResult> GetUiSettingsAsync(IdeCommandContext context)
+    {
+        return Task.FromResult(new CommandExecutionResult(
+            "IDE Bridge UI settings captured.",
+            GetUiSettingsData(context)));
     }
 
     private static Task<CommandExecutionResult> ToggleAllowBridgeEditsAsync(IdeCommandContext context)
@@ -292,6 +300,15 @@ internal static class IdeCoreCommands
         context.Runtime.UiSettings.AllowBridgeEdits = enabled;
         return Task.FromResult(new CommandExecutionResult(
             enabled ? "Bridge edits enabled." : "Bridge edits disabled.",
+            GetUiSettingsData(context)));
+    }
+
+    private static Task<CommandExecutionResult> ToggleAllowBridgeShellExecAsync(IdeCommandContext context)
+    {
+        var enabled = !context.Runtime.UiSettings.AllowBridgeShellExec;
+        context.Runtime.UiSettings.AllowBridgeShellExec = enabled;
+        return Task.FromResult(new CommandExecutionResult(
+            enabled ? "Bridge shell exec enabled." : "Bridge shell exec disabled.",
             GetUiSettingsData(context)));
     }
 
@@ -403,6 +420,24 @@ internal static class IdeCoreCommands
         }
     }
 
+    internal sealed class IdeToggleAllowBridgeShellExecMenuCommand : IdeCommandBase
+    {
+        public IdeToggleAllowBridgeShellExecMenuCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+            : base(package, runtime, commandService, 0x0106, acceptsParameters: false)
+        {
+            MenuCommand.BeforeQueryStatus += (_, _) => MenuCommand.Checked = Runtime.UiSettings.AllowBridgeShellExec;
+        }
+
+        protected override string CanonicalName => "Tools.VsIdeBridgeToggleAllowBridgeShellExec";
+
+        internal override bool AllowAutomationInvocation => false;
+
+        protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            return ToggleAllowBridgeShellExecAsync(context);
+        }
+    }
+
     internal sealed class IdeToggleGoToEditedPartsMenuCommand : IdeCommandBase
     {
         public IdeToggleGoToEditedPartsMenuCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
@@ -418,6 +453,33 @@ internal static class IdeCoreCommands
         protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             return ToggleGoToEditedPartsAsync(context);
+        }
+    }
+
+    internal sealed class IdeRequestApprovalCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x024B)
+    {
+        protected override string CanonicalName => "Tools.VsIdeBridgeRequestApproval";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var operation = args.GetRequiredString("operation");
+            var approvalKind = operation switch
+            {
+                "edit" => BridgeApprovalKind.Edit,
+                "shell_exec" => BridgeApprovalKind.ShellExec,
+                _ => throw new CommandErrorException("invalid_arguments", $"Unsupported approval operation: {operation}"),
+            };
+
+            var data = await context.Runtime.BridgeApprovalService
+                .RequestApprovalAsync(
+                    context,
+                    approvalKind,
+                    args.GetString("subject"),
+                    args.GetString("details"))
+                .ConfigureAwait(true);
+
+            return new CommandExecutionResult("Bridge approval granted.", data);
         }
     }
 
@@ -470,6 +532,17 @@ internal static class IdeCoreCommands
         {
             var state = await context.Runtime.IdeStateService.GetStateAsync(context.Dte).ConfigureAwait(true);
             return new CommandExecutionResult("IDE state captured.", state);
+        }
+    }
+
+    internal sealed class IdeGetUiSettingsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x024C)
+    {
+        protected override string CanonicalName => "Tools.IdeGetUiSettings";
+
+        protected override Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            return GetUiSettingsAsync(context);
         }
     }
 

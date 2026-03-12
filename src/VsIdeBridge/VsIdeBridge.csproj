@@ -42,4 +42,11 @@
       <SubType>Designer</SubType>
     </Content>
   </ItemGroup>
+
+  <Target Name="IncludeCopyLocalPackageDependenciesInVsix" AfterTargets="GetVsixSourceItems">
+    <ItemGroup>
+      <VSIXSourceItem Include="@(ReferenceCopyLocalPaths)"
+                      Condition="'%(ReferenceCopyLocalPaths.NuGetPackageId)' != '' and '%(ReferenceCopyLocalPaths.Extension)' == '.dll'" />
+    </ItemGroup>
+  </Target>
 </Project>

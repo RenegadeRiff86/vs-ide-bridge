@@ -1,9 +1,9 @@
 <Project>
   <PropertyGroup>
-    <Version>2.0.43</Version>
+    <Version>2.0.50</Version>
     <Authors>RenegadeRiff86</Authors>
     <Company>RenegadeRiff86</Company>
-    <Copyright>Copyright © RenegadeRiff86</Copyright>
+    <Copyright>Copyright Ã‚Â© RenegadeRiff86</Copyright>
     <RepositoryUrl>https://github.com/RenegadeRiff86/vs-ide-bridge</RepositoryUrl>
   </PropertyGroup>
 </Project>

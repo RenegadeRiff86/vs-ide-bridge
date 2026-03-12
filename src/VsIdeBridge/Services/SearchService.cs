@@ -18,6 +18,7 @@ internal sealed class SearchService
 {
     private const string FunctionKind = "function";
     private const string InterfaceKind = "interface";
+    private const string PathFilterPropertyName = "pathFilter";
 
     private sealed class SearchHit
     {
@@ -129,7 +130,7 @@ internal sealed class SearchService
         return new JObject
         {
             ["query"] = query,
-            ["pathFilter"] = pathFilter ?? string.Empty,
+            [PathFilterPropertyName] = pathFilter ?? string.Empty,
             ["extensions"] = new JArray(extensions.OrderBy(item => item, StringComparer.OrdinalIgnoreCase)),
             ["includeNonProject"] = includeNonProject,
             ["count"] = matches.Count,
@@ -164,10 +165,100 @@ internal sealed class SearchService
         {
             ["query"] = query,
             ["scope"] = scope,
-            ["pathFilter"] = pathFilter ?? string.Empty,
+            [PathFilterPropertyName] = pathFilter ?? string.Empty,
             ["count"] = Matches.Count,
             ["resultsWindow"] = resultsWindow,
             ["matches"] = new JArray(Matches.Select(SerializeHit)),
+        };
+    }
+
+    public async Task<JObject> FindTextBatchAsync(
+        IdeCommandContext context,
+        IReadOnlyList<string> queries,
+        string scope,
+        bool matchCase,
+        bool wholeWord,
+        bool useRegex,
+        int resultsWindow,
+        string? projectUniqueName,
+        string? pathFilter,
+        int maxQueriesPerChunk)
+    {
+        var normalizedQueries = NormalizeQueries(queries);
+        if (normalizedQueries.Count == 0)
+        {
+            throw new ArgumentException("At least one non-empty query is required.", nameof(queries));
+        }
+
+        var chunkSize = Math.Max(1, maxQueriesPerChunk);
+        var mergedHits = new Dictionary<string, SearchHit>(StringComparer.OrdinalIgnoreCase);
+        var queryResults = new JArray();
+        var chunks = new JArray();
+        var totalMatchCount = 0;
+
+        for (var start = 0; start < normalizedQueries.Count; start += chunkSize)
+        {
+            var chunkQueries = normalizedQueries.Skip(start).Take(chunkSize).ToArray();
+            var chunkMatchCount = 0;
+
+            foreach (var query in chunkQueries)
+            {
+                var (matches, _) = await SearchTextMatchesAsync(
+                    context,
+                    query,
+                    scope,
+                    matchCase,
+                    wholeWord,
+                    useRegex,
+                    projectUniqueName,
+                    pathFilter).ConfigureAwait(true);
+
+                totalMatchCount += matches.Count;
+                chunkMatchCount += matches.Count;
+                MergeSearchHits(mergedHits, matches);
+
+                queryResults.Add(new JObject
+                {
+                    ["query"] = query,
+                    ["count"] = matches.Count,
+                    ["matches"] = new JArray(matches.Select(SerializeHit)),
+                });
+            }
+
+            chunks.Add(new JObject
+            {
+                ["index"] = (start / chunkSize) + 1,
+                ["queryCount"] = chunkQueries.Length,
+                ["queries"] = new JArray(chunkQueries),
+                ["matchCount"] = chunkMatchCount,
+            });
+        }
+
+        var orderedMergedHits = mergedHits.Values
+            .OrderBy(hit => hit.Path, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(hit => hit.Line)
+            .ThenBy(hit => hit.Column)
+            .ToArray();
+        var groupedMatches = BuildGroupedMatchesFromHits(orderedMergedHits);
+        var summaryQuery = normalizedQueries.Count == 1
+            ? normalizedQueries[0]
+            : $"{normalizedQueries.Count} batched queries";
+        await PopulateFindResultsAsync(context, groupedMatches, summaryQuery, resultsWindow).ConfigureAwait(true);
+
+        return new JObject
+        {
+            ["queries"] = new JArray(normalizedQueries),
+            ["scope"] = scope,
+            [PathFilterPropertyName] = pathFilter ?? string.Empty,
+            ["queryCount"] = normalizedQueries.Count,
+            ["chunkCount"] = chunks.Count,
+            ["maxQueriesPerChunk"] = chunkSize,
+            ["count"] = orderedMergedHits.Length,
+            ["totalMatchCount"] = totalMatchCount,
+            ["resultsWindow"] = resultsWindow,
+            ["chunks"] = chunks,
+            ["queryResults"] = queryResults,
+            ["matches"] = new JArray(orderedMergedHits.Select(SerializeHit)),
         };
     }
 
@@ -202,7 +293,7 @@ internal sealed class SearchService
                 ["kind"] = kind,
                 ["scope"] = scope,
                 ["project"] = projectUniqueName ?? string.Empty,
-                ["pathFilter"] = pathFilter ?? string.Empty,
+                [PathFilterPropertyName] = pathFilter ?? string.Empty,
                 ["count"] = codeModelHits.Length,
                 ["totalMatchCount"] = codeModelHits.Length,
                 ["source"] = "code-model",
@@ -285,7 +376,7 @@ internal sealed class SearchService
             ["kind"] = kind,
             ["scope"] = scope,
             ["project"] = projectUniqueName ?? string.Empty,
-            ["pathFilter"] = pathFilter ?? string.Empty,
+            [PathFilterPropertyName] = pathFilter ?? string.Empty,
             ["count"] = hits.Length,
             ["totalMatchCount"] = Matches.Count,
             ["source"] = "text",
@@ -549,6 +640,84 @@ internal sealed class SearchService
             .ThenBy(hit => hit.Path, StringComparer.OrdinalIgnoreCase)
             .ThenBy(hit => hit.Line)
             .ToList(), groupedMatches);
+    }
+
+    private static List<string> NormalizeQueries(IEnumerable<string> queries)
+    {
+        var normalized = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var query in queries)
+        {
+            var trimmed = query?.Trim();
+            if (trimmed is not { Length: > 0 })
+            {
+                continue;
+            }
+
+            if (!seen.Add(trimmed))
+            {
+                continue;
+            }
+
+            normalized.Add(trimmed);
+        }
+
+        return normalized;
+    }
+
+    private static void MergeSearchHits(Dictionary<string, SearchHit> mergedHits, IEnumerable<SearchHit> hits)
+    {
+        foreach (var hit in hits)
+        {
+            var key = GetSearchHitKey(hit);
+            if (!mergedHits.TryGetValue(key, out var existing))
+            {
+                mergedHits[key] = new SearchHit
+                {
+                    Path = hit.Path,
+                    ProjectUniqueName = hit.ProjectUniqueName,
+                    Line = hit.Line,
+                    Column = hit.Column,
+                    MatchLength = hit.MatchLength,
+                    Preview = hit.Preview,
+                    ScoreHint = hit.ScoreHint,
+                    SourceQueries = [.. hit.SourceQueries],
+                };
+                continue;
+            }
+
+            existing.ScoreHint = Math.Max(existing.ScoreHint, hit.ScoreHint);
+            foreach (var query in hit.SourceQueries)
+            {
+                if (!existing.SourceQueries.Contains(query, StringComparer.OrdinalIgnoreCase))
+                {
+                    existing.SourceQueries.Add(query);
+                }
+            }
+        }
+    }
+
+    private static Dictionary<string, List<FindResult>> BuildGroupedMatchesFromHits(IEnumerable<SearchHit> hits)
+    {
+        var groupedMatches = new Dictionary<string, List<FindResult>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var hit in hits)
+        {
+            if (!groupedMatches.TryGetValue(hit.Path, out var results))
+            {
+                results = [];
+                groupedMatches[hit.Path] = results;
+            }
+
+            results.Add(new FindResult(hit.Preview, hit.Line - 1, hit.Column - 1, new Span(hit.Column - 1, hit.MatchLength)));
+        }
+
+        return groupedMatches;
+    }
+
+    private static string GetSearchHitKey(SearchHit hit)
+    {
+        return $"{hit.Path}|{hit.Line}|{hit.Column}|{hit.MatchLength}";
     }
 
     private static JArray BuildSmartContexts(
