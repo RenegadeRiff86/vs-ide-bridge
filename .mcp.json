@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "vs-ide-bridge": {
+      "type": "stdio",
+      "command": "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
+      "args": [
+        "mcp-server",
+        "--tools-only"
+      ]
+    }
+  }
+}

@@ -913,26 +913,25 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        if (TryReadTableRows(out var tableRows))
-        {
-            return tableRows;
-        }
+        TryReadTableRows(out var tableRows);
 
         var window = TryGetErrorListWindow(dte);
         if (window?.Object is not ErrorList errorList)
         {
+            if (tableRows.Count > 0)
+                return tableRows;
             throw new InvalidOperationException("Error List window is not available.");
         }
 
         var items = errorList.ErrorItems;
-        var rows = new List<JObject>(items.Count);
+        var dteRows = new List<JObject>(items.Count);
         for (var i = 1; i <= items.Count; i++)
         {
             var item = items.Item(i);
             var severity = MapSeverity(item.ErrorLevel);
             var description = item.Description ?? string.Empty;
             var code = InferCode(description, item.Project ?? string.Empty, item.FileName ?? string.Empty, item.Line);
-            rows.Add(new JObject
+            dteRows.Add(new JObject
             {
                 [SeverityKey] = severity,
                 ["code"] = code,
@@ -947,7 +946,12 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             });
         }
 
-        return rows;
+        // Table rows are preferred (richer data); merge DTE rows to fill gaps
+        // such as language-service diagnostics on Miscellaneous Files.
+        if (tableRows.Count == 0)
+            return dteRows;
+
+        return MergeRows(tableRows, dteRows);
     }
 
     private bool TryReadTableRows(out IReadOnlyList<JObject> rows)
