@@ -112,16 +112,13 @@ internal sealed class BridgeApprovalService
     private static string BuildPromptMessage(BridgeApprovalKind kind, string? subject, string? details)
     {
         var operationDisplayName = GetOperationDisplayName(kind);
-        var message = $"An external IDE Bridge request wants to {operationDisplayName}.\r\n\r\n";
-
-        if (!string.IsNullOrWhiteSpace(subject))
-        {
-            message += $"Target: {TrimForPrompt(subject!, 160)}\r\n";
-        }
+        var message = string.IsNullOrWhiteSpace(subject)
+            ? $"An external IDE Bridge request wants to {operationDisplayName}.\r\n\r\n"
+            : $"Approve this IDE Bridge request?\r\n\r\nAction: {TrimForPrompt(subject!, 220)}\r\n";
 
         if (!string.IsNullOrWhiteSpace(details))
         {
-            message += $"Details: {TrimForPrompt(details!, 260)}\r\n";
+            message += $"Context: {TrimForPrompt(details!, 320)}\r\n";
         }
 
         message += "\r\n" +

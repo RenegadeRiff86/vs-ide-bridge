@@ -1679,15 +1679,20 @@ internal static partial class CliApp
             return payload;
         }
 
-        private static string BuildShellExecApprovalDetails(string arguments, string workingDirectory, int timeoutMs)
+        private static string BuildShellExecApprovalSubject(string executable, string arguments)
+        {
+            var commandText = string.IsNullOrWhiteSpace(arguments)
+                ? executable
+                : executable + " " + arguments;
+
+            return "Run command: " + commandText;
+        }
+
+        private static string BuildShellExecApprovalDetails(string workingDirectory, int timeoutMs)
         {
             var detailBuilder = new StringBuilder();
             detailBuilder.Append("cwd=").Append(workingDirectory);
             detailBuilder.Append(", timeoutMs=").Append(timeoutMs);
-            if (!string.IsNullOrWhiteSpace(arguments))
-            {
-                detailBuilder.Append(", args=").Append(arguments);
-            }
 
             return detailBuilder.ToString();
         }
@@ -2751,8 +2756,8 @@ internal static partial class CliApp
                 id,
                 bridgeBinding,
                 operation: "shell_exec",
-                subject: exe,
-                details: BuildShellExecApprovalDetails(arguments, workingDirectory, timeoutMs)).ConfigureAwait(false);
+                subject: BuildShellExecApprovalSubject(exe, arguments),
+                details: BuildShellExecApprovalDetails(workingDirectory, timeoutMs)).ConfigureAwait(false);
             if (!ResponseFormatter.IsSuccess(approvalResponse))
             {
                 return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
@@ -2772,7 +2777,7 @@ internal static partial class CliApp
                 id,
                 bridgeBinding,
                 operation: "edit",
-                subject: "Update synced bridge version files.",
+                subject: $"Set synced bridge version to {version}",
                 details: BuildSetVersionApprovalDetails(version)).ConfigureAwait(false);
             if (!ResponseFormatter.IsSuccess(approvalResponse))
             {
