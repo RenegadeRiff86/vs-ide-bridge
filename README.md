@@ -209,12 +209,9 @@ Optional parameters:
 
 ## Quick Start
 
-### End-User Installation (from Release)
-
-1. **Close Visual Studio and Claude Code** before running the installer — the VSIX cannot update while `devenv.exe` is running.
-2. Download `vs-ide-bridge-setup-<version>.exe` from [GitHub Releases](https://github.com/RenegadeRiff86/vs-ide-bridge/releases/latest).
-3. Run the installer. It installs the CLI, registers the Windows service, and installs the VS extension in one step.
-4. **Add the MCP server to Claude Code.** Create or update `.mcp.json` in your project root (or `~/.claude/mcp.json` for global use):
+1. **Close Visual Studio and Claude Code** before installing.
+2. **Download the installer** (`vs-ide-bridge-setup-<version>.exe`) from [GitHub Releases](https://github.com/RenegadeRiff86/vs-ide-bridge/releases/latest) and run it. The installer sets everything up automatically.
+3. **Create a config file** so Claude Code knows where to find the bridge. In your project folder (or your home folder for all projects), create a file named `.mcp.json` with this content:
 
 ```json
 {
@@ -227,18 +224,9 @@ Optional parameters:
 }
 ```
 
-5. Open Visual Studio, then start Claude Code — the bridge connects automatically.
-6. Use `bind_solution` to bind to your open solution, then `diagnostics_snapshot` to verify everything is live.
-7. The CLI (`vs-ide-bridge <verb>`) is a fallback if MCP is unavailable — all the same commands are accessible from the command line.
-
-### Developer Build (from Source)
-
-1. Close Visual Studio.
-2. Build with `scripts\build.bat`.
-3. If that fails in a non-bridge native project, use the managed-only fallback build above.
-4. Install `installer\output\vs-ide-bridge-setup-<version>.exe`.
-5. Start/reuse a bridged instance with `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" ensure --solution "C:\path\to\Your.sln"`.
-6. Use `"C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe" help` for CLI verb reference.
+4. Open Visual Studio, then open Claude Code.
+5. Tell Claude Code which project you want to work on — it will connect to Visual Studio automatically.
+6. If Claude Code ever can't connect, you can use the `vs-ide-bridge` command from any terminal as a fallback.
 
 ## MCP Command Catalog
 
