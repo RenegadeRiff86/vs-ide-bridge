@@ -143,9 +143,12 @@ def send_prompt_text(prompt: str, press_enter: bool) -> None:
         keyboard.send_keys("{ENTER}", pause=0.02)
 
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def default_screenshot_path() -> str:
     timestamp = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    return rf"C:\Users\elsto\source\repos\vs-ide-bridge\output\codex_window_{timestamp}.png"
+    return os.path.join(_REPO_ROOT, "output", f"codex_window_{timestamp}.png")
 
 
 def parse_args() -> argparse.Namespace:

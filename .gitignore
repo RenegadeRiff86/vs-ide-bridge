@@ -12,3 +12,6 @@ src/VsIdeBridgeInstaller/bin/
 src/VsIdeBridgeInstaller/obj/
 src/VsIdeBridgeService/bin/
 src/VsIdeBridgeService/obj/
+.claude/
+outputcatalog-live.json
+C*/

@@ -29,7 +29,7 @@
 
 ## Important: apply_diff Path Resolution
 
-`apply_diff` resolves paths relative to the solution directory (`C:\Users\elsto\source\repos\vs-ide-bridge\`). Changes land in the live VS editor buffer — they are not auto-saved.
+`apply_diff` resolves paths relative to the solution directory. Changes land in the live VS editor buffer — they are not auto-saved.
 
 ## Source Of Truth
 

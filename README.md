@@ -16,17 +16,32 @@ The CLI also includes a Windows-side stdio MCP facade (`vs-ide-bridge mcp-server
 
 ## Getting Started
 
-Install first — see [Quick Start](#quick-start) below.
+1. **Close Visual Studio and Claude Code**, then download and run `vs-ide-bridge-setup-<version>.exe` from [GitHub Releases](https://github.com/RenegadeRiff86/vs-ide-bridge/releases/latest). The installer sets everything up automatically.
 
-Once installed, open Visual Studio with your project, then start Claude Code. You don't need to type any commands — just tell Claude Code what you want in plain English:
+2. **Open Claude Code** in your project folder and paste this prompt to create the connection config:
 
-> "Open my solution at C:\path\to\Your.sln and show me any build errors."
-> "Find all references to the Login method."
-> "Apply this fix to AuthService.cs."
+   > Create a file called `.mcp.json` in this folder with this content:
+   >
+   > ```json
+   > {
+   >   "mcpServers": {
+   >     "vs-ide-bridge": {
+   >       "command": "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
+   >       "args": ["mcp-server", "--tools-only"]
+   >     }
+   >   }
+   > }
+   > ```
 
-Claude Code connects to Visual Studio automatically and uses the bridge in the background.
+   Claude Code creates the file for you. You only need to do this once per project.
 
-**CLI fallback:** If MCP is unavailable, the `vs-ide-bridge` command exposes the same functionality from any terminal. Run `vs-ide-bridge help` for a full list of commands.
+3. **Close Claude Code, open Visual Studio, then reopen Claude Code.** Tell Claude Code which project you want to work on — it connects to Visual Studio automatically. You don't need to type commands, just describe what you want in plain English:
+
+   > "Show me any build errors."
+   > "Find all references to the Login method."
+   > "Apply this fix to AuthService.cs."
+
+**CLI fallback:** If Claude Code is unavailable, the `vs-ide-bridge` command exposes the same functionality from any terminal. Run `vs-ide-bridge help` for a full list of commands.
 
 ## Requirements
 

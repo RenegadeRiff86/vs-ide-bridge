@@ -262,12 +262,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--bridge-exe",
-        default=r"C:\Users\elsto\source\repos\vs-ide-bridge\src\VsIdeBridgeCli\bin\Debug\net8.0\vs-ide-bridge.exe",
+        default=None,
         help="Path to vs-ide-bridge.exe",
     )
     parser.add_argument(
         "--solution",
-        default=r"C:\Users\elsto\source\repos\vs-ide-bridge\VsIdeBridge.sln",
+        default=None,
         help="Path to solution used for ensure.",
     )
     parser.add_argument(
