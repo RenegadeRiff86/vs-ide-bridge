@@ -97,6 +97,7 @@ internal static partial class CliApp
         private const string FindFilesToolName = "find_files";
         private const string FindTextToolName = "find_text";
         private const string FindTextBatchToolName = "find_text_batch";
+        private const string GitMergeToolName = "git_merge";
         private const string ListProjectsToolName = "list_projects";
         private const string QueryProjectConfigurationsToolName = "query_project_configurations";
         private const string QueryProjectItemsToolName = "query_project_items";
@@ -976,6 +977,15 @@ internal static partial class CliApp
                 ObjectSchema(
                     RequiredStringProperty("name", "New branch name."),
                     OptionalStringProperty("start_point", "Optional start point (default HEAD)."))),
+            Tool(
+                GitMergeToolName,
+                "Merge a branch or revision into the current branch.",
+                ObjectSchema(
+                    RequiredStringProperty("source", "Branch name or revision to merge into the current branch."),
+                    OptionalBooleanProperty("ff_only", "If true, require a fast-forward merge."),
+                    OptionalBooleanProperty("no_ff", "If true, create a merge commit even when a fast-forward is possible."),
+                    OptionalBooleanProperty("squash", "If true, squash changes into the working tree without creating a merge commit."),
+                    OptionalStringProperty("message", "Optional merge commit message."))),
             Tool(
                 "git_add",
                 "Stage files. Use ['.'] to stage all changes.",
@@ -2006,6 +2016,7 @@ internal static partial class CliApp
                 {
                     [PathArgumentName] = ".venv",
                 }.ToJsonString(JsonOptions),
+                GitMergeToolName => "{ \"source\": \"origin/main\", \"ff_only\": true }",
                 ListProjectsToolName => "{}",
                 QueryProjectItemsToolName => ProjectToolExample(SampleCliProjectName, "\"path\": \"src\\\\VsIdeBridgeCli\"", $"\"max\": {DefaultLargeMaxCount}"),
                 QueryProjectPropertiesToolName => ProjectToolExample(SampleCliProjectName, "\"names\": [\"TargetFramework\", \"AssemblyName\"]"),
@@ -2914,6 +2925,7 @@ internal static partial class CliApp
                 "git_commit" or
                 "git_commit_amend" or
                 "git_create_branch" or
+                "git_merge" or
                 "git_checkout" or
                 "git_pull" or
                 "git_push" or
@@ -3168,6 +3180,7 @@ internal static partial class CliApp
                 "git_branch_list" => "branch --all --verbose --no-abbrev",
                 "git_checkout" => $"checkout {QuoteForGit(GetRequiredString(args, id, "target"))}",
                 "git_create_branch" => BuildGitCreateBranchArgs(args, id),
+                GitMergeToolName => BuildGitMergeArgs(args, id),
                 "git_add" => $"add -- {JoinGitPaths(GetRequiredPaths(args, id, "paths"))}",
                 "git_restore" => $"restore --source=HEAD --worktree -- {JoinGitPaths(GetRequiredPaths(args, id, "paths"))}",
                 "git_commit" => $"commit -m {QuoteForGit(GetRequiredString(args, id, "message"))}",
@@ -3181,7 +3194,7 @@ internal static partial class CliApp
                 _ => throw new McpRequestException(id, JsonRpcInvalidParamsCode, FormatUnknownMcpToolMessage(toolName)),
             };
 
-            var timeoutMs = toolName is "git_push" or "git_pull" or "git_fetch" or "git_clone" ? 120_000 : 30_000;
+            var timeoutMs = toolName is "git_push" or "git_pull" or "git_fetch" or GitMergeToolName or "git_clone" ? 120_000 : 30_000;
             var gitResult = await RunGitAsync(workingDirectory, gitArgs, timeoutMs).ConfigureAwait(false);
             return WrapToolResult(gitResult, !(gitResult["success"]?.GetValue<bool>() ?? false));
         }
@@ -4004,6 +4017,44 @@ internal static partial class CliApp
             return string.IsNullOrWhiteSpace(startPoint)
                 ? $"checkout -b {QuoteForGit(name)}"
                 : $"checkout -b {QuoteForGit(name)} {QuoteForGit(startPoint)}";
+        }
+
+        private static string BuildGitMergeArgs(JsonObject? args, JsonNode? id)
+        {
+            var source = GetRequiredString(args, id, "source");
+            var ffOnly = args?["ff_only"]?.GetValue<bool>() == true;
+            var noFastForward = args?["no_ff"]?.GetValue<bool>() == true;
+            var squash = args?["squash"]?.GetValue<bool>() == true;
+            var message = args?["message"]?.GetValue<string>();
+
+            if (ffOnly && noFastForward)
+            {
+                throw new McpRequestException(id, JsonRpcInvalidParamsCode, "git_merge cannot set both ff_only and no_ff.");
+            }
+
+            var segments = new List<string> { "merge" };
+            if (ffOnly)
+            {
+                segments.Add("--ff-only");
+            }
+            else if (noFastForward)
+            {
+                segments.Add("--no-ff");
+            }
+
+            if (squash)
+            {
+                segments.Add("--squash");
+            }
+
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                segments.Add("-m");
+                segments.Add(QuoteForGit(message));
+            }
+
+            segments.Add(QuoteForGit(source));
+            return string.Join(" ", segments);
         }
 
         private static async Task<string> ResolveSolutionWorkingDirectoryAsync(JsonNode? id, BridgeBinding bridgeBinding)

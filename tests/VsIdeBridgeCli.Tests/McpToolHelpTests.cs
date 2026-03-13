@@ -23,6 +23,7 @@ public sealed class McpToolHelpTests
     private const string ReadFileBatchToolName = "read_file_batch";
     private const string ExecuteCommandToolName = "execute_command";
     private const string FormatDocumentToolName = "format_document";
+    private const string GitMergeToolName = "git_merge";
     private const string QueryProjectItemsToolName = "query_project_items";
     private const string QueryProjectPropertiesToolName = "query_project_properties";
     private const string QueryProjectConfigurationsToolName = "query_project_configurations";
@@ -129,6 +130,7 @@ public sealed class McpToolHelpTests
             CreateSolutionToolName,
             ExecuteCommandToolName,
             FormatDocumentToolName,
+            GitMergeToolName,
             "list_projects",
             QueryProjectItemsToolName,
             QueryProjectPropertiesToolName,
@@ -223,6 +225,11 @@ public sealed class McpToolHelpTests
         AssertContainsSchemaProperty(toolMap[NugetAddPackageToolName], "version");
         AssertContainsSchemaProperty(toolMap["nuget_remove_package"], "project");
         AssertContainsSchemaProperty(toolMap["nuget_remove_package"], "package");
+        AssertContainsSchemaProperty(toolMap[GitMergeToolName], "source");
+        AssertContainsSchemaProperty(toolMap[GitMergeToolName], "ff_only");
+        AssertContainsSchemaProperty(toolMap[GitMergeToolName], "no_ff");
+        AssertContainsSchemaProperty(toolMap[GitMergeToolName], "squash");
+        AssertContainsSchemaProperty(toolMap[GitMergeToolName], "message");
         AssertContainsSchemaProperty(toolMap[CondaInstallToolName], "packages");
         AssertContainsSchemaProperty(toolMap[CondaInstallToolName], "channels");
         AssertContainsSchemaProperty(toolMap[CondaInstallToolName], "yes");

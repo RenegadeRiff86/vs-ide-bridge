@@ -340,6 +340,7 @@ git_diff_staged
 git_diff_unstaged
 git_fetch
 git_log
+git_merge
 git_pull
 git_push
 git_remote_list
@@ -897,7 +898,7 @@ Exposed MCP tools use simple names. See the MCP Command Catalog below or call `t
 
 **Conda**: `conda_install`, `conda_remove`
 
-**Git**: `git_status`, `git_current_branch`, `git_remote_list`, `git_tag_list`, `git_stash_list`, `git_diff_unstaged`, `git_diff_staged`, `git_log`, `git_show`, `git_branch_list`, `git_checkout`, `git_create_branch`, `git_add`, `git_restore`, `git_commit`, `git_commit_amend`, `git_reset`, `git_fetch`, `git_stash_push`, `git_stash_pop`, `git_pull`, `git_push`
+**Git**: `git_status`, `git_current_branch`, `git_remote_list`, `git_tag_list`, `git_stash_list`, `git_diff_unstaged`, `git_diff_staged`, `git_log`, `git_show`, `git_branch_list`, `git_checkout`, `git_create_branch`, `git_merge`, `git_add`, `git_restore`, `git_commit`, `git_commit_amend`, `git_reset`, `git_fetch`, `git_stash_push`, `git_stash_pop`, `git_pull`, `git_push`
 
 **GitHub**: `github_issue_search`, `github_issue_close`
 
