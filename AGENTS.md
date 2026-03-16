@@ -14,6 +14,12 @@
 3. `diagnostics_snapshot` — get current IDE state, errors, and warnings before starting any work
 4. `tool_help` — get the schema and examples for any tool before using it
 
+## Deferred Tool Discovery (Claude Code)
+
+All bridge MCP tools are deferred in Claude Code. Before you can call any bridge tool,
+you must fetch its schema with `ToolSearch`. Batch-fetch tools you expect to need:
+`select:mcp__vs-ide-bridge__list_instances,mcp__vs-ide-bridge__bind_solution,mcp__vs-ide-bridge__read_file,mcp__vs-ide-bridge__apply_diff,mcp__vs-ide-bridge__errors,mcp__vs-ide-bridge__warnings,mcp__vs-ide-bridge__find_text,mcp__vs-ide-bridge__find_text_batch,mcp__vs-ide-bridge__build`
+
 ## Key Tools for This Repo
 
 | Task | Tool |
@@ -21,12 +27,23 @@
 | Take one code slice | `read_file` (reveals in VS editor) |
 | Take several code slices | `read_file_batch` |
 | Search code | `find_text`, `search_symbols` |
+| Bulk search (many queries) | `find_text_batch` — one round-trip for multiple queries |
+| Find files by name | `find_files` |
 | Check errors/warnings | `diagnostics_snapshot` |
 | Make code changes | `apply_diff` (applies live into VS editor) |
 | Build | `build` or `build_errors` |
 | Bump version | `set_version` |
-| Build installer | `shell_exec` with `scripts\build-setup.ps1` |
+| Build installer | `shell_exec exe:"powershell" args:"-ExecutionPolicy Bypass -File scripts\\build-setup.ps1"` |
+| Build + installer | `shell_exec exe:"powershell" args:"-ExecutionPolicy Bypass -File scripts\\build-setup.ps1 -Build -Configuration Release"` |
 | Open VS if closed | `vs_open` then `wait_for_instance` |
+
+## Bulk Refactoring Workflow
+
+When making many similar changes across a large file:
+1. Use `find_text_batch` with all the target strings to get every location at once
+2. Read the relevant sections with `read_file` (tight line ranges)
+3. Apply changes with `apply_diff` — combine adjacent changes into single hunks to avoid overlap errors
+4. Check `warnings` and `errors` after all edits to verify
 
 ## Important: apply_diff Path Resolution
 

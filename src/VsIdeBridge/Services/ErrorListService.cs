@@ -125,6 +125,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         @"^(?<project>.+?)\s*>\s*(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-Za-z0-9-]*)\s*:\s*(?<message>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex StringLiteralPattern = new("\"([^\"\\r\\n]{8,})\"", RegexOptions.Compiled);
+    private static readonly Regex ConstStringDeclPattern = new(@"\bconst\s+string\s+\w+\s*=", RegexOptions.Compiled);
     private static readonly Regex NumberLiteralPattern = new(@"(?<![A-Za-z0-9_\.])(?<value>-?\d+(?:\.\d+)?)\b", RegexOptions.Compiled);
     private static readonly Regex SuspiciousRoundDownPattern = new(@"Math\s*\.\s*(?<op>Floor|Truncate)\s*\(", RegexOptions.Compiled);
     private static readonly Regex EmptyCatchBlockPattern = new(@"catch\s*(?:\([^)]*\))?\s*\{\s*\}", RegexOptions.Compiled);
@@ -152,7 +153,8 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         int timeoutMilliseconds,
         bool quickSnapshot = false,
         ErrorListQuery? query = null,
-        bool includeBuildOutputFallback = false)
+        bool includeBuildOutputFallback = false,
+        bool afterEdit = false)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
@@ -163,7 +165,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
         if (waitForIntellisense && !quickSnapshot)
         {
-            await _readinessService.WaitForReadyAsync(context, timeoutMilliseconds).ConfigureAwait(true);
+            await _readinessService.WaitForReadyAsync(context, timeoutMilliseconds, afterEdit).ConfigureAwait(true);
         }
 
         IReadOnlyList<JObject> rows;
@@ -415,6 +417,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     {
         var occurrences = StringLiteralPattern.Matches(content)
             .Cast<Match>()
+            .Where(m => !ConstStringDeclPattern.IsMatch(GetLineAt(content, m.Index)))
             .GroupBy(match => match.Groups[1].Value)
             .Where(group => group.Count() >= RepeatedStringThreshold)
             .OrderByDescending(group => group.Count())
@@ -856,6 +859,13 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
 
         return line;
+    }
+
+    private static string GetLineAt(string content, int index)
+    {
+        var start = index > 0 ? content.LastIndexOf('\n', index - 1) + 1 : 0;
+        var end = content.IndexOf('\n', index);
+        return end < 0 ? content.Substring(start) : content.Substring(start, end - start);
     }
 
     private static Dictionary<string, int> CreateSeverityCounts()

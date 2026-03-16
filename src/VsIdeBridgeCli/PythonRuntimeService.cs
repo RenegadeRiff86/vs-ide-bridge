@@ -284,6 +284,37 @@ internal static partial class PythonRuntimeService
             }).ConfigureAwait(false);
     }
 
+    internal static async Task<JsonObject> InstallRequirementsAsync(string requirementsFile, string? interpreterPath = null, int timeoutMs = ProcessRunner.DefaultTimeoutMilliseconds, bool approved = false)
+    {
+        var absPath = System.IO.Path.GetFullPath(requirementsFile);
+        if (!System.IO.File.Exists(absPath))
+            throw new InvalidOperationException($"Requirements file not found: {absPath}");
+
+        var environment = await ResolveEnvironmentAsync(interpreterPath).ConfigureAwait(false);
+        var approval = EnsureApproved(
+            toolName: "python_install_requirements",
+            environment,
+            approved,
+            mutating: true,
+            actionDescription: "install Python requirements");
+        if (!approval.Allowed)
+        {
+            return BuildApprovalRequiredPayload(approval, environment);
+        }
+
+        return await RunInterpreterAsync(
+            environment,
+            toolName: "python_install_requirements",
+            arguments: "-I -m pip install -r " + QuoteArgument(absPath),
+            workingDirectory: System.IO.Path.GetDirectoryName(absPath)!,
+            timeoutMs,
+            additionalData: new JsonObject
+            {
+                ["packageManager"] = "pip",
+                ["requirementsFile"] = absPath,
+            }).ConfigureAwait(false);
+    }
+
     internal static async Task<JsonObject> RemovePackagesAsync(IReadOnlyList<string> packages, string? interpreterPath = null, int timeoutMs = ProcessRunner.DefaultTimeoutMilliseconds, bool approved = false)
     {
         if (packages.Count == 0)
@@ -1003,7 +1034,7 @@ else:
         return array;
     }
 
-    private static string? LoadActiveInterpreterPath()
+    internal static string? LoadActiveInterpreterPath()
     {
         var state = LoadState();
         return NormalizePath(state[ActiveInterpreterPathPropertyName]?.GetValue<string>());

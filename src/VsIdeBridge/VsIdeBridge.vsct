@@ -151,6 +151,28 @@
           <LocCanonicalName>.Tools.IdeSetPythonProjectEnv</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSetPythonStartupFile" priority="0x0250" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Set Python Startup File</ButtonText>
+          <CommandName>IdeSetPythonStartupFile</CommandName>
+          <CanonicalName>Tools.IdeSetPythonStartupFile</CanonicalName>
+          <LocCanonicalName>.Tools.IdeSetPythonStartupFile</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetPythonStartupFile" priority="0x0251" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Get Python Startup File</ButtonText>
+          <CommandName>IdeGetPythonStartupFile</CommandName>
+          <CanonicalName>Tools.IdeGetPythonStartupFile</CanonicalName>
+          <LocCanonicalName>.Tools.IdeGetPythonStartupFile</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSmokeTest" priority="0x01F1" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -1015,6 +1037,8 @@
       <IDSymbol name="cmdidIdeWriteFile" value="0x024D" />
       <IDSymbol name="cmdidIdeReloadDocument" value="0x024E" />
       <IDSymbol name="cmdidIdeSetPythonProjectEnv" value="0x024F" />
+      <IDSymbol name="cmdidIdeSetPythonStartupFile" value="0x0250" />
+      <IDSymbol name="cmdidIdeGetPythonStartupFile" value="0x0251" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

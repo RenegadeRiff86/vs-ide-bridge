@@ -60,7 +60,8 @@ internal static class PatchCommands
                 context,
                 waitForIntellisense: true,
                 DiagnosticsRefreshTimeoutMilliseconds,
-                query: new ErrorListQuery { Max = 1 }).ConfigureAwait(true);
+                query: new ErrorListQuery { Max = 1 },
+                afterEdit: true).ConfigureAwait(true);
 
             data["approval"] = approvalData["approval"]?.DeepClone();
             data["approvalOperation"] = approvalData["operation"]?.DeepClone();
@@ -225,6 +226,15 @@ internal static class PatchCommands
                 ["approvalOperation"] = approvalData["operation"]?.DeepClone(),
                 ["approvalPromptShown"] = approvalData["promptShown"]?.DeepClone(),
             };
+
+            await context.Runtime.ErrorListService.GetErrorListAsync(
+                context,
+                waitForIntellisense: true,
+                DiagnosticsRefreshTimeoutMilliseconds,
+                query: new ErrorListQuery { Max = 1 },
+                afterEdit: true).ConfigureAwait(true);
+
+            data["diagnosticsRefreshed"] = true;
 
             return new CommandExecutionResult($"Wrote {data["lineCount"]} lines to {System.IO.Path.GetFileName(resolvedPath)}.", data);
         }

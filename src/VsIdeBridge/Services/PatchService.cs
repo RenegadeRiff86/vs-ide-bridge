@@ -265,7 +265,8 @@ internal sealed class PatchService
                     {
                         throw new CommandErrorException(
                             InvalidArgumentsCode,
-                            $"Patch did not match the target content for {paths.TargetPath}.",
+                            $"Patch produced no content change for {paths.TargetPath} — {result.MutationLineCount} mutation line(s) but 0 matched context lines. " +
+                            "The patch content does not match the file. Fix: call read_file to check the actual content before retrying.",
                             new
                             {
                                 path = paths.TargetPath,
@@ -396,7 +397,8 @@ internal sealed class PatchService
 
             throw new CommandErrorException(
                 InvalidArgumentsCode,
-                $"Patch for {paths.TargetPath} did not contain any hunks or search blocks.");
+                $"Patch for {paths.TargetPath} has no hunks or search blocks — it parsed as empty. " +
+                "Check your patch format: unified diff needs @@ hunk headers, editor patch needs @@ separators between context/change lines.");
         }
 
         if (CountPatchMutationLines(patch) > 0 || paths.IsMove)
@@ -406,7 +408,8 @@ internal sealed class PatchService
 
         throw new CommandErrorException(
             InvalidArgumentsCode,
-            $"Patch for {paths.TargetPath} did not contain any additions or deletions.");
+            $"Patch for {paths.TargetPath} contains only context lines (' ' prefix) with no additions ('+') or deletions ('-'). " +
+            "Every patch must change at least one line.");
     }
 
     private static int CountPatchMutationLines(FilePatch patch)
@@ -506,7 +509,8 @@ internal sealed class PatchService
 
         if (!openDocument.Saved)
         {
-            throw new CommandErrorException("unsupported_operation", $"Open document has unsaved changes: {normalizedPath}");
+            throw new CommandErrorException("unsupported_operation",
+                $"Cannot patch {normalizedPath} — it has unsaved changes in the VS editor. Fix: call save_document first, then retry the patch.");
         }
     }
 
@@ -524,7 +528,8 @@ internal sealed class PatchService
 
         if (!openDocument.Saved)
         {
-            throw new CommandErrorException("unsupported_operation", $"Open document has unsaved changes: {normalizedPath}");
+            throw new CommandErrorException("unsupported_operation",
+                $"Cannot close {normalizedPath} — it has unsaved changes. Fix: call save_document first, then retry.");
         }
 
         openDocument.Close(vsSaveChanges.vsSaveChangesNo);
@@ -831,7 +836,10 @@ internal sealed class PatchService
             var targetIndex = Math.Max(0, hunk.OriginalStart - 1);
             if (targetIndex < sourceIndex)
             {
-                throw new CommandErrorException(InvalidArgumentsCode, $"Patch hunks overlap for file: {path}");
+                throw new CommandErrorException(InvalidArgumentsCode,
+                    $"Patch hunks overlap at line {targetIndex + 1} for {path} (previous hunk consumed through line {sourceIndex}). " +
+                    "Fix: combine adjacent hunks (within ~3 lines) into a single hunk, or use editor patch format " +
+                    "(*** Begin Patch / *** Update File) which uses content matching instead of line numbers.");
             }
 
             // Fuzzy position search: if the hunk's nominal start line doesn't match
@@ -904,7 +912,8 @@ internal sealed class PatchService
                         resultLines.Add(line.Text);
                         break;
                     default:
-                        throw new CommandErrorException(InvalidArgumentsCode, $"Unsupported hunk line prefix '{line.Kind}' in patch for {path}.");
+                        throw new CommandErrorException(InvalidArgumentsCode,
+                            $"Unsupported line prefix '{line.Kind}' in patch for {path}. Each line must start with ' ' (context), '-' (deletion), or '+' (addition).");
                 }
             }
 
@@ -1106,9 +1115,12 @@ internal sealed class PatchService
         var descriptor = string.IsNullOrWhiteSpace(block.Header)
             ? "editor patch block"
             : $"editor patch block '{block.Header}'";
+        var firstMatchLine = matchLines.Length > 0 ? Truncate(matchLines[0], 60) : "(empty)";
         throw new CommandErrorException(
             InvalidArgumentsCode,
-            $"Could not locate {descriptor} in {path}.",
+            $"Could not locate {descriptor} in {path} (searched from line {sourceIndex + 1}). " +
+            $"First context line: \"{firstMatchLine}\". " +
+            "Fix: call read_file to verify the context lines exist in the file, then regenerate the patch with correct content.",
             new
             {
                 block = block.Header,
@@ -1136,6 +1148,9 @@ internal sealed class PatchService
             NormalizeLine(expected),
             StringComparison.Ordinal);
     }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value.Substring(0, maxLength) + "...";
 
     private static string NormalizeLine(string line)
     {
@@ -1171,7 +1186,10 @@ internal sealed class PatchService
         if (index >= existingLines.Count)
         {
             throw new CommandErrorException(InvalidArgumentsCode,
-                $"Patch {operation} exceeded file length for {path}. File has {existingLines.Count} lines but patch references line {index + 1}. Use read_file to check the actual file content before retrying.");
+                $"Patch {operation} at line {index + 1} exceeded file length ({existingLines.Count} lines) in {path}. " +
+                "The line numbers in your patch do not match the file. " +
+                "Fix: call read_file to check actual line numbers, then regenerate. " +
+                "Tip: use editor patch format (*** Begin Patch) which matches by content instead of line numbers.");
         }
 
         if (!LinesMatchFuzzy(existingLines[index], expected))
@@ -1184,7 +1202,11 @@ internal sealed class PatchService
 
             throw new CommandErrorException(
                 InvalidArgumentsCode,
-                $"Patch {operation} mismatch in {path} at line {index + 1}. Use read_file to verify the file content, then regenerate the patch with correct context lines.",
+                $"Patch {operation} mismatch in {path} at line {index + 1}. " +
+                $"Expected: \"{Truncate(expected, 80)}\" but found: \"{Truncate(existingLines[index], 80)}\". " +
+                "This usually means line numbers drifted because a prior hunk added or removed lines. " +
+                "Fix: call read_file with a tight range around line " + (index + 1) + " to see actual content, then regenerate. " +
+                "Tip: use editor patch format (*** Begin Patch) which matches by content instead of line numbers.",
                 new { expected, actual = existingLines[index], line = index + 1, fileContext = context });
         }
     }
@@ -1203,10 +1225,14 @@ internal sealed class PatchService
     {
         if (LooksLikeEditorPatchEnvelope(patchText))
         {
-            return "Patch used the editor wrapper format but did not contain any valid file entries. Use *** Add File, *** Delete File, or *** Update File blocks inside *** Begin Patch / *** End Patch.";
+            return "Patch has *** Begin Patch but no file entries. " +
+                "Required structure: *** Begin Patch\\n*** Update File: <path>\\n@@\\n <context>\\n-old\\n+new\\n*** End Patch. " +
+                "Each file needs *** Add File: <path>, *** Delete File: <path>, or *** Update File: <path>.";
         }
 
-        return "Patch did not contain a supported format. Use unified diff syntax with ---/+++ file headers and @@ hunks, or editor patch syntax with *** Begin Patch / *** End Patch.";
+        return "Patch format not recognized. " +
+            "Preferred: *** Begin Patch\\n*** Update File: <path>\\n@@\\n <context>\\n-old\\n+new\\n*** End Patch. " +
+            "Also accepted: unified diff with --- a/<path> / +++ b/<path> / @@ -line,count +line,count @@ headers.";
     }
 
     private static bool LooksLikeEditorPatchEnvelope(string patchText)

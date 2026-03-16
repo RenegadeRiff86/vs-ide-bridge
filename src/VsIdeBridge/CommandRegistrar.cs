@@ -109,5 +109,7 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new SolutionProjectCommands.IdeQueryProjectReferencesCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SolutionProjectCommands.IdeQueryProjectOutputsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new PythonCommands.IdeSetPythonProjectEnvCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new PythonCommands.IdeSetPythonStartupFileCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new PythonCommands.IdeGetPythonStartupFileCommand(package, runtime, commandService));
     }
 }

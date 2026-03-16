@@ -355,6 +355,10 @@ python_repl
 python_run_file
 python_set_active_env
 python_set_project_env
+python_set_startup_file
+python_get_startup_file
+python_sync_env
+python_install_requirements
 query_project_configurations
 query_project_items
 query_project_outputs
@@ -376,6 +380,7 @@ set_version
 shell_exec
 symbol_info
 tool_help
+ui_settings
 vs_close
 vs_open
 wait_for_instance
@@ -405,6 +410,7 @@ Compatibility fields (`commands[]`, `legacyCommands[]`, `commandDetails[]`) are 
 | `create-solution` | Create and open a new `.sln` solution |
 | `close` | Close the targeted Visual Studio instance gracefully |
 | `batch` | Execute multiple commands in one pipe round-trip |
+| `ui-settings` | Read or change IDE Bridge UI settings (allow edits, go-to-edited-parts, etc.) |
 
 ### Search and Navigation
 
@@ -505,6 +511,19 @@ Compatibility fields (`commands[]`, `legacyCommands[]`, `commandDetails[]`) are 
 | Command | Description |
 |---------|-------------|
 | `set-python-project-env` | Set the active Python interpreter for the open `.pyproj` project or open-folder workspace in Visual Studio (affects IntelliSense and debugging) |
+| `python-list-envs` | List available Python environments |
+| `python-env-info` | Get details about a Python environment |
+| `python-set-active-env` | Set the active Python environment |
+| `python-list-packages` | List installed packages in the active environment |
+| `python-install-package` | Install a Python package |
+| `python-install-requirements` | Install packages from a requirements file |
+| `python-remove-package` | Remove a Python package |
+| `python-create-env` | Create a new Python environment |
+| `python-sync-env` | Sync environment with requirements |
+| `python-repl` | Execute Python code in the VS REPL |
+| `python-run-file` | Run a Python file in VS |
+| `python-get-startup-file` | Get the current Python startup file |
+| `python-set-startup-file` | Set the Python startup file |
 
 ## Argument Contract
 
@@ -561,6 +580,8 @@ build-errors --timeout-ms 600000 --out "C:\temp\build-errors.json"
 ### `apply-diff` format
 
 `apply-diff` accepts either standard unified diff text with `---` / `+++` file headers and `@@` hunks, or editor patch text with `*** Begin Patch` / `*** End Patch` blocks. `apply-patch` is an alias for the same command.
+
+**Editor patch is the preferred format for LLM callers.** It uses content-based matching instead of line numbers, so it is immune to the line-number drift that causes unified diffs to fail when multiple hunks shift line counts. Always call `read_file` first to get the current file content before writing a patch.
 
 ```diff
 --- a/src/foo.cpp
@@ -866,7 +887,7 @@ Add `--instance <instanceId>` only when you intentionally want to pin one client
 
 Exposed MCP tools use simple names. See the MCP Command Catalog below or call `tool_help` for the live installed list and schemas:
 
-**IDE state and binding**: `bridge_state`, `wait_for_ready`, `tool_help`, `help`, `bridge_health`, `list_instances`, `bind_instance`, `bind_solution`
+**IDE state and binding**: `bridge_state`, `wait_for_ready`, `tool_help`, `help`, `bridge_health`, `list_instances`, `bind_instance`, `bind_solution`, `ui_settings`
 
 **Diagnostics**: `errors`, `warnings`, `diagnostics_snapshot`
 
@@ -884,7 +905,7 @@ Exposed MCP tools use simple names. See the MCP Command Catalog below or call `t
 
 **Project query**: `query_project_items`, `query_project_properties`, `query_project_configurations`, `query_project_references`, `query_project_outputs`
 
-**Python**: `python_list_envs`, `python_env_info`, `python_set_active_env`, `python_set_project_env`, `python_list_packages`, `python_repl`, `python_run_file`, `python_install_package`, `python_remove_package`, `python_create_env`
+**Python**: `python_list_envs`, `python_env_info`, `python_set_active_env`, `python_set_project_env`, `python_list_packages`, `python_repl`, `python_run_file`, `python_install_package`, `python_install_requirements`, `python_remove_package`, `python_create_env`, `python_sync_env`, `python_get_startup_file`, `python_set_startup_file`
 
 **VS lifecycle**: `vs_open`, `vs_close`, `wait_for_instance`
 

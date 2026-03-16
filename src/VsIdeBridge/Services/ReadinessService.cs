@@ -14,7 +14,7 @@ internal sealed class ReadinessService
     private const int PollIntervalMilliseconds = 500;
     private const int StableStatusBarSampleCount = 2;
 
-    public async Task<JObject> WaitForReadyAsync(IdeCommandContext context, int timeoutMilliseconds)
+    public async Task<JObject> WaitForReadyAsync(IdeCommandContext context, int timeoutMilliseconds, bool afterEdit = false)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
@@ -30,6 +30,16 @@ internal sealed class ReadinessService
         var stage = service?.GetStageStatusForSolutionLoad(CommonOperationProgressStageIds.Intellisense);
         var statusbar = await context.Package.GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) as IVsStatusbar;
         var deadline = startedAt.Add(timeout);
+
+        // After an edit, VS needs a moment to schedule IntelliSense re-analysis.
+        // Wait one poll interval so IsInProgress has a chance to transition from
+        // idle to active before we evaluate readiness.
+        if (afterEdit)
+        {
+            await Task.Delay(PollIntervalMilliseconds, context.CancellationToken).ConfigureAwait(false);
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+        }
+
         var readyStatusSamples = 0;
         var lastStatusBarText = string.Empty;
         var statusBarReady = false;
