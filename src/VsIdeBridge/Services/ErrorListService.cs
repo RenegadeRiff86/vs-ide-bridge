@@ -53,17 +53,17 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private const int StableSampleCount = 3;
     private const int PopulationPollIntervalMilliseconds = 2000;
     private const int DefaultWaitTimeoutMilliseconds = 90_000;
-    private const int BuildOutputReadAttemptCount = 2;
+    private const int BuildOutputReadAttemptCount = CoordinateSuffixTrimLength;
     private const int CoordinateSuffixTrimLength = 2;
     private const int MaximumBuildOutputCoordinateCount = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
     private const int MaxBestPracticeFiles = 64;
     private const int MaxBestPracticeFindingsPerFile = 25;
-    private const int MinimumSymbolLength = 2;
+    private const int MinimumSymbolLength = CoordinateSuffixTrimLength;
     private const int DiagnosticLineQualityScore = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
     private const int DiagnosticColumnQualityScore = CoordinateSuffixTrimLength;
-    private const int RepeatedStringThreshold = 5;
+    private const int RepeatedStringThreshold = MaxBestPracticeFindingsPerFile / MaxBestPracticeFindingsPerFile + CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
     private const int RepeatedNumberThreshold = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
-    private const int MaxSuppressionFindingsPerFile = 5;
+    private const int MaxSuppressionFindingsPerFile = RepeatedStringThreshold;
 
     private const int LinkerCodePrefixLength = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
     private const string SeverityKey = "severity";
@@ -136,6 +136,122 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private static readonly Regex BareExceptPattern = new(@"^\s*except\s*:", RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly Regex MutableDefaultArgPattern = new(@"\bdef\s+(\w+)\s*\([^)]*=\s*(?:\[\s*\]|\{\s*\}|set\s*\(\s*\))", RegexOptions.Compiled);
     private static readonly Regex ImportStarPattern = new(@"^\s*from\s+(\S+)\s+import\s+\*", RegexOptions.Compiled | RegexOptions.Multiline);
+
+    // BP1012: File too long
+    private const int FileTooLongWarningThreshold = 1000;
+    private const int FileTooLongErrorThreshold = 2000;
+
+    // BP1013: Method/function too long
+    private const int MethodTooLongThreshold = 100;
+    private static readonly Regex CSharpMethodSignaturePattern = new(
+        @"^[ \t]*(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|async|new|partial|readonly)\s+)*(?!return\b|if\b|else\b|while\b|for\b|foreach\b|switch\b|catch\b|using\b|lock\b|yield\b)[\w<>\[\],\s\?]+\s+(\w+)\s*(?:<[^>]+>)?\s*\(",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex PythonDefPattern = new(@"^[ \t]*def\s+(\w+)\s*\(", RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex CppFunctionPattern = new(
+        @"^[ \t]*(?:(?:static|virtual|inline|explicit|constexpr|const|unsigned|signed|volatile|extern|friend|template\s*<[^>]*>)\s+)*[\w:*&<>,\s]+\s+(\w+)\s*\([^;]*$",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    // BP1014: Poor/vague naming
+    private static readonly Regex PoorCSharpNamingPattern = new(
+        @"\b(?:var|int|string|bool|double|float|long|object|dynamic)\s+(?<name>tmp|temp|data|val|res|ret|result|process|handle|flag|item|stuff|thing|manager|helper|util|misc)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SingleLetterVarPattern = new(
+        @"(?:(?:var|int|string|bool|double|float|long|short|byte|char|object|decimal)\s+(?<name>[a-zA-Z])\s*[=;,)])",
+        RegexOptions.Compiled);
+    private static readonly Regex PythonPoorNamingPattern = new(
+        @"^[ \t]*(?<name>tmp|temp|data|val|res|ret|result|process|handle|flag|stuff|thing)\s*=",
+        RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
+    private static readonly Regex PythonSingleLetterAssignPattern = new(
+        @"^[ \t]*(?<name>[a-zA-Z])\s*=\s*(?!.*\bfor\b)",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    // BP1015: Deep nesting
+    private const int DeepNestingThreshold = MaxSuppressionFindingsPerFile;
+
+    // BP1016: Commented-out code
+    private const int CommentedOutCodeThreshold = MaxSuppressionFindingsPerFile;
+    private static readonly Regex CSharpCommentedCodePattern = new(
+        @"^\s*//\s*(?:(?:public|private|protected|internal|static|var|if|else|for|foreach|while|return|throw|try|catch|class|using|namespace|void|int|string|bool)\b|\w+\s*\(.*\)\s*[;{]|\w+\s*=\s*)",
+        RegexOptions.Compiled);
+    private static readonly Regex PythonCommentedCodePattern = new(
+        @"^\s*#\s*(?:(?:def|class|if|else|elif|for|while|return|import|from|try|except|raise|with|yield)\b|\w+\s*\(.*\)\s*$|\w+\s*=\s*)",
+        RegexOptions.Compiled);
+    private static readonly Regex CppCommentedCodePattern = new(
+        @"^\s*//\s*(?:(?:class|struct|if|else|for|while|return|throw|try|catch|namespace|void|int|auto|const|static|virtual|template)\b|\w+\s*\(.*\)\s*[;{]|\w+\s*=\s*)",
+        RegexOptions.Compiled);
+
+    // BP1017: Mixed indentation (tabs vs spaces)
+    private static readonly Regex TabIndentedLinePattern = new(@"^\t", RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex SpaceIndentedLinePattern = new(@"^ {2,}", RegexOptions.Compiled | RegexOptions.Multiline);
+
+    // BP1018: God class (C# — too many methods)
+    private const int GodClassMethodThreshold = 30;
+    private const int GodClassFieldThreshold = 15;
+    private static readonly Regex CSharpClassDeclPattern = new(
+        @"^[ \t]*(?:(?:public|private|protected|internal|static|sealed|abstract|partial)\s+)*class\s+(\w+)",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex CSharpFieldDeclPattern = new(
+        @"^[ \t]*(?:(?:public|private|protected|internal|static|readonly|volatile|const)\s+)+[\w<>\[\],\?\s]+\s+_?\w+\s*[=;]",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    // BP1019: Missing using for IDisposable (C#)
+    private static readonly Regex NewDisposablePattern = new(
+        @"(?<!using\s*\([^)]*)\b(?:var|[\w<>\[\]]+)\s+(\w+)\s*=\s*new\s+(?:Stream(?:Reader|Writer)|FileStream|Http(?:Client|ResponseMessage)|SqlConnection|SqlCommand|Process|Timer|MemoryStream|BinaryReader|BinaryWriter|WebClient|TcpClient|UdpClient|NetworkStream|CryptoStream)\s*\(",
+        RegexOptions.Compiled);
+
+    // BP1020: DateTime.Now/UtcNow in loops (C#)
+    private static readonly Regex DateTimeInLoopPattern = new(
+        @"(?:for\s*\(|foreach\s*\(|while\s*\()[^{]*\{[^}]*DateTime\s*\.\s*(?:Now|UtcNow)",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex DateTimeNowSimplePattern = new(
+        @"DateTime\s*\.\s*(?<prop>Now|UtcNow)",
+        RegexOptions.Compiled);
+
+    // BP1021: Overuse of dynamic/object (C#)
+    private static readonly Regex DynamicObjectParamPattern = new(
+        @"\b(?:dynamic|object)\s+\w+\s*[,)]",
+        RegexOptions.Compiled);
+    private const int DynamicObjectThreshold = MaxSuppressionFindingsPerFile;
+
+    // BP1022: Raw new without smart pointer (C++)
+    private static readonly Regex RawNewPattern = new(
+        @"(?<!(?:unique_ptr|shared_ptr|make_unique|make_shared|reset|emplace)\s*(?:<[^>]*>\s*)?\()\bnew\s+\w+",
+        RegexOptions.Compiled);
+
+    // BP1023: Heavy macro usage (C++)
+    private const int MacroOveruseThreshold = 15;
+    private static readonly Regex PreprocessorDefinePattern = new(
+        @"^\s*#\s*define\s+(\w+)",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    // BP1024: Deep inheritance (C++)
+    // Detected by counting `:` separated base classes
+
+    // BP1025: Missing const on C++ methods
+    private static readonly Regex CppNonConstMethodPattern = new(
+        @"^\s*(?:virtual\s+)?(?:[\w:*&<>,\s]+)\s+(\w+)\s*\([^)]*\)\s*(?:override\s*)?(?=\s*\{)",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
+    // BP1026: Python == True/False
+    private static readonly Regex PythonBoolComparePattern = new(
+        @"(?:==\s*True|==\s*False|is\s+True|is\s+False)\b",
+        RegexOptions.Compiled);
+
+    private const string BP1012HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions";
+    private const string BP1013HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions";
+    private const string BP1014HelpUri = "https://learn.microsoft.com/en-us/dotnet/standard/design-guidelines/general-naming-conventions";
+    private const string BP1015HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions";
+    private const string BP1016HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions";
+    private const string BP1017HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions";
+    private const string BP1018HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions";
+    private const string BP1019HelpUri = "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/using-objects";
+    private const string BP1020HelpUri = "https://learn.microsoft.com/en-us/dotnet/api/system.datetime.utcnow";
+    private const string BP1021HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/reference-types";
+    private const string BP1022HelpUri = "https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#r11-avoid-calling-new-and-delete-explicitly";
+    private const string BP1023HelpUri = "https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#p3-express-intent";
+    private const string BP1024HelpUri = "https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#c133-avoid-protected-data";
+    private const string BP1025HelpUri = "https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#con1-by-default-make-objects-immutable";
+    private const string BP1026HelpUri = "https://peps.python.org/pep-0008/#programming-recommendations";
 
     private readonly ErrorListProvider _bestPracticeProvider = new(package)
     {
@@ -340,13 +456,13 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         return ext is ".h" or ".hh" or ".hpp" or ".hxx";
     }
 
-    private static IReadOnlyList<JObject> AnalyzeBestPracticeFindings(IReadOnlyList<string> files)
+    private static IReadOnlyList<JObject> AnalyzeBestPracticeFindings(IReadOnlyList<string> files, string? contentOverride = null)
     {
         var findings = new List<JObject>();
 
         foreach (var file in files)
         {
-            var content = SafeReadFile(file);
+            var content = contentOverride ?? SafeReadFile(file);
             var perFileFindings = 0;
             if (string.IsNullOrWhiteSpace(content))
             {
@@ -357,7 +473,13 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
             // Cross-language rules
             IEnumerable<JObject> fileFindings = FindRepeatedStringLiterals(file, content)
-                .Concat(FindMagicNumbers(file, content));
+                .Concat(FindMagicNumbers(file, content))
+                .Concat(FindFileTooLong(file, content))
+                .Concat(FindLongMethods(file, content, language))
+                .Concat(FindPoorNaming(file, content, language))
+                .Concat(FindDeepNesting(file, content, language))
+                .Concat(FindCommentedOutCode(file, content, language))
+                .Concat(FindMixedIndentation(file, content));
 
             // Language-specific rules
             if (language == CodeLanguage.CSharp)
@@ -365,13 +487,21 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
                 fileFindings = fileFindings
                     .Concat(FindSuspiciousRoundDown(file, content))
                     .Concat(FindEmptyCatchBlocks(file, content))
-                    .Concat(FindAsyncVoid(file, content));
+                    .Concat(FindAsyncVoid(file, content))
+                    .Concat(FindGodClass(file, content))
+                    .Concat(FindMissingUsing(file, content))
+                    .Concat(FindDateTimeInLoop(file, content))
+                    .Concat(FindDynamicObjectOveruse(file, content));
             }
             else if (language == CodeLanguage.Cpp)
             {
                 fileFindings = fileFindings
                     .Concat(FindRawDelete(file, content))
-                    .Concat(FindCStyleCasts(file, content));
+                    .Concat(FindCStyleCasts(file, content))
+                    .Concat(FindRawNew(file, content))
+                    .Concat(FindMacroOveruse(file, content))
+                    .Concat(FindDeepInheritance(file, content))
+                    .Concat(FindMissingConst(file, content));
                 if (IsHeaderFile(file))
                 {
                     fileFindings = fileFindings.Concat(FindUsingNamespaceInHeader(file, content));
@@ -382,7 +512,8 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
                 fileFindings = fileFindings
                     .Concat(FindBareExcept(file, content))
                     .Concat(FindMutableDefaultArgs(file, content))
-                    .Concat(FindImportStar(file, content));
+                    .Concat(FindImportStar(file, content))
+                    .Concat(FindBooleanComparison(file, content));
             }
 
             foreach (var finding in fileFindings)
@@ -399,6 +530,21 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         return [.. findings
             .GroupBy(CreateFindingIdentity, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())];
+    }
+
+    /// <summary>
+    /// Pre-write analysis: scans content that is about to be written and returns best-practice
+    /// warnings without publishing them to the Error List. Callers (PatchService, write-file)
+    /// can include these in their response so the LLM sees issues immediately.
+    /// </summary>
+    internal static IReadOnlyList<JObject> AnalyzeContentBeforeWrite(string filePath, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content) || !IsBestPracticeCandidateFile(filePath))
+        {
+            return [];
+        }
+
+        return AnalyzeBestPracticeFindings([filePath], contentOverride: content);
     }
 
     private static string SafeReadFile(string filePath)
@@ -676,6 +822,602 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             {
                 yield break;
             }
+        }
+    }
+
+    // ———— BP1012: File too long ————
+
+    private static IEnumerable<JObject> FindFileTooLong(string file, string content)
+    {
+        var lineCount = content.Split('\n').Length;
+        if (lineCount >= FileTooLongErrorThreshold)
+        {
+            yield return CreateBestPracticeRow(
+                code: "BP1012",
+                message: $"File is {lineCount} lines long (threshold: {FileTooLongErrorThreshold}). Split into smaller, focused files.",
+                file: file,
+                line: 1,
+                symbol: Path.GetFileName(file),
+                helpUri: BP1012HelpUri);
+        }
+        else if (lineCount >= FileTooLongWarningThreshold)
+        {
+            yield return CreateBestPracticeRow(
+                code: "BP1012",
+                message: $"File is {lineCount} lines long (threshold: {FileTooLongWarningThreshold}). Consider splitting into smaller files.",
+                file: file,
+                line: 1,
+                symbol: Path.GetFileName(file),
+                helpUri: BP1012HelpUri);
+        }
+    }
+
+    // ———— BP1013: Method/function too long ————
+
+    private static IEnumerable<JObject> FindLongMethods(string file, string content, CodeLanguage language)
+    {
+        var lines = content.Split('\n');
+        var pattern = language switch
+        {
+            CodeLanguage.CSharp => CSharpMethodSignaturePattern,
+            CodeLanguage.Python => PythonDefPattern,
+            CodeLanguage.Cpp => CppFunctionPattern,
+            _ => null,
+        };
+        if (pattern is null)
+        {
+            yield break;
+        }
+
+        var findingCount = 0;
+        var matches = pattern.Matches(content);
+        foreach (Match match in matches)
+        {
+            var methodName = match.Groups[1].Value;
+            var startLine = GetLineNumber(content, match.Index);
+            var methodLength = language == CodeLanguage.Python
+                ? CountPythonFunctionLines(lines, startLine - 1)
+                : CountBracedBlockLines(lines, startLine - 1);
+
+            if (methodLength > MethodTooLongThreshold)
+            {
+                yield return CreateBestPracticeRow(
+                    code: "BP1013",
+                    message: $"Method '{methodName}' is {methodLength} lines long (threshold: {MethodTooLongThreshold}). Break into smaller methods.",
+                    file: file,
+                    line: startLine,
+                    symbol: methodName,
+                    helpUri: BP1013HelpUri);
+                findingCount++;
+                if (findingCount >= MaxSuppressionFindingsPerFile)
+                {
+                    yield break;
+                }
+            }
+        }
+    }
+
+    private static int CountBracedBlockLines(string[] lines, int startIndex)
+    {
+        var depth = 0;
+        var foundOpen = false;
+        for (var i = startIndex; i < lines.Length; i++)
+        {
+            foreach (var ch in lines[i])
+            {
+                if (ch == '{') { depth++; foundOpen = true; }
+                else if (ch == '}') { depth--; }
+            }
+            if (foundOpen && depth <= 0)
+            {
+                return i - startIndex + 1;
+            }
+        }
+        return lines.Length - startIndex;
+    }
+
+    private static int CountPythonFunctionLines(string[] lines, int startIndex)
+    {
+        if (startIndex >= lines.Length)
+        {
+            return 0;
+        }
+
+        var defLine = lines[startIndex];
+        var baseIndent = defLine.Length - defLine.TrimStart().Length;
+        var count = 1;
+        for (var i = startIndex + 1; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                count++;
+                continue;
+            }
+            var indent = line.Length - line.TrimStart().Length;
+            if (indent <= baseIndent)
+            {
+                break;
+            }
+            count++;
+        }
+        return count;
+    }
+
+    // ———— BP1014: Poor/vague naming ————
+
+    private static IEnumerable<JObject> FindPoorNaming(string file, string content, CodeLanguage language)
+    {
+        var findingCount = 0;
+
+        // Single-letter variables (not loop counters)
+        if (language == CodeLanguage.CSharp)
+        {
+            foreach (Match match in SingleLetterVarPattern.Matches(content))
+            {
+                var name = match.Groups["name"].Value;
+                if (name is "i" or "j" or "k" or "x" or "y" or "z" or "e" or "s" or "_")
+                {
+                    continue;
+                }
+                yield return CreateBestPracticeRow(
+                    code: "BP1014",
+                    message: $"Single-letter variable '{name}' is unclear. Use a descriptive name.",
+                    file: file,
+                    line: GetLineNumber(content, match.Index),
+                    symbol: name,
+                    helpUri: BP1014HelpUri);
+                findingCount++;
+                if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+            }
+
+            foreach (Match match in PoorCSharpNamingPattern.Matches(content))
+            {
+                var name = match.Groups["name"].Value;
+                yield return CreateBestPracticeRow(
+                    code: "BP1014",
+                    message: $"Vague variable name '{name}'. Use a name that describes the value's purpose.",
+                    file: file,
+                    line: GetLineNumber(content, match.Index),
+                    symbol: name,
+                    helpUri: BP1014HelpUri);
+                findingCount++;
+                if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+            }
+        }
+        else if (language == CodeLanguage.Python)
+        {
+            foreach (Match match in PythonSingleLetterAssignPattern.Matches(content))
+            {
+                var name = match.Groups["name"].Value;
+                if (name is "i" or "j" or "k" or "x" or "y" or "z" or "e" or "s" or "_")
+                {
+                    continue;
+                }
+                yield return CreateBestPracticeRow(
+                    code: "BP1014",
+                    message: $"Single-letter variable '{name}' is unclear. Use a descriptive name.",
+                    file: file,
+                    line: GetLineNumber(content, match.Index),
+                    symbol: name,
+                    helpUri: BP1014HelpUri);
+                findingCount++;
+                if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+            }
+
+            foreach (Match match in PythonPoorNamingPattern.Matches(content))
+            {
+                var name = match.Groups["name"].Value;
+                yield return CreateBestPracticeRow(
+                    code: "BP1014",
+                    message: $"Vague variable name '{name}'. Use a name that describes the value's purpose.",
+                    file: file,
+                    line: GetLineNumber(content, match.Index),
+                    symbol: name,
+                    helpUri: BP1014HelpUri);
+                findingCount++;
+                if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+            }
+        }
+    }
+
+    // ———— BP1015: Deep nesting ————
+
+    private static IEnumerable<JObject> FindDeepNesting(string file, string content, CodeLanguage language)
+    {
+        var lines = content.Split('\n');
+        var findingCount = 0;
+        var reportedLines = new HashSet<int>();
+
+        if (language == CodeLanguage.Python)
+        {
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (string.IsNullOrWhiteSpace(line)) { continue; }
+                var indent = line.Length - line.TrimStart().Length;
+                var level = indent / 4;
+                if (level >= DeepNestingThreshold && reportedLines.Add(i))
+                {
+                    yield return CreateBestPracticeRow(
+                        code: "BP1015",
+                        message: $"Code is nested {level} levels deep (threshold: {DeepNestingThreshold}). Extract methods or use early returns to flatten.",
+                        file: file,
+                        line: i + 1,
+                        symbol: "nesting",
+                        helpUri: BP1015HelpUri);
+                    findingCount++;
+                    if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+                }
+            }
+        }
+        else
+        {
+            var depth = 0;
+            for (var i = 0; i < lines.Length; i++)
+            {
+                foreach (var ch in lines[i])
+                {
+                    if (ch == '{') { depth++; }
+                    else if (ch == '}') { depth--; }
+                }
+                if (depth >= DeepNestingThreshold && !string.IsNullOrWhiteSpace(lines[i]) && reportedLines.Add(i))
+                {
+                    yield return CreateBestPracticeRow(
+                        code: "BP1015",
+                        message: $"Code is nested {depth} levels deep (threshold: {DeepNestingThreshold}). Extract methods or use early returns to flatten.",
+                        file: file,
+                        line: i + 1,
+                        symbol: "nesting",
+                        helpUri: BP1015HelpUri);
+                    findingCount++;
+                    if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+                }
+            }
+        }
+    }
+
+    // ———— BP1016: Commented-out code blocks ————
+
+    private static IEnumerable<JObject> FindCommentedOutCode(string file, string content, CodeLanguage language)
+    {
+        var pattern = language switch
+        {
+            CodeLanguage.CSharp => CSharpCommentedCodePattern,
+            CodeLanguage.Python => PythonCommentedCodePattern,
+            CodeLanguage.Cpp => CppCommentedCodePattern,
+            _ => null,
+        };
+        if (pattern is null) { yield break; }
+
+        var lines = content.Split('\n');
+        var findingCount = 0;
+        var consecutiveCount = 0;
+        var blockStart = -1;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (pattern.IsMatch(lines[i]))
+            {
+                if (consecutiveCount == 0) { blockStart = i; }
+                consecutiveCount++;
+            }
+            else
+            {
+                if (consecutiveCount >= CommentedOutCodeThreshold)
+                {
+                    yield return CreateBestPracticeRow(
+                        code: "BP1016",
+                        message: $"{consecutiveCount} consecutive lines of commented-out code. Remove dead code; use version control to recover it.",
+                        file: file,
+                        line: blockStart + 1,
+                        symbol: "commented-code",
+                        helpUri: BP1016HelpUri);
+                    findingCount++;
+                    if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+                }
+                consecutiveCount = 0;
+            }
+        }
+
+        if (consecutiveCount >= CommentedOutCodeThreshold)
+        {
+            yield return CreateBestPracticeRow(
+                code: "BP1016",
+                message: $"{consecutiveCount} consecutive lines of commented-out code at end of file. Remove dead code; use version control to recover it.",
+                file: file,
+                line: blockStart + 1,
+                symbol: "commented-code",
+                helpUri: BP1016HelpUri);
+        }
+    }
+
+    // ———— BP1017: Mixed indentation (tabs vs spaces) ————
+
+    private static IEnumerable<JObject> FindMixedIndentation(string file, string content)
+    {
+        var hasTabs = TabIndentedLinePattern.IsMatch(content);
+        var hasSpaces = SpaceIndentedLinePattern.IsMatch(content);
+        if (hasTabs && hasSpaces)
+        {
+            yield return CreateBestPracticeRow(
+                code: "BP1017",
+                message: "File mixes tabs and spaces for indentation. Pick one and be consistent.",
+                file: file,
+                line: 1,
+                symbol: "indentation",
+                helpUri: BP1017HelpUri);
+        }
+    }
+
+    // ———— BP1018: God class (C#) ————
+
+    private static IEnumerable<JObject> FindGodClass(string file, string content)
+    {
+        var classMatches = CSharpClassDeclPattern.Matches(content);
+        var findingCount = 0;
+
+        foreach (Match classMatch in classMatches)
+        {
+            var className = classMatch.Groups[1].Value;
+            var classStartLine = GetLineNumber(content, classMatch.Index);
+            var lines = content.Split('\n');
+            var classBody = ExtractBracedBlock(lines, classStartLine - 1);
+
+            var methodCount = CSharpMethodSignaturePattern.Matches(classBody).Count;
+            var fieldCount = CSharpFieldDeclPattern.Matches(classBody).Count;
+
+            if (methodCount >= GodClassMethodThreshold)
+            {
+                yield return CreateBestPracticeRow(
+                    code: "BP1018",
+                    message: $"Class '{className}' has {methodCount} methods (threshold: {GodClassMethodThreshold}). Split responsibilities into smaller classes.",
+                    file: file,
+                    line: classStartLine,
+                    symbol: className,
+                    helpUri: BP1018HelpUri);
+                findingCount++;
+            }
+
+            if (fieldCount >= GodClassFieldThreshold)
+            {
+                yield return CreateBestPracticeRow(
+                    code: "BP1018",
+                    message: $"Class '{className}' has {fieldCount} fields (threshold: {GodClassFieldThreshold}). Consider splitting state into smaller classes.",
+                    file: file,
+                    line: classStartLine,
+                    symbol: className,
+                    helpUri: BP1018HelpUri);
+                findingCount++;
+            }
+
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
+    private static string ExtractBracedBlock(string[] lines, int startIndex)
+    {
+        var depth = 0;
+        var foundOpen = false;
+        var blockLines = new List<string>();
+        for (var i = startIndex; i < lines.Length; i++)
+        {
+            blockLines.Add(lines[i]);
+            foreach (var ch in lines[i])
+            {
+                if (ch == '{') { depth++; foundOpen = true; }
+                else if (ch == '}') { depth--; }
+            }
+            if (foundOpen && depth <= 0)
+            {
+                break;
+            }
+        }
+        return string.Join("\n", blockLines);
+    }
+
+    // ———— BP1019: Missing using for IDisposable (C#) ————
+
+    private static IEnumerable<JObject> FindMissingUsing(string file, string content)
+    {
+        var findingCount = 0;
+        foreach (Match match in NewDisposablePattern.Matches(content))
+        {
+            var line = GetLineAt(content, match.Index);
+            if (line.TrimStart().StartsWith("using ", StringComparison.Ordinal) ||
+                line.TrimStart().StartsWith("using(", StringComparison.Ordinal) ||
+                line.TrimStart().StartsWith("await using", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var varName = match.Groups[1].Value;
+            yield return CreateBestPracticeRow(
+                code: "BP1019",
+                message: $"'{varName}' is IDisposable but not wrapped in a 'using' statement. Resources may leak.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: varName,
+                helpUri: BP1019HelpUri);
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
+    // ———— BP1020: DateTime.Now/UtcNow in loops (C#) ————
+
+    private static IEnumerable<JObject> FindDateTimeInLoop(string file, string content)
+    {
+        var lines = content.Split('\n');
+        var findingCount = 0;
+        var inLoop = false;
+        var loopBraceDepth = 0;
+        var braceDepth = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (Regex.IsMatch(line, @"\b(?:for|foreach|while)\s*\("))
+            {
+                inLoop = true;
+                loopBraceDepth = braceDepth;
+            }
+
+            foreach (var ch in line)
+            {
+                if (ch == '{') { braceDepth++; }
+                else if (ch == '}') { braceDepth--; }
+            }
+
+            if (inLoop && braceDepth <= loopBraceDepth)
+            {
+                inLoop = false;
+            }
+
+            if (inLoop)
+            {
+                var dtMatch = DateTimeNowSimplePattern.Match(line);
+                if (dtMatch.Success)
+                {
+                    yield return CreateBestPracticeRow(
+                        code: "BP1020",
+                        message: $"DateTime.{dtMatch.Groups["prop"].Value} called inside a loop. Capture it once before the loop.",
+                        file: file,
+                        line: i + 1,
+                        symbol: $"DateTime.{dtMatch.Groups["prop"].Value}",
+                        helpUri: BP1020HelpUri);
+                    findingCount++;
+                    if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+                }
+            }
+        }
+    }
+
+    // ———— BP1021: Overuse of dynamic/object (C#) ————
+
+    private static IEnumerable<JObject> FindDynamicObjectOveruse(string file, string content)
+    {
+        var matches = DynamicObjectParamPattern.Matches(content);
+        if (matches.Count >= DynamicObjectThreshold)
+        {
+            yield return CreateBestPracticeRow(
+                code: "BP1021",
+                message: $"'dynamic' or 'object' used as parameter type {matches.Count} times. Use specific types or generics for type safety.",
+                file: file,
+                line: GetLineNumber(content, matches[0].Index),
+                symbol: "dynamic/object",
+                helpUri: BP1021HelpUri);
+        }
+    }
+
+    // ———— BP1022: Raw new without smart pointer (C++) ————
+
+    private static IEnumerable<JObject> FindRawNew(string file, string content)
+    {
+        var findingCount = 0;
+        foreach (Match match in RawNewPattern.Matches(content))
+        {
+            var line = GetLineAt(content, match.Index);
+            if (line.Contains("make_unique") || line.Contains("make_shared") || line.Contains("reset("))
+            {
+                continue;
+            }
+
+            yield return CreateBestPracticeRow(
+                code: "BP1022",
+                message: $"Raw 'new' detected. Prefer std::make_unique or std::make_shared for automatic memory management.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: "new",
+                helpUri: BP1022HelpUri);
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
+    // ———— BP1023: Heavy macro usage (C++) ————
+
+    private static IEnumerable<JObject> FindMacroOveruse(string file, string content)
+    {
+        var matches = PreprocessorDefinePattern.Matches(content);
+        if (matches.Count >= MacroOveruseThreshold)
+        {
+            var sampleNames = matches.Cast<Match>().Take(MaxSuppressionFindingsPerFile).Select(m => m.Groups[1].Value);
+            yield return CreateBestPracticeRow(
+                code: "BP1023",
+                message: $"File has {matches.Count} #define macros (threshold: {MacroOveruseThreshold}). Prefer constexpr, inline functions, or templates.",
+                file: file,
+                line: GetLineNumber(content, matches[0].Index),
+                symbol: "#define",
+                helpUri: BP1023HelpUri);
+        }
+    }
+
+    // ———— BP1024: Deep inheritance (C++) ————
+
+    private static IEnumerable<JObject> FindDeepInheritance(string file, string content)
+    {
+        var classPattern = new Regex(@"^[ \t]*(?:class|struct)\s+(\w+)\s*:\s*(.+?)(?:\{|$)", RegexOptions.Compiled | RegexOptions.Multiline);
+        var findingCount = 0;
+        foreach (Match match in classPattern.Matches(content))
+        {
+            var className = match.Groups[1].Value;
+            var bases = match.Groups[2].Value.Split(',');
+            if (bases.Length >= DeepNestingThreshold)
+            {
+                yield return CreateBestPracticeRow(
+                    code: "BP1024",
+                    message: $"Class '{className}' inherits from {bases.Length} bases. Deep/wide inheritance is hard to maintain; prefer composition.",
+                    file: file,
+                    line: GetLineNumber(content, match.Index),
+                    symbol: className,
+                    helpUri: BP1024HelpUri);
+                findingCount++;
+                if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+            }
+        }
+    }
+
+    // ———— BP1025: Missing const correctness (C++) ————
+
+    private static IEnumerable<JObject> FindMissingConst(string file, string content)
+    {
+        // Detect pass-by-value of large types (string, vector, map, etc.)
+        var passByValuePattern = new Regex(
+            @"\b(?:std::(?:string|vector|map|unordered_map|set|list|deque|array)|string|vector|map)\s+(\w+)\s*[,)]",
+            RegexOptions.Compiled);
+        var findingCount = 0;
+        foreach (Match match in passByValuePattern.Matches(content))
+        {
+            var paramName = match.Groups[1].Value;
+            yield return CreateBestPracticeRow(
+                code: "BP1025",
+                message: $"Parameter '{paramName}' is passed by value. Use 'const &' to avoid unnecessary copies.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: paramName,
+                helpUri: BP1025HelpUri);
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
+    // ———— BP1026: Python == True/False ————
+
+    private static IEnumerable<JObject> FindBooleanComparison(string file, string content)
+    {
+        var findingCount = 0;
+        foreach (Match match in PythonBoolComparePattern.Matches(content))
+        {
+            yield return CreateBestPracticeRow(
+                code: "BP1026",
+                message: $"'{match.Value.Trim()}' is redundant. Use truthy/falsy checks directly (e.g., 'if x:' not 'if x == True:').",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: match.Value.Trim(),
+                helpUri: BP1026HelpUri);
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
         }
     }
 

@@ -298,6 +298,10 @@ internal sealed class PatchService
                 }
 
                 Directory.CreateDirectory(Path.GetDirectoryName(paths.TargetPath)!);
+
+                // Pre-write best-practice analysis — surface warnings before the content lands.
+                var preWriteWarnings = ErrorListService.AnalyzeContentBeforeWrite(paths.TargetPath, result.Content);
+
                 var writeResult = await documentService.WriteDocumentTextAsync(
                     dte,
                     paths.TargetPath,
@@ -323,7 +327,7 @@ internal sealed class PatchService
 
                 filesToFocus.Add((paths.TargetPath, result.ChangedRanges));
 
-                appliedFiles.Add(new JObject
+                var fileItem = new JObject
                 {
                     ["path"] = paths.TargetPath,
                     ["status"] = paths.IsMove ? "moved" : alreadySatisfied ? "already-satisfied" : paths.IsNewFile ? "added" : "modified",
@@ -336,7 +340,20 @@ internal sealed class PatchService
                     ["requestedContentChange"] = requestedContentChange,
                     ["alreadySatisfied"] = alreadySatisfied,
                     ["saved"] = writeResult["saved"] ?? saveChangedFiles,
-                });
+                };
+
+                if (preWriteWarnings.Count > 0)
+                {
+                    fileItem["bestPracticeWarnings"] = new JArray(
+                        preWriteWarnings.Select(w => new JObject
+                        {
+                            ["code"] = w["code"],
+                            ["line"] = w["line"],
+                            ["message"] = w["message"],
+                        }));
+                }
+
+                appliedFiles.Add(fileItem);
             }
         }
 

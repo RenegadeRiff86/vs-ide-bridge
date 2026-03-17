@@ -246,6 +246,9 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             }
         }
 
+        // Pre-write best-practice analysis for the write_file code path.
+        var preWriteWarnings = ErrorListService.AnalyzeContentBeforeWrite(normalizedPath, content);
+
         return new JObject
         {
             [ResolvedPathProperty] = normalizedPath,
@@ -256,6 +259,14 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             ["line"] = Math.Max(1, line),
             ["column"] = Math.Max(1, column),
             ["windowCaption"] = window.Caption,
+            ["bestPracticeWarnings"] = preWriteWarnings.Count > 0
+                ? new JArray(preWriteWarnings.Select(w => new JObject
+                {
+                    ["code"] = w["code"],
+                    ["line"] = w["line"],
+                    ["message"] = w["message"],
+                }))
+                : null,
         };
     }
     private static string ReadFileText(string path)
