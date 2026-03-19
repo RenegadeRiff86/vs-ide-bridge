@@ -36,96 +36,8 @@ internal static class IdeCoreCommands
 
         for (var i = 0; i < steps.Count; i++)
         {
-            JObject stepResult;
-
-            if (steps[i] is not JObject step)
-            {
-                failureCount++;
-                stepResult = new JObject
-                {
-                    ["index"] = i,
-                    ["id"] = JValue.CreateNull(),
-                    ["command"] = string.Empty,
-                    ["success"] = false,
-                    ["summary"] = "Batch entry must be a JSON object.",
-                    [WarningsPropertyName] = new JArray(),
-                    ["data"] = new JObject(),
-                    ["error"] = new JObject { ["code"] = "invalid_batch_entry", ["message"] = "Batch entry must be a JSON object." },
-                };
-            }
-            else
-            {
-                var stepId = (string?)step["id"];
-                var commandName = (string?)step["command"] ?? string.Empty;
-                var commandArgs = (string?)step["args"] ?? string.Empty;
-
-                if (!context.Runtime.TryGetCommand(commandName, out var cmd))
-                {
-                    failureCount++;
-                    stepResult = new JObject
-                    {
-                        ["index"] = i,
-                        ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
-                        ["command"] = commandName,
-                        ["success"] = false,
-                        ["summary"] = $"Unknown command: {commandName}",
-                        [WarningsPropertyName] = new JArray(),
-                        ["data"] = new JObject(),
-                        ["error"] = new JObject { ["code"] = "unknown_command", ["message"] = $"Command not registered: {commandName}" },
-                    };
-                }
-                else
-                {
-                    var parsedArgs = CommandArgumentParser.Parse(commandArgs);
-                    try
-                    {
-                        var result = await cmd.ExecuteDirectAsync(context, parsedArgs).ConfigureAwait(true);
-                        successCount++;
-                        stepResult = new JObject
-                        {
-                            ["index"] = i,
-                            ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
-                            ["command"] = commandName,
-                            ["success"] = true,
-                            ["summary"] = result.Summary,
-                            [WarningsPropertyName] = result.Warnings,
-                            ["data"] = result.Data,
-                            ["error"] = JValue.CreateNull(),
-                        };
-                    }
-                    catch (CommandErrorException ex)
-                    {
-                        failureCount++;
-                        stepResult = new JObject
-                        {
-                            ["index"] = i,
-                            ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
-                            ["command"] = commandName,
-                            ["success"] = false,
-                            ["summary"] = ex.Message,
-                            [WarningsPropertyName] = new JArray(),
-                            ["data"] = new JObject(),
-                            ["error"] = new JObject { ["code"] = ex.Code, ["message"] = ex.Message },
-                        };
-                    }
-                    catch (Exception ex)
-                    {
-                        failureCount++;
-                        stepResult = new JObject
-                        {
-                            ["index"] = i,
-                            ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
-                            ["command"] = commandName,
-                            ["success"] = false,
-                            ["summary"] = ex.Message,
-                            [WarningsPropertyName] = new JArray(),
-                            ["data"] = new JObject(),
-                            ["error"] = new JObject { ["code"] = "internal_error", ["message"] = ex.Message },
-                        };
-                    }
-                }
-            }
-
+            var (stepResult, succeeded) = await ExecuteBatchStepAsync(context, steps[i], i).ConfigureAwait(true);
+            if (succeeded) successCount++; else failureCount++;
             results.Add(stepResult);
 
             if (stopOnError && !(stepResult.Value<bool?>("success") ?? false))
@@ -135,7 +47,7 @@ internal static class IdeCoreCommands
             }
         }
 
-        var data = new JObject
+        var commandData = new JObject
         {
             ["batchCount"] = steps.Count,
             ["successCount"] = successCount,
@@ -146,7 +58,95 @@ internal static class IdeCoreCommands
 
         return new CommandExecutionResult(
             $"Batch: {successCount}/{steps.Count} succeeded, {failureCount} failed.",
-            data);
+            commandData);
+    }
+
+    private static async Task<(JObject result, bool succeeded)> ExecuteBatchStepAsync(
+        IdeCommandContext context, JToken entry, int index)
+    {
+        if (entry is not JObject step)
+        {
+            var stepResult = new JObject
+            {
+                ["index"] = index,
+                ["id"] = JValue.CreateNull(),
+                ["command"] = string.Empty,
+                ["success"] = false,
+                ["summary"] = "Batch entry must be a JSON object.",
+                [WarningsPropertyName] = new JArray(),
+                ["data"] = new JObject(),
+                ["error"] = new JObject { ["code"] = "invalid_batch_entry", ["message"] = "Batch entry must be a JSON object." },
+            };
+            return (stepResult, false);
+        }
+
+        var stepId = (string?)step["id"];
+        var commandName = (string?)step["command"] ?? string.Empty;
+        var commandArgs = (string?)step["args"] ?? string.Empty;
+
+        if (!context.Runtime.TryGetCommand(commandName, out var cmd))
+        {
+            var stepResult = new JObject
+            {
+                ["index"] = index,
+                ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
+                ["command"] = commandName,
+                ["success"] = false,
+                ["summary"] = $"Unknown command: {commandName}",
+                [WarningsPropertyName] = new JArray(),
+                ["data"] = new JObject(),
+                ["error"] = new JObject { ["code"] = "unknown_command", ["message"] = $"Command not registered: {commandName}" },
+            };
+            return (stepResult, false);
+        }
+
+        var parsedArgs = CommandArgumentParser.Parse(commandArgs);
+        try
+        {
+            var commandResult = await cmd.ExecuteDirectAsync(context, parsedArgs).ConfigureAwait(true);
+            var stepResult = new JObject
+            {
+                ["index"] = index,
+                ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
+                ["command"] = commandName,
+                ["success"] = true,
+                ["summary"] = commandResult.Summary,
+                [WarningsPropertyName] = commandResult.Warnings,
+                ["data"] = commandResult.Data,
+                ["error"] = JValue.CreateNull(),
+            };
+            return (stepResult, true);
+        }
+        catch (CommandErrorException ex)
+        {
+            var stepResult = new JObject
+            {
+                ["index"] = index,
+                ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
+                ["command"] = commandName,
+                ["success"] = false,
+                ["summary"] = ex.Message,
+                [WarningsPropertyName] = new JArray(),
+                ["data"] = new JObject(),
+                ["error"] = new JObject { ["code"] = ex.Code, ["message"] = ex.Message },
+            };
+            return (stepResult, false);
+        }
+        catch (Exception ex)
+        {
+            var stepResult = new JObject
+            {
+                ["index"] = index,
+                ["id"] = (JToken?)stepId ?? JValue.CreateNull(),
+                ["command"] = commandName,
+                ["success"] = false,
+                ["summary"] = ex.Message,
+                [WarningsPropertyName] = new JArray(),
+                ["data"] = new JObject(),
+                ["error"] = new JObject { ["code"] = "internal_error", ["message"] = ex.Message },
+            };
+            return (stepResult, false);
+        }
     }
 
     private static Task<CommandExecutionResult> GetHelpResultAsync()
@@ -557,7 +557,7 @@ internal static class IdeCoreCommands
                 _ => throw new CommandErrorException("invalid_arguments", $"Unsupported approval operation: {operation}"),
             };
 
-            var data = await context.Runtime.BridgeApprovalService
+            var commandData = await context.Runtime.BridgeApprovalService
                 .RequestApprovalAsync(
                     context,
                     approvalKind,
@@ -565,7 +565,7 @@ internal static class IdeCoreCommands
                     args.GetString("details"))
                 .ConfigureAwait(true);
 
-            return new CommandExecutionResult("Bridge approval granted.", data);
+            return new CommandExecutionResult("Bridge approval granted.", commandData);
         }
     }
 
@@ -640,8 +640,8 @@ internal static class IdeCoreCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             var timeout = args.GetInt32("timeout-ms", 120000);
-            var data = await context.Runtime.ReadinessService.WaitForReadyAsync(context, timeout).ConfigureAwait(true);
-            return new CommandExecutionResult("Readiness wait completed.", data);
+            var commandData = await context.Runtime.ReadinessService.WaitForReadyAsync(context, timeout).ConfigureAwait(true);
+            return new CommandExecutionResult("Readiness wait completed.", commandData);
         }
     }
 

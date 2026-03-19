@@ -4,6 +4,7 @@ using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
 using System.Collections;
 using System.Threading.Tasks;
+using System;
 using VsIdeBridge.Infrastructure;
 using Stopwatch = System.Diagnostics.Stopwatch;
 
@@ -19,7 +20,7 @@ internal sealed class DebuggerService
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
         var debugger = dte.Debugger;
-        var data = new JObject
+        var debugState = new JObject
         {
             ["mode"] = debugger.CurrentMode.ToString(),
             ["currentProcess"] = debugger.CurrentProcess?.Name ?? string.Empty,
@@ -29,7 +30,7 @@ internal sealed class DebuggerService
 
         if (debugger.CurrentMode == dbgDebugMode.dbgBreakMode && debugger.CurrentStackFrame is StackFrame frame)
         {
-            data["currentStackFrame"] = new JObject
+            debugState["currentStackFrame"] = new JObject
             {
                 ["function"] = frame.FunctionName ?? string.Empty,
                 ["language"] = frame.Language ?? string.Empty,
@@ -37,13 +38,13 @@ internal sealed class DebuggerService
 
             if (TryGetActiveSourceLocation(dte, out var filePath, out var lineNumber, out var columnNumber))
             {
-                data["currentStackFrame"]!["file"] = filePath;
-                data["currentStackFrame"]!["line"] = lineNumber;
-                data["currentStackFrame"]!["column"] = columnNumber;
+                debugState["currentStackFrame"]!["file"] = filePath;
+                debugState["currentStackFrame"]!["line"] = lineNumber;
+                debugState["currentStackFrame"]!["column"] = columnNumber;
             }
         }
 
-        return data;
+        return debugState;
     }
 
     public async Task<JObject> GetThreadsAsync(DTE2 dte)
@@ -91,24 +92,22 @@ internal sealed class DebuggerService
             {
                 var lineValue = frame.GetType().GetProperty("LineNumber")?.GetValue(frame);
                 if (lineValue is int lineNumber)
-                {
                     frameInfo["line"] = lineNumber;
-                }
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"Stack frame line read failed: {ex.Message}");
             }
 
             try
             {
                 var fileValue = frame.GetType().GetProperty("FileName")?.GetValue(frame)?.ToString();
                 if (!string.IsNullOrWhiteSpace(fileValue))
-                {
                     frameInfo["file"] = fileValue;
-                }
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"Stack frame file read failed: {ex.Message}");
             }
 
             frames.Add(frameInfo);
@@ -142,11 +141,7 @@ internal sealed class DebuggerService
         {
             foreach (Expression expression in frame.Locals)
             {
-                if (count >= limit)
-                {
-                    break;
-                }
-
+                if (count >= limit) break;
                 locals.Add(SerializeExpression(expression));
                 count++;
             }
@@ -190,28 +185,11 @@ internal sealed class DebuggerService
             try
             {
                 var modulesProperty = process.GetType().GetProperty("Modules");
-                if (modulesProperty?.GetValue(process) is IEnumerable items)
-                {
-                    var moduleItems = (JArray)processInfo["modules"]!;
-                    foreach (var item in items)
-                    {
-                        var module = new JObject
-                        {
-                            ["name"] = item?.GetType().GetProperty("Name")?.GetValue(item)?.ToString() ?? string.Empty,
-                            ["path"] = item?.GetType().GetProperty("Path")?.GetValue(item)?.ToString() ?? string.Empty,
-                        };
-                        moduleItems.Add(module);
-                    }
-                }
-                else
-                {
-                    unsupportedReason = "The active debugger engine does not expose modules via EnvDTE automation.";
-                }
+                var reason = TryPopulateProcessModules(processInfo, process, modulesProperty);
+                if (!string.IsNullOrEmpty(reason))
+                    unsupportedReason = reason;
             }
-            catch (System.Exception ex)
-            {
-                unsupportedReason = ex.Message;
-            }
+            catch (System.Exception ex) { unsupportedReason = ex.Message; }
 
             modules.Add(processInfo);
         }
@@ -226,6 +204,40 @@ internal sealed class DebuggerService
         };
     }
 
+    private static void PopulateProcessModules(JArray moduleItems, System.Collections.IEnumerable items)
+    {
+        foreach (var moduleEntry in items)
+            moduleItems.Add(CreateModuleEntry(moduleEntry));
+    }
+
+    private static JObject CreateModuleEntry(object? moduleEntry)
+    {
+        return new JObject
+        {
+            ["name"] = moduleEntry?.GetType().GetProperty("Name")?.GetValue(moduleEntry)?.ToString() ?? string.Empty,
+            ["path"] = moduleEntry?.GetType().GetProperty("Path")?.GetValue(moduleEntry)?.ToString() ?? string.Empty,
+        };
+    }
+
+    private static string? TryPopulateProcessModules(JObject processInfo, object dteProcess, System.Reflection.PropertyInfo? modulesProperty)
+    {
+        if (modulesProperty?.GetValue(dteProcess) is not IEnumerable moduleItems)
+            return "The active debugger engine does not expose modules via EnvDTE automation.";
+        PopulateProcessModules((JArray)processInfo["modules"]!, moduleItems);
+        return null;
+    }
+
+    private static void CollectExceptionGroups(JArray groups, IEnumerable exceptionGroups)
+    {
+        foreach (var group in exceptionGroups)
+        {
+            groups.Add(new JObject
+            {
+                ["name"] = group?.GetType().GetProperty("Name")?.GetValue(group)?.ToString() ?? string.Empty,
+            });
+        }
+    }
+
     public async Task<JObject> EvaluateWatchAsync(DTE2 dte, string expression, int timeoutMs)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
@@ -237,12 +249,12 @@ internal sealed class DebuggerService
         }
 
         var timeout = timeoutMs <= 0 ? 1000 : timeoutMs;
-        var result = debugger.GetExpression(expression, true, timeout);
+        var debugResult = debugger.GetExpression(expression, true, timeout);
 
-        var data = SerializeExpression(result);
-        data["expression"] = expression;
-        data["timeoutMs"] = timeout;
-        return data;
+        var expressionData = SerializeExpression(debugResult);
+        expressionData["expression"] = expression;
+        expressionData["timeoutMs"] = timeout;
+        return expressionData;
     }
 
     public async Task<JObject> GetExceptionsAsync(DTE2 dte)
@@ -256,20 +268,10 @@ internal sealed class DebuggerService
         try
         {
             var property = debugger.GetType().GetProperty("ExceptionGroups");
-            if (property?.GetValue(debugger) is IEnumerable exceptionGroups)
-            {
-                foreach (var group in exceptionGroups)
-                {
-                    groups.Add(new JObject
-                    {
-                        ["name"] = group?.GetType().GetProperty("Name")?.GetValue(group)?.ToString() ?? string.Empty,
-                    });
-                }
-            }
-            else
-            {
+            if (property?.GetValue(debugger) is not IEnumerable exceptionGroups)
                 reason = "Exception group automation is not supported by the active debugger engine.";
-            }
+            else
+                CollectExceptionGroups(groups, exceptionGroups);
         }
         catch (System.Exception ex)
         {
@@ -410,7 +412,7 @@ internal sealed class DebuggerService
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var data = new JObject
+        var expressionData = new JObject
         {
             ["name"] = expression.Name ?? string.Empty,
             ["type"] = expression.Type ?? string.Empty,
@@ -420,14 +422,14 @@ internal sealed class DebuggerService
 
         try
         {
-            data["dataMemberCount"] = expression.DataMembers?.Count ?? 0;
+            expressionData["dataMemberCount"] = expression.DataMembers?.Count ?? 0;
         }
         catch
         {
-            data["dataMemberCount"] = 0;
+            expressionData["dataMemberCount"] = 0;
         }
 
-        return data;
+        return expressionData;
     }
 
     private static bool TryGetActiveSourceLocation(DTE2 dte, out string filePath, out int lineNumber, out int columnNumber)
@@ -461,11 +463,11 @@ internal sealed class DebuggerService
             var mode = dte.Debugger.CurrentMode;
             if (mode != dbgDebugMode.dbgRunMode)
             {
-                var data = await GetStateAsync(dte).ConfigureAwait(true);
-                data["timeoutMs"] = timeout;
-                data["waitedForBreak"] = true;
-                data["timedOut"] = false;
-                return data;
+                var breakState = await GetStateAsync(dte).ConfigureAwait(true);
+                breakState["timeoutMs"] = timeout;
+                breakState["waitedForBreak"] = true;
+                breakState["timedOut"] = false;
+                return breakState;
             }
 
             await Task.Delay(DebuggerPollIntervalMilliseconds).ConfigureAwait(true);

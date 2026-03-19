@@ -32,7 +32,7 @@ internal sealed class BridgeApprovalService
             context.CancellationToken,
             activatePane: true).ConfigureAwait(true);
 
-        var result = VsShellUtilities.ShowMessageBox(
+        var approvalResult = VsShellUtilities.ShowMessageBox(
             context.Package,
             BuildPromptMessage(kind, subject, details),
             "IDE Bridge Approval Required",
@@ -40,26 +40,26 @@ internal sealed class BridgeApprovalService
             OLEMSGBUTTON.OLEMSGBUTTON_YESNOCANCEL,
             OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_SECOND);
 
-        if (result == (int)VSConstants.MessageBoxResult.IDYES)
+        if (approvalResult == (int)VSConstants.MessageBoxResult.IDYES)
         {
             await context.Logger.LogAsync(
                 $"IDE Bridge: one-time {GetOperationDisplayName(kind)} approval granted.",
                 context.CancellationToken,
                 activatePane: true).ConfigureAwait(true);
-            return CreateApprovalData(kind, approval: "one-time", approvalChoice: "yes", promptShown: true, resultCode: result);
+            return CreateApprovalData(kind, approval: "one-time", approvalChoice: "yes", promptShown: true, resultCode: approvalResult);
         }
 
-        if (result == (int)VSConstants.MessageBoxResult.IDCANCEL)
+        if (approvalResult == (int)VSConstants.MessageBoxResult.IDCANCEL)
         {
             SetPersistentlyAllowed(context.Runtime.UiSettings, kind, enabled: true);
             await context.Logger.LogAsync(
                 $"IDE Bridge: persistent {GetOperationDisplayName(kind)} approval enabled from the Visual Studio prompt.",
                 context.CancellationToken,
                 activatePane: true).ConfigureAwait(true);
-            return CreateApprovalData(kind, approval: "persistent", approvalChoice: "dont_ask_again", promptShown: true, resultCode: result);
+            return CreateApprovalData(kind, approval: "persistent", approvalChoice: "dont_ask_again", promptShown: true, resultCode: approvalResult);
         }
 
-        var deniedChoice = result == (int)VSConstants.MessageBoxResult.IDNO ? "no" : "dismissed";
+        var deniedChoice = approvalResult == (int)VSConstants.MessageBoxResult.IDNO ? "no" : "dismissed";
 
         throw new CommandErrorException(
             GetDeniedCode(kind),
@@ -71,7 +71,7 @@ internal sealed class BridgeApprovalService
                 promptShown = true,
                 operation = GetOperationCode(kind),
                 persistentSettingEnabled = false,
-                resultCode = result,
+                resultCode = approvalResult,
             });
     }
 

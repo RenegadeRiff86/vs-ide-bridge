@@ -25,14 +25,14 @@ internal sealed class FailureContextService
 
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
-        var data = new JObject();
+        var failureContext = new JObject();
         JObject? state = null;
         JObject? errorList = null;
 
         try
         {
             state = await context.Runtime.IdeStateService.GetStateAsync(context.Dte).ConfigureAwait(true);
-            data["state"] = state;
+            failureContext["state"] = state;
         }
         catch (Exception ex)
         {
@@ -42,7 +42,7 @@ internal sealed class FailureContextService
         try
         {
             JObject? openTabs = await context.Runtime.DocumentService.ListOpenTabsAsync(context.Dte).ConfigureAwait(true);
-            data["openTabs"] = openTabs;
+            failureContext["openTabs"] = openTabs;
         }
         catch (Exception ex)
         {
@@ -54,7 +54,7 @@ internal sealed class FailureContextService
             errorList = await context.Runtime.ErrorListService
                 .GetErrorListAsync(context, waitForIntellisense: false, timeoutMilliseconds: ErrorListTimeoutMilliseconds, quickSnapshot: true)
                 .ConfigureAwait(true);
-            data["errorList"] = errorList;
+            failureContext["errorList"] = errorList;
         }
         catch (Exception ex)
         {
@@ -63,39 +63,38 @@ internal sealed class FailureContextService
 
         var outlineCache = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
         var symbolFiles = CollectSymbolFiles(state, errorList);
-        if (symbolFiles.Count > 0)
-        {
-            var symbolContext = new JArray();
-            foreach (var file in symbolFiles.Take(MaxSymbolFiles))
-            {
-                try
-                {
-                    var outline = await GetOutlineAsync(context, outlineCache, file).ConfigureAwait(true);
-                    symbolContext.Add(new JObject
-                    {
-                        ["path"] = file,
-                        ["outline"] = outline,
-                    });
-                }
-                catch (Exception ex)
-                {
-                    ActivityLog.LogWarning(nameof(FailureContextService), $"Failed to capture outline for '{file}': {ex.Message}");
-                }
-            }
-
-            if (symbolContext.Count > 0)
-            {
-                data["symbolContext"] = symbolContext;
-            }
-        }
+        var symbolContext = await BuildSymbolContextAsync(context, outlineCache, symbolFiles).ConfigureAwait(true);
+        if (symbolContext.Count > 0)
+            failureContext["symbolContext"] = symbolContext;
 
         var errorSymbolContext = BuildErrorSymbolContext(errorList, outlineCache);
         if (errorSymbolContext.Count > 0)
         {
-            data["errorSymbolContext"] = errorSymbolContext;
+            failureContext["errorSymbolContext"] = errorSymbolContext;
         }
 
-        return data;
+        return failureContext;
+    }
+
+    private static async Task<JArray> BuildSymbolContextAsync(
+        IdeCommandContext? context,
+        Dictionary<string, JObject> outlineCache,
+        IReadOnlyList<string> symbolFiles)
+    {
+        var symbolContext = new JArray();
+        foreach (var file in symbolFiles.Take(MaxSymbolFiles))
+        {
+            try
+            {
+                var outline = await GetOutlineAsync(context, outlineCache, file).ConfigureAwait(true);
+                symbolContext.Add(new JObject { ["path"] = file, ["outline"] = outline });
+            }
+            catch (Exception ex)
+            {
+                ActivityLog.LogWarning(nameof(FailureContextService), $"Failed to capture outline for '{file}': {ex.Message}");
+            }
+        }
+        return symbolContext;
     }
 
     private static JArray BuildErrorSymbolContext(JObject? errorList, IReadOnlyDictionary<string, JObject> outlineCache)
@@ -246,10 +245,7 @@ internal sealed class FailureContextService
             {
                 var file = row["file"]?.Value<string>();
                 if (string.IsNullOrWhiteSpace(file))
-                {
                     continue;
-                }
-
                 files.Add(PathNormalization.NormalizeFilePath(file));
             }
         }

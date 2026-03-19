@@ -19,6 +19,7 @@ internal sealed class MemoryDiscoveryStore : IDisposable
     private const string DefaultMapName = @"Local\VsIdeBridge.Discovery.v1";
     private const string DefaultMutexName = @"Local\VsIdeBridge.Discovery.v1.mutex";
     private const int DefaultCapacityBytes = 1024 * 1024;
+    private const int LengthPrefixBytes = sizeof(int);
     private static readonly TimeSpan EntryTtl = TimeSpan.FromHours(6);
     private static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly UTF8Encoding Utf8NoBom = new(false);
@@ -60,15 +61,15 @@ internal sealed class MemoryDiscoveryStore : IDisposable
 
     public void Upsert(object discoveryRecord)
     {
-        var item = JObject.FromObject(discoveryRecord);
-        item["updatedAtUtc"] = DateTimeOffset.UtcNow.ToString("O");
+        var discoveryEntry = JObject.FromObject(discoveryRecord);
+        discoveryEntry["updatedAtUtc"] = DateTimeOffset.UtcNow.ToString("O");
 
         ExecuteWithStore(root =>
         {
             var items = GetItems(root);
             PurgeExpired(items);
 
-            var instanceId = item["instanceId"]?.ToString() ?? string.Empty;
+            var instanceId = discoveryEntry["instanceId"]?.ToString() ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(instanceId))
             {
                 var existing = items
@@ -77,13 +78,9 @@ internal sealed class MemoryDiscoveryStore : IDisposable
                         string.Equals(candidate["instanceId"]?.ToString(), instanceId, StringComparison.OrdinalIgnoreCase));
 
                 if (existing is not null)
-                {
-                    existing.Replace(item);
-                }
+                    existing.Replace(discoveryEntry);
                 else
-                {
-                    items.Add(item);
-                }
+                    items.Add(discoveryEntry);
             }
         });
     }
@@ -104,9 +101,9 @@ internal sealed class MemoryDiscoveryStore : IDisposable
                     string.Equals(candidate["instanceId"]?.ToString(), instanceId, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
 
-            foreach (var item in stale)
+            foreach (var staleRecord in stale)
             {
-                item.Remove();
+                staleRecord.Remove();
             }
         });
     }
@@ -192,16 +189,21 @@ internal sealed class MemoryDiscoveryStore : IDisposable
         {
             if (hasLock && mutex is not null)
             {
-                try
-                {
-                    mutex.ReleaseMutex();
-                }
-                catch
-                {
-                }
+                ReleaseMutexSafely(mutex);
+                mutex?.Dispose();
             }
+        }
+    }
 
-            mutex?.Dispose();
+    private static void ReleaseMutexSafely(Mutex mutex)
+    {
+        try
+        {
+            mutex.ReleaseMutex();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Mutex release failed: {ex.Message}");
         }
     }
 
@@ -232,8 +234,9 @@ internal sealed class MemoryDiscoveryStore : IDisposable
             var logPath = Path.Combine(directory, "memory-discovery-trace.log");
             File.AppendAllText(logPath, $"[{DateTimeOffset.UtcNow:O}] {message}{Environment.NewLine}");
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"Trace log write failed: {ex.Message}");
         }
     }
 
@@ -248,15 +251,16 @@ internal sealed class MemoryDiscoveryStore : IDisposable
         {
             _sharedMap.Value?.Dispose();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"Shared map dispose failed: {ex.Message}");
         }
     }
 
     private static JObject ReadRoot(MemoryMappedViewStream view, int capacityBytes)
     {
         view.Position = 0;
-        var lenBuffer = new byte[4];
+        var lenBuffer = new byte[LengthPrefixBytes];
         var bytesRead = view.Read(lenBuffer, 0, lenBuffer.Length);
         if (bytesRead < lenBuffer.Length)
         {
@@ -264,7 +268,7 @@ internal sealed class MemoryDiscoveryStore : IDisposable
         }
 
         var payloadLength = BitConverter.ToInt32(lenBuffer, 0);
-        if (payloadLength <= 0 || payloadLength > capacityBytes - 4)
+        if (payloadLength <= 0 || payloadLength > capacityBytes - LengthPrefixBytes)
         {
             return new JObject { ["items"] = new JArray() };
         }
@@ -291,7 +295,7 @@ internal sealed class MemoryDiscoveryStore : IDisposable
         root["updatedAtUtc"] = DateTimeOffset.UtcNow.ToString("O");
 
         var payload = Utf8NoBom.GetBytes(root.ToString());
-        if (payload.Length > capacityBytes - 4)
+        if (payload.Length > capacityBytes - LengthPrefixBytes)
         {
             // Keep dropping oldest entries until the payload fits.
             var items = GetItems(root)
@@ -299,18 +303,15 @@ internal sealed class MemoryDiscoveryStore : IDisposable
                 .OrderBy(item => item["updatedAtUtc"]?.ToString(), StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            foreach (var item in items)
+            foreach (var oldestRecord in items)
             {
-                item.Remove();
+                oldestRecord.Remove();
                 payload = Utf8NoBom.GetBytes(root.ToString());
-                if (payload.Length <= capacityBytes - 4)
-                {
-                    break;
-                }
+                if (payload.Length <= capacityBytes - LengthPrefixBytes) break;
             }
         }
 
-        if (payload.Length > capacityBytes - 4)
+        if (payload.Length > capacityBytes - LengthPrefixBytes)
         {
             return;
         }
@@ -320,7 +321,7 @@ internal sealed class MemoryDiscoveryStore : IDisposable
         view.Write(length, 0, length.Length);
         view.Write(payload, 0, payload.Length);
 
-        var remaining = capacityBytes - 4 - payload.Length;
+        var remaining = capacityBytes - LengthPrefixBytes - payload.Length;
         if (remaining > 0)
         {
             var zeros = new byte[Math.Min(remaining, 4096)];

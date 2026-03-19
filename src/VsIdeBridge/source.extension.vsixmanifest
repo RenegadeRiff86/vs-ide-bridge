@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="RenegadeRiff86.VsIdeBridge" Version="2.2.0" Language="en-US" Publisher="RenegadeRiff86" />
+    <Identity Id="RenegadeRiff86.VsIdeBridge" Version="2.2.1" Language="en-US" Publisher="RenegadeRiff86" />
     <DisplayName>VS IDE Bridge</DisplayName>
     <Description xml:space="preserve">Expose stable scriptable Visual Studio IDE commands for state, search, breakpoints, debugging, build, and Error List capture.</Description>
     <MoreInfo>https://github.com/RenegadeRiff86/vs-ide-bridge</MoreInfo>

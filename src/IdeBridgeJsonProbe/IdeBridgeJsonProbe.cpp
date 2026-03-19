@@ -584,6 +584,9 @@ private:
     std::size_t m_position = 0;
 };
 
+constexpr std::size_t kUtf8BomThirdByteIndex = 2;
+constexpr int kExitCodeError = 2;
+
 std::string ReadFileUtf8(const std::string& path)
 {
     std::ifstream input(path, std::ios::binary);
@@ -596,7 +599,7 @@ std::string ReadFileUtf8(const std::string& path)
     if (text.size() >= 3 &&
         static_cast<unsigned char>(text[0]) == 0xEF &&
         static_cast<unsigned char>(text[1]) == 0xBB &&
-        static_cast<unsigned char>(text[2]) == 0xBF)
+        static_cast<unsigned char>(text[kUtf8BomThirdByteIndex]) == 0xBF)
     {
         text.erase(0, 3);
     }
@@ -643,6 +646,7 @@ void PrintUsage()
 {
     std::cerr << "Usage: IdeBridgeJsonProbe --input <path-to-command-envelope.json>\n";
 }
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -665,14 +669,14 @@ int main(int argc, char* argv[])
             else
             {
                 PrintUsage();
-                return 2;
+                return kExitCodeError;
             }
         }
 
         if (inputPath.empty())
         {
             PrintUsage();
-            return 2;
+            return kExitCodeError;
         }
 
         const std::string text = ReadFileUtf8(inputPath);
@@ -702,6 +706,6 @@ int main(int argc, char* argv[])
     catch (const std::exception& ex)
     {
         std::cerr << "IdeBridgeJsonProbe: " << ex.what() << '\n';
-        return 2;
+        return kExitCodeError;
     }
 }

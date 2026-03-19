@@ -95,24 +95,24 @@ internal sealed class SearchService
 
         var merged = new Dictionary<string, SolutionFileLocator.Match>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var item in SolutionFileLocator.FindMatches(context.Dte, query, pathFilter, extensions))
+        foreach (var fileMatch in SolutionFileLocator.FindMatches(context.Dte, query, pathFilter, extensions))
         {
-            merged[item.Path] = item;
+            merged[fileMatch.Path] = fileMatch;
         }
 
         if (includeNonProject)
         {
-            foreach (var item in SolutionFileLocator.FindDiskMatches(context.Dte, query, pathFilter, extensions, Math.Max(100, maxResults * 2)))
+            foreach (var fileMatch in SolutionFileLocator.FindDiskMatches(context.Dte, query, pathFilter, extensions, Math.Max(100, maxResults * 2)))
             {
-                if (!merged.TryGetValue(item.Path, out var existing) || item.Score > existing.Score)
+                if (!merged.TryGetValue(fileMatch.Path, out var existing) || fileMatch.Score > existing.Score)
                 {
-                    merged[item.Path] = item;
+                    merged[fileMatch.Path] = fileMatch;
                 }
             }
         }
 
         var items = merged.Values
-            .OrderByDescending(item => item.Score)
+            .OrderByDescending(fileMatch => fileMatch.Score)
             .ThenBy(item => item.Path.Length)
             .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
             .Take(Math.Max(1, maxResults))
@@ -484,12 +484,12 @@ internal sealed class SearchService
         var description = $"Find all \"{query}\"";
         var identifier = $"VsIdeBridge.FindResults.{resultsWindow}";
         var window = service.StartSearch(title, description, identifier);
-        foreach (var item in groupedMatches)
+        foreach (var resultGroup in groupedMatches)
         {
-            window.AddResults(item.Key, item.Key, null, item.Value);
+            window.AddResults(resultGroup.Key, resultGroup.Key, null, resultGroup.Value);
         }
 
-        window.Summary = $"Matching lines: {groupedMatches.Sum(item => item.Value.Count)} Matching files: {groupedMatches.Count}";
+        window.Summary = $"Matching lines: {groupedMatches.Sum(resultGroup => resultGroup.Value.Count)} Matching files: {groupedMatches.Count}";
         window.Complete();
     }
 
@@ -1491,19 +1491,19 @@ internal sealed class SearchService
             return (string.Empty, string.Empty);
         }
 
-        foreach (var item in EnumerateSolutionFiles(dte))
+        foreach (var solutionFile in EnumerateSolutionFiles(dte))
         {
-            if (string.Equals(item.Path, pathFilter, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(solutionFile.Path, pathFilter, StringComparison.OrdinalIgnoreCase))
             {
-                return item;
+                return solutionFile;
             }
         }
 
-        foreach (var item in EnumerateOpenFiles(dte))
+        foreach (var openFile in EnumerateOpenFiles(dte))
         {
-            if (string.Equals(item.Path, pathFilter, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(openFile.Path, pathFilter, StringComparison.OrdinalIgnoreCase))
             {
-                return item;
+                return openFile;
             }
         }
 

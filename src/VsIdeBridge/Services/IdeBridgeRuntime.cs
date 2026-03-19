@@ -19,6 +19,7 @@ internal sealed class IdeBridgeRuntime
         DocumentService documentService,
         WindowService windowService,
         VsCommandService vsCommandService,
+        SolutionExplorerSyncService solutionExplorerSyncService,
         BridgeApprovalService bridgeApprovalService,
         PatchService patchService,
         BreakpointService breakpointService,
@@ -37,6 +38,7 @@ internal sealed class IdeBridgeRuntime
         DocumentService = documentService;
         WindowService = windowService;
         VsCommandService = vsCommandService;
+        SolutionExplorerSyncService = solutionExplorerSyncService;
         BridgeApprovalService = bridgeApprovalService;
         PatchService = patchService;
         BreakpointService = breakpointService;
@@ -66,6 +68,8 @@ internal sealed class IdeBridgeRuntime
     public WindowService WindowService { get; }
 
     public VsCommandService VsCommandService { get; }
+
+    public SolutionExplorerSyncService SolutionExplorerSyncService { get; }
 
     public BridgeApprovalService BridgeApprovalService { get; }
 
@@ -107,19 +111,22 @@ internal sealed class IdeBridgeRuntime
 
     public static Task<IdeBridgeRuntime> CreateAsync(VsIdeBridgePackage package)
     {
-        var logger = new OutputPaneLogger(package);
-        var bridgeInstanceService = new BridgeInstanceService();
-        var uiSettings = new BridgeUiSettingsService(package);
-        var documentService = new DocumentService(package);
-        var failureContextService = new FailureContextService();
-        var readinessService = new ReadinessService();
-        var searchService = new SearchService();
-        var bridgeApprovalService = new BridgeApprovalService();
-        var errorListService = new ErrorListService(package, readinessService, uiSettings);
-        var buildService = new BuildService(readinessService);
-        var bridgeWatchdogService = new BridgeWatchdogService(package);
+        OutputPaneLogger logger = new(package);
+        BridgeInstanceService bridgeInstanceService = new();
+        BridgeUiSettingsService uiSettings = new(package);
+        DocumentService documentService = new(package);
+        FailureContextService failureContextService = new();
+        ReadinessService readinessService = new();
+        SearchService searchService = new();
+        BridgeApprovalService bridgeApprovalService = new();
+        ErrorListService errorListService = new(package, readinessService, uiSettings);
+        BuildService buildService = new(readinessService);
+        BridgeWatchdogService bridgeWatchdogService = new(package);
+        WindowService windowService = new();
+        VsCommandService vsCommandService = new();
+        SolutionExplorerSyncService solutionExplorerSyncService = new();
 
-        var runtime = new IdeBridgeRuntime(
+        IdeBridgeRuntime runtime = new(
             logger,
             bridgeInstanceService,
             uiSettings,
@@ -129,8 +136,9 @@ internal sealed class IdeBridgeRuntime
             readinessService,
             searchService,
             documentService,
-            new WindowService(),
-            new VsCommandService(),
+            windowService,
+            vsCommandService,
+            solutionExplorerSyncService,
             bridgeApprovalService,
             new PatchService(),
             new BreakpointService(),

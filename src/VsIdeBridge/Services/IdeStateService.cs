@@ -22,7 +22,7 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
         var solutionPath = dte.Solution?.IsOpen == true ? PathNormalization.NormalizeFilePath(dte.Solution.FullName) : string.Empty;
         var activeDocument = dte.ActiveDocument;
         var activeDocumentPath = activeDocument?.FullName;
-        var data = new JObject
+        var ideState = new JObject
         {
             ["solutionPath"] = solutionPath,
             ["solutionName"] = dte.Solution?.IsOpen == true ? Path.GetFileName(dte.Solution.FullName) : string.Empty,
@@ -37,24 +37,33 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
             ["watchdog"] = _bridgeWatchdogService.GetSnapshot(),
         };
 
-        if (TryGetActiveTextSelection(activeDocument, out var selection))
-        {
-            data["caretLine"] = selection.ActivePoint.Line;
-            data["caretColumn"] = selection.ActivePoint.DisplayColumn;
-            data["selectionStartLine"] = selection.TopPoint.Line;
-            data["selectionStartColumn"] = selection.TopPoint.DisplayColumn;
-            data["selectionEndLine"] = selection.BottomPoint.Line;
-            data["selectionEndColumn"] = selection.BottomPoint.DisplayColumn;
-        }
+        ApplyTextSelectionInfo(ideState, activeDocument);
+        ApplyActiveConfiguration(ideState, dte);
 
+        return ideState;
+    }
+
+    private static void ApplyTextSelectionInfo(JObject ideState, Document? activeDocument)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (!TryGetActiveTextSelection(activeDocument, out var selection))
+            return;
+        ideState["caretLine"] = selection.ActivePoint.Line;
+        ideState["caretColumn"] = selection.ActivePoint.DisplayColumn;
+        ideState["selectionStartLine"] = selection.TopPoint.Line;
+        ideState["selectionStartColumn"] = selection.TopPoint.DisplayColumn;
+        ideState["selectionEndLine"] = selection.BottomPoint.Line;
+        ideState["selectionEndColumn"] = selection.BottomPoint.DisplayColumn;
+    }
+
+    private static void ApplyActiveConfiguration(JObject ideState, DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
         var activeConfig = dte.Solution?.SolutionBuild?.ActiveConfiguration;
-        if (activeConfig is not null)
-        {
-            data["activeConfiguration"] = activeConfig.Name ?? string.Empty;
-            data["activePlatform"] = (activeConfig as SolutionConfiguration2)?.PlatformName ?? string.Empty;
-        }
-
-        return data;
+        if (activeConfig is null)
+            return;
+        ideState["activeConfiguration"] = activeConfig.Name ?? string.Empty;
+        ideState["activePlatform"] = (activeConfig as SolutionConfiguration2)?.PlatformName ?? string.Empty;
     }
 
     private static JArray GetOpenDocumentPaths(DTE2 dte)
@@ -65,14 +74,9 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
         foreach (Document document in dte.Documents)
         {
             var fullName = document.FullName;
-            if (string.IsNullOrWhiteSpace(fullName))
-            {
-                continue;
-            }
-
-            items.Add(PathNormalization.NormalizeFilePath(fullName));
+            if (!string.IsNullOrWhiteSpace(fullName))
+                items.Add(PathNormalization.NormalizeFilePath(fullName));
         }
-
         return items;
     }
 
@@ -81,25 +85,14 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
         ThreadHelper.ThrowIfNotOnUIThread();
 
         selection = null!;
-        if (document is null)
-        {
-            return false;
-        }
-
+        if (document is null) return false;
         try
         {
-            if (document.Object("TextDocument") is not TextDocument textDocument)
-            {
-                return false;
-            }
-
+            if (document.Object("TextDocument") is not TextDocument textDocument) return false;
             selection = textDocument.Selection;
             return selection is not null;
         }
-        catch (COMException)
-        {
-            return false;
-        }
+        catch (COMException) { return false; }
     }
 
     private static JArray GetStartupProjects(DTE2 dte)
@@ -109,10 +102,8 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
         var startupProjects = dte.Solution?.SolutionBuild?.StartupProjects;
         return startupProjects switch
         {
-            string singleProject when !string.IsNullOrWhiteSpace(singleProject) => new JArray(singleProject),
-            object[] projects => new JArray(projects
-                .OfType<string>()
-                .Where(project => !string.IsNullOrWhiteSpace(project))),
+            string s when !string.IsNullOrWhiteSpace(s) => new JArray(s),
+            object[] arr => new JArray(arr.OfType<string>().Where(p => !string.IsNullOrWhiteSpace(p))),
             _ => [],
         };
     }

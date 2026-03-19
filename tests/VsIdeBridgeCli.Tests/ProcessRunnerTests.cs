@@ -20,12 +20,12 @@ public sealed class ProcessRunnerTests
     {
         var startInfo = CreatePowerShellStartInfo($"$i=1; while ($i -le {OutputLineCount}) {{ Write-Output \"line-$i\"; $i++ }}");
 
-        var result = await ProcessRunner.RunAsync(startInfo, TimeoutMilliseconds, PollIntervalMilliseconds);
+        var runResult = await ProcessRunner.RunAsync(startInfo, TimeoutMilliseconds, PollIntervalMilliseconds);
 
-        Assert.True(result.Success);
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("line-1", result.Stdout, StringComparison.Ordinal);
-        Assert.Contains($"line-{OutputLineCount}", result.Stdout, StringComparison.Ordinal);
+        Assert.True(runResult.Success);
+        Assert.Equal(0, runResult.ExitCode);
+        Assert.Contains("line-1", runResult.Stdout, StringComparison.Ordinal);
+        Assert.Contains($"line-{OutputLineCount}", runResult.Stdout, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -33,11 +33,11 @@ public sealed class ProcessRunnerTests
     {
         var startInfo = CreatePowerShellStartInfo("Start-Sleep -Seconds 30");
 
-        var result = await ProcessRunner.RunAsync(startInfo, TimeoutTestMilliseconds, PollIntervalMilliseconds);
+        var timeoutResult = await ProcessRunner.RunAsync(startInfo, TimeoutTestMilliseconds, PollIntervalMilliseconds);
 
-        Assert.False(result.Success);
-        Assert.Equal(-1, result.ExitCode);
-        Assert.Contains("timed out", result.Stderr, StringComparison.OrdinalIgnoreCase);
+        Assert.False(timeoutResult.Success);
+        Assert.Equal(-1, timeoutResult.ExitCode);
+        Assert.Contains("timed out", timeoutResult.Stderr, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -45,11 +45,11 @@ public sealed class ProcessRunnerTests
     {
         var startInfo = CreatePowerShellStartInfo("[Console]::Error.WriteLine('bridge-failure'); exit 3");
 
-        var result = await ProcessRunner.RunAsync(startInfo, TimeoutMilliseconds, PollIntervalMilliseconds);
+        var failureResult = await ProcessRunner.RunAsync(startInfo, TimeoutMilliseconds, PollIntervalMilliseconds);
 
-        Assert.False(result.Success);
-        Assert.Equal(3, result.ExitCode);
-        Assert.Contains("bridge-failure", result.Stderr, StringComparison.Ordinal);
+        Assert.False(failureResult.Success);
+        Assert.Equal(3, failureResult.ExitCode);
+        Assert.Contains("bridge-failure", failureResult.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -58,11 +58,11 @@ public sealed class ProcessRunnerTests
         var startInfo = CreatePowerShellStartInfo("$value = [Console]::In.ReadToEnd(); if ([string]::IsNullOrEmpty($value)) { Write-Output 'stdin-closed'; exit 0 }; exit 7");
         startInfo.RedirectStandardInput = true;
 
-        var result = await ProcessRunner.RunAsync(startInfo, TimeoutMilliseconds, PollIntervalMilliseconds);
+        var stdinResult = await ProcessRunner.RunAsync(startInfo, TimeoutMilliseconds, PollIntervalMilliseconds);
 
-        Assert.True(result.Success, result.Stderr);
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("stdin-closed", result.Stdout, StringComparison.Ordinal);
+        Assert.True(stdinResult.Success, stdinResult.Stderr);
+        Assert.Equal(0, stdinResult.ExitCode);
+        Assert.Contains("stdin-closed", stdinResult.Stdout, StringComparison.Ordinal);
     }
 
     [Fact]

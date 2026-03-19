@@ -1,8 +1,8 @@
 using EnvDTE;
 using EnvDTE80;
+using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
-using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Shell.TableManager;
 using Newtonsoft.Json.Linq;
 using System;
@@ -14,6 +14,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
+using VsIdeBridge.Services.Diagnostics;
 
 namespace VsIdeBridge.Services;
 
@@ -56,7 +57,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private const int BuildOutputReadAttemptCount = CoordinateSuffixTrimLength;
     private const int CoordinateSuffixTrimLength = 2;
     private const int MaximumBuildOutputCoordinateCount = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
-    private const int MaxBestPracticeFiles = 64;
+    private const int MaxBestPracticeFiles = 512;
     private const int MaxBestPracticeFindingsPerFile = 25;
     private const int MinimumSymbolLength = CoordinateSuffixTrimLength;
     private const int DiagnosticLineQualityScore = CoordinateSuffixTrimLength * CoordinateSuffixTrimLength;
@@ -119,15 +120,17 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         @"\b(?:LINK|LNK|MSB|VCR|E|C)\d+\b|\blnt-[a-z0-9-]+\b|\bInt-make\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex MsBuildDiagnosticPattern = new(
-        @"^(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-Za-z0-9-]*)\s*:\s*(?<message>.+?)(?:\s+\[(?<project>[^\]]+)\])?$",
+        @"^(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-ZaZ0-9-]*)\s*:\s*(?<message>.+?)(?:\s+\[(?<project>[^\]]+)\])?$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex StructuredOutputPattern = new(
-        @"^(?<project>.+?)\s*>\s*(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-Za-z0-9-]*)\s*:\s*(?<message>.+)$",
+        @"^(?<project>.+?)\s*>\s*(?<file>[A-Za-z]:\\.*?|\S.*?)(?:\((?<line>\d+)(?:,(?<column>\d+))?\))?\s*:\s*(?<severity>warning|error)\s+(?<code>[A-Za-z]+[A-ZaZ0-9-]*)\s*:\s*(?<message>.+)$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex StringLiteralPattern = new("\"([^\"\\r\\n]{8,})\"", RegexOptions.Compiled);
     private static readonly Regex ConstStringDeclPattern = new(@"\bconst\s+string\s+\w+\s*=", RegexOptions.Compiled);
     private static readonly Regex NumberLiteralPattern = new(@"(?<![A-Za-z0-9_\.])(?<value>-?\d+(?:\.\d+)?)\b", RegexOptions.Compiled);
-    private static readonly Regex SuspiciousRoundDownPattern = new(@"Math\s*\.\s*(?<op>Floor|Truncate)\s*\(", RegexOptions.Compiled);
+    // BP1003: only fire when float result is immediately cast to int, which is almost always
+    // a bug where integer division (/) should be used instead.
+    private static readonly Regex SuspiciousRoundDownPattern = new(@"\(int\)\s*Math\s*\.\s*(?<op>Floor|Truncate)\s*\(", RegexOptions.Compiled);
     private static readonly Regex EmptyCatchBlockPattern = new(@"catch\s*(?:\([^)]*\))?\s*\{\s*\}", RegexOptions.Compiled);
     private static readonly Regex AsyncVoidPattern = new(@"\basync\s+void\s+(\w+)", RegexOptions.Compiled);
     private static readonly Regex RawDeletePattern = new(@"\bdelete\s*(\[\])?\s", RegexOptions.Compiled);
@@ -136,6 +139,12 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private static readonly Regex BareExceptPattern = new(@"^\s*except\s*:", RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly Regex MutableDefaultArgPattern = new(@"\bdef\s+(\w+)\s*\([^)]*=\s*(?:\[\s*\]|\{\s*\}|set\s*\(\s*\))", RegexOptions.Compiled);
     private static readonly Regex ImportStarPattern = new(@"^\s*from\s+(\S+)\s+import\s+\*", RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private const int MaxFindingsPerFile = 100;
+    private static readonly Regex CSharpCommentPattern = new(
+     @"//.*?$|/\*.*?\*/",
+     RegexOptions.Compiled | RegexOptions.Multiline
+ );
 
     // BP1012: File too long
     private const int FileTooLongWarningThreshold = 1000;
@@ -153,13 +162,13 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
     // BP1014: Poor/vague naming
     private static readonly Regex PoorCSharpNamingPattern = new(
-        @"\b(?:var|int|string|bool|double|float|long|object|dynamic)\s+(?<name>tmp|temp|data|val|res|ret|result|process|handle|flag|item|stuff|thing|manager|helper|util|misc)\b",
+        @"\b(?:var|int|string|bool|double|float|long|object|dynamic)\s+(?<name>tmp|temp|val|res|ret|flag|stuff|thing|misc)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SingleLetterVarPattern = new(
         @"(?:(?:var|int|string|bool|double|float|long|short|byte|char|object|decimal)\s+(?<name>[a-zA-Z])\s*[=;,)])",
         RegexOptions.Compiled);
     private static readonly Regex PythonPoorNamingPattern = new(
-        @"^[ \t]*(?<name>tmp|temp|data|val|res|ret|result|process|handle|flag|stuff|thing)\s*=",
+        @"^[ \t]*(?<name>tmp|temp|val|res|ret|flag|stuff|thing)\s*=",
         RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
     private static readonly Regex PythonSingleLetterAssignPattern = new(
         @"^[ \t]*(?<name>[a-zA-Z])\s*=\s*(?!.*\bfor\b)",
@@ -167,6 +176,9 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
 
     // BP1015: Deep nesting
     private const int DeepNestingThreshold = MaxSuppressionFindingsPerFile;
+    // C# brace-counting includes namespace + class + method braces, so needs a higher
+    // threshold than Python indent-counting. Threshold 7 = 4 real logic levels inside a method.
+    private const int CSharpDeepNestingThreshold = 7;
 
     // BP1016: Commented-out code
     private const int CommentedOutCodeThreshold = MaxSuppressionFindingsPerFile;
@@ -184,14 +196,19 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private static readonly Regex TabIndentedLinePattern = new(@"^\t", RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly Regex SpaceIndentedLinePattern = new(@"^ {2,}", RegexOptions.Compiled | RegexOptions.Multiline);
 
-    // BP1018: God class (C# — too many methods)
+    // BP1018: God class (C# � too many methods)
     private const int GodClassMethodThreshold = 30;
     private const int GodClassFieldThreshold = 15;
+    private const int PropertyBagPropertyThreshold = 8;
+    private const int PropertyBagBehaviorThreshold = 2;
     private static readonly Regex CSharpClassDeclPattern = new(
         @"^[ \t]*(?:(?:public|private|protected|internal|static|sealed|abstract|partial)\s+)*class\s+(\w+)",
         RegexOptions.Compiled | RegexOptions.Multiline);
     private static readonly Regex CSharpFieldDeclPattern = new(
         @"^[ \t]*(?:(?:public|private|protected|internal|static|readonly|volatile|const)\s+)+[\w<>\[\],\?\s]+\s+_?\w+\s*[=;]",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex CSharpAutoPropertyPattern = new(
+        @"^[ \t]*(?:(?:public|private|protected|internal|static|virtual|override|required|sealed|abstract)\s+)+[\w<>\[\],\?\s]+\s+\w+\s*\{\s*get;\s*(?:set;|init;)?\s*\}",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     // BP1019: Missing using for IDisposable (C#)
@@ -233,8 +250,10 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     // BP1026: Python == True/False
+    // Note: only == True/False are anti-patterns. `is True`/`is False` are identity checks
+    // with different semantics and are legitimate Python code.
     private static readonly Regex PythonBoolComparePattern = new(
-        @"(?:==\s*True|==\s*False|is\s+True|is\s+False)\b",
+        @"(?:==\s*True|==\s*False)\b",
         RegexOptions.Compiled);
 
     private const string BP1012HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions";
@@ -252,6 +271,50 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
     private const string BP1024HelpUri = "https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#c133-avoid-protected-data";
     private const string BP1025HelpUri = "https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#con1-by-default-make-objects-immutable";
     private const string BP1026HelpUri = "https://peps.python.org/pep-0008/#programming-recommendations";
+    private const string BP1027HelpUri = "https://learn.microsoft.com/en-us/dotnet/architecture/microservices/microservice-ddd-cqrs-patterns/microservice-application-layer-web-api-design";
+
+    private static bool IsTrulyUsefulComment(string comment)
+    {
+        string lower = comment.ToLowerInvariant();
+
+        return comment.StartsWith("TODO", StringComparison.OrdinalIgnoreCase) ||
+               comment.StartsWith("FIXME", StringComparison.OrdinalIgnoreCase) ||
+               comment.StartsWith("HACK", StringComparison.OrdinalIgnoreCase) ||
+               lower.Contains("why ") || lower.Contains("because") ||
+               lower.Contains("reason:") || lower.Contains("note:") ||
+               comment.Length <= 15;                    // Very short comments are usually harmless
+    }
+
+    private static bool IsUnnecessaryComment(string comment)
+    {
+        string lower = comment.ToLowerInvariant().TrimEnd('.', '!', '?', ':');
+
+        var redundantPhrases = new[]
+        {
+        // Classic obvious comments
+        "this method", "this function", "this class", "this variable",
+        "this line", "increments", "decrements", "sets the", "gets the",
+        "returns the", "creates a", "initializes the", "checks if",
+        "loops through", "iterates over", "adds one to", "subtracts one",
+
+        // AI-generated filler (very common now)
+        "as an ai", "language model", "large language model", "llm",
+        "this ensures that", "this approach ensures", "it is recommended",
+        "best practice", "following best practices", "in summary",
+        "please note that", "note that this", "important to note",
+        "the above code", "the following code", "this code does the following",
+        "the purpose of this", "this is a", "simply", "basically"
+    };
+
+        return redundantPhrases.Any(phrase => lower.Contains(phrase));
+    }
+
+    private static string Truncate(string text, int maxLength)
+    {
+        if (text.Length <= maxLength) return text;
+        return text.Substring(0, maxLength - 3) + "...";
+    }
+
 
     private readonly ErrorListProvider _bestPracticeProvider = new(package)
     {
@@ -363,45 +426,80 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             return [];
         }
 
-        var bestPracticeCandidateFiles = GetBestPracticeCandidateFiles(context.Dte, rows ?? []);
-        var bestPracticeRows = await Task.Run(() => AnalyzeBestPracticeFindings(bestPracticeCandidateFiles), context.CancellationToken).ConfigureAwait(false);
+        IReadOnlyList<string> bestPracticeCandidateFiles = GetBestPracticeCandidateFiles(context.Dte, rows ?? []);
+        IReadOnlyDictionary<string, string> bestPracticeProjectLookup = CreateBestPracticeProjectLookup(context.Dte, bestPracticeCandidateFiles);
+        IReadOnlyList<JObject> bestPracticeRows = await Task.Run(
+            () => AnalyzeBestPracticeFindings(bestPracticeCandidateFiles, bestPracticeProjectLookup),
+            context.CancellationToken).ConfigureAwait(false);
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
         PublishBestPracticeRows(context.Dte, bestPracticeRows);
         return bestPracticeRows;
+    }
+
+    private static IReadOnlyDictionary<string, string> CreateBestPracticeProjectLookup(DTE2 dte, IReadOnlyList<string> files)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        Dictionary<string, string> projectNamesByFile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string file in files)
+        {
+            string? projectUniqueName = SolutionFileLocator.TryFindProjectUniqueName(dte, file);
+            if (!string.IsNullOrWhiteSpace(projectUniqueName))
+            {
+                projectNamesByFile[file] = projectUniqueName!;
+            }
+        }
+
+        return projectNamesByFile;
+    }
+
+    private static string TryGetBestPracticeProjectUniqueName(IReadOnlyDictionary<string, string>? projectNamesByFile, string file)
+    {
+        if (projectNamesByFile is null)
+        {
+            return string.Empty;
+        }
+
+        return projectNamesByFile.TryGetValue(file, out string? projectUniqueName)
+            ? projectUniqueName ?? string.Empty
+            : string.Empty;
     }
 
     private static IReadOnlyList<string> GetBestPracticeCandidateFiles(DTE2 dte, IReadOnlyList<JObject> rows)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
-        var files = rows
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var files = new List<string>();
+
+        // First add files from error rows (if any).
+        foreach (var path in rows
             .Select(row => row["file"]?.ToString())
             .OfType<string>()
-            .Where(IsBestPracticeCandidateFile)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(MaxBestPracticeFiles)
-            .ToList();
-
-        if (files.Count == 0)
+            .Where(IsBestPracticeCandidateFile))
         {
-            foreach (Document document in dte.Documents)
+            if (seen.Add(path))
             {
-                var fullName = document.FullName;
-                if (!IsBestPracticeCandidateFile(fullName))
-                {
-                    continue;
-                }
+                files.Add(path);
+            }
+        }
 
-                if (files.Contains(fullName, StringComparer.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
+        // Then enumerate all solution project files.
+        foreach (var (path, _) in SolutionFileLocator.EnumerateSolutionFiles(dte))
+        {
+            if (files.Count >= MaxBestPracticeFiles)
+            {
+                break;
+            }
 
-                files.Add(fullName);
-                if (files.Count >= MaxBestPracticeFiles)
-                {
-                    break;
-                }
+            if (!IsBestPracticeCandidateFile(path))
+            {
+                continue;
+            }
+
+            if (seen.Add(path))
+            {
+                files.Add(path);
             }
         }
 
@@ -456,20 +554,24 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         return ext is ".h" or ".hh" or ".hpp" or ".hxx";
     }
 
-    private static IReadOnlyList<JObject> AnalyzeBestPracticeFindings(IReadOnlyList<string> files, string? contentOverride = null)
+    private static IReadOnlyList<JObject> AnalyzeBestPracticeFindings(
+        IReadOnlyList<string> files,
+        IReadOnlyDictionary<string, string>? projectNamesByFile = null,
+        string? contentOverride = null)
     {
-        var findings = new List<JObject>();
+        List<JObject> findings = new List<JObject>();
 
-        foreach (var file in files)
+        foreach (string file in files)
         {
-            var content = contentOverride ?? SafeReadFile(file);
-            var perFileFindings = 0;
+            string content = contentOverride ?? SafeReadFile(file);
+            int perFileFindings = 0;
             if (string.IsNullOrWhiteSpace(content))
             {
                 continue;
             }
 
-            var language = GetLanguage(file);
+            CodeLanguage language = GetLanguage(file);
+            string projectUniqueName = TryGetBestPracticeProjectUniqueName(projectNamesByFile, file);
 
             // Cross-language rules
             IEnumerable<JObject> fileFindings = FindRepeatedStringLiterals(file, content)
@@ -489,6 +591,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
                     .Concat(FindEmptyCatchBlocks(file, content))
                     .Concat(FindAsyncVoid(file, content))
                     .Concat(FindGodClass(file, content))
+                    .Concat(FindPropertyBagClass(file, content))
                     .Concat(FindMissingUsing(file, content))
                     .Concat(FindDateTimeInLoop(file, content))
                     .Concat(FindDynamicObjectOveruse(file, content));
@@ -516,8 +619,13 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
                     .Concat(FindBooleanComparison(file, content));
             }
 
-            foreach (var finding in fileFindings)
+            foreach (JObject finding in fileFindings)
             {
+                if (!string.IsNullOrWhiteSpace(projectUniqueName))
+                {
+                    finding[ProjectKey] = projectUniqueName;
+                }
+
                 findings.Add(finding);
                 perFileFindings++;
                 if (perFileFindings >= MaxBestPracticeFindingsPerFile)
@@ -593,6 +701,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             })
             .Where(item => item.value is not "0" and not "1" and not "-1")
             .GroupBy(item => item.value)
+
             .Where(group => group.Count() >= RepeatedNumberThreshold)
             .OrderByDescending(group => group.Count())
             .ThenBy(group => group.Key, StringComparer.Ordinal)
@@ -622,7 +731,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             {
                 yield return CreateBestPracticeRow(
                     code: "BP1003",
-                    message: $"Math.{roundDownMatch.Groups["op"].Value} detected. Verify this is intentional rounding and not a workaround for integer overflow or type mismatch.",
+                    message: $"(int)Math.{roundDownMatch.Groups["op"].Value}(...) casts a float floor/truncate result to int. This pattern usually means integer division (/) is what you want instead.",
                     file: file,
                     line: i + 1,
                     symbol: $"Math.{roundDownMatch.Groups["op"].Value}",
@@ -636,7 +745,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1004: Empty catch block (C#) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1004: Empty catch block (C#) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindEmptyCatchBlocks(string file, string content)
     {
@@ -659,7 +768,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1005: async void (C#) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1005: async void (C#) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindAsyncVoid(string file, string content)
     {
@@ -683,7 +792,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1006: Raw delete (C++) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1006: Raw delete (C++) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindRawDelete(string file, string content)
     {
@@ -707,7 +816,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1007: using namespace in header (C++) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1007: using namespace in header (C++) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindUsingNamespaceInHeader(string file, string content)
     {
@@ -731,7 +840,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1008: C-style cast (C++) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1008: C-style cast (C++) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindCStyleCasts(string file, string content)
     {
@@ -754,7 +863,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1009: Bare except (Python) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1009: Bare except (Python) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindBareExcept(string file, string content)
     {
@@ -777,7 +886,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1010: Mutable default argument (Python) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1010: Mutable default argument (Python) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindMutableDefaultArgs(string file, string content)
     {
@@ -801,7 +910,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ BP1011: from X import * (Python) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ BP1011: from X import * (Python) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 
     private static IEnumerable<JObject> FindImportStar(string file, string content)
     {
@@ -825,7 +934,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1012: File too long ————
+    // ���� BP1012: File too long ����
 
     private static IEnumerable<JObject> FindFileTooLong(string file, string content)
     {
@@ -834,7 +943,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         {
             yield return CreateBestPracticeRow(
                 code: "BP1012",
-                message: $"File is {lineCount} lines long (threshold: {FileTooLongErrorThreshold}). Split into smaller, focused files.",
+                message: $"File is {lineCount} lines long (threshold: {FileTooLongErrorThreshold}). Extract functionality into a class library using create_project.",
                 file: file,
                 line: 1,
                 symbol: Path.GetFileName(file),
@@ -844,7 +953,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         {
             yield return CreateBestPracticeRow(
                 code: "BP1012",
-                message: $"File is {lineCount} lines long (threshold: {FileTooLongWarningThreshold}). Consider splitting into smaller files.",
+                message: $"File is {lineCount} lines long (threshold: {FileTooLongWarningThreshold}). Consider extracting into a class library using create_project.",
                 file: file,
                 line: 1,
                 symbol: Path.GetFileName(file),
@@ -852,7 +961,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1013: Method/function too long ————
+    // ���� BP1013: Method/function too long ����
 
     private static IEnumerable<JObject> FindLongMethods(string file, string content, CodeLanguage language)
     {
@@ -944,7 +1053,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         return count;
     }
 
-    // ———— BP1014: Poor/vague naming ————
+    // ���� BP1014: Poor/vague naming ����
 
     private static IEnumerable<JObject> FindPoorNaming(string file, string content, CodeLanguage language)
     {
@@ -1021,63 +1130,93 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1015: Deep nesting ————
+    // ���� BP1015: Excessive nesting depth ����
 
     private static IEnumerable<JObject> FindDeepNesting(string file, string content, CodeLanguage language)
     {
-        var lines = content.Split('\n');
-        var findingCount = 0;
-        var reportedLines = new HashSet<int>();
+        const int MaxFindingsPerFile = 5; // Prevent spamming the user
 
         if (language == CodeLanguage.Python)
         {
-            for (var i = 0; i < lines.Length; i++)
-            {
-                var line = lines[i];
-                if (string.IsNullOrWhiteSpace(line)) { continue; }
-                var indent = line.Length - line.TrimStart().Length;
-                var level = indent / 4;
-                if (level >= DeepNestingThreshold && reportedLines.Add(i))
-                {
-                    yield return CreateBestPracticeRow(
-                        code: "BP1015",
-                        message: $"Code is nested {level} levels deep (threshold: {DeepNestingThreshold}). Extract methods or use early returns to flatten.",
-                        file: file,
-                        line: i + 1,
-                        symbol: "nesting",
-                        helpUri: BP1015HelpUri);
-                    findingCount++;
-                    if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
-                }
-            }
+            return FindPythonDeepNesting(file, content);
         }
-        else
+        else // C# and similar brace-based languages
         {
-            var depth = 0;
-            for (var i = 0; i < lines.Length; i++)
+            return FindCSharpDeepNesting(file, content);
+        }
+    }
+
+    private static IEnumerable<JObject> FindPythonDeepNesting(string file, string content)
+    {
+        var lines = content.Split('\n');
+        var reported = new HashSet<int>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            int indentLevel = (line.Length - line.TrimStart().Length) / 4;
+
+            if (indentLevel >= DeepNestingThreshold && reported.Add(i))
             {
-                foreach (var ch in lines[i])
-                {
-                    if (ch == '{') { depth++; }
-                    else if (ch == '}') { depth--; }
-                }
-                if (depth >= DeepNestingThreshold && !string.IsNullOrWhiteSpace(lines[i]) && reportedLines.Add(i))
-                {
-                    yield return CreateBestPracticeRow(
-                        code: "BP1015",
-                        message: $"Code is nested {depth} levels deep (threshold: {DeepNestingThreshold}). Extract methods or use early returns to flatten.",
-                        file: file,
-                        line: i + 1,
-                        symbol: "nesting",
-                        helpUri: BP1015HelpUri);
-                    findingCount++;
-                    if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
-                }
+                yield return CreateBestPracticeRow(
+                    code: "BP1015",
+                    message: $"Code is nested {indentLevel} levels deep (threshold: {DeepNestingThreshold}). " +
+                             "Consider extracting a method or using guard clauses to reduce nesting.",
+                    file: file,
+                    line: i + 1,
+                    symbol: $"Nesting depth {indentLevel}",
+                    helpUri: BP1015HelpUri);
+
+                if (reported.Count >= MaxFindingsPerFile) yield break;
             }
         }
     }
 
-    // ———— BP1016: Commented-out code blocks ————
+    private static IEnumerable<JObject> FindCSharpDeepNesting(string file, string content)
+    {
+        var reported = new HashSet<int>();
+        int currentDepth = 0;
+        int maxDepthSeen = 0;
+        int deepestLine = 0;
+
+        var lines = content.Split('\n');
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i].Trim();
+
+            // Track depth changes
+            currentDepth += line.Count(ch => ch == '{');
+            currentDepth -= line.Count(ch => ch == '}');
+
+            if (currentDepth < 0) currentDepth = 0; // safety
+
+            if (currentDepth > maxDepthSeen)
+            {
+                maxDepthSeen = currentDepth;
+                deepestLine = i;
+            }
+
+            // Report when we exceed threshold (report the line where depth became too high)
+            if (currentDepth >= CSharpDeepNestingThreshold && reported.Add(i))
+            {
+                yield return CreateBestPracticeRow(
+                    code: "BP1015",
+                    message: $"Code is nested {currentDepth} levels deep (threshold: {CSharpDeepNestingThreshold}). " +
+                             "Consider extracting a method, using early returns/guard clauses, or restructuring the logic.",
+                    file: file,
+                    line: i + 1,
+                    symbol: $"Nesting depth {currentDepth}",
+                    helpUri: BP1015HelpUri);
+
+                if (reported.Count >= 5) yield break;
+            }
+        }
+    }
+
+    // ���� BP1016: Commented-out code blocks ����
 
     private static IEnumerable<JObject> FindCommentedOutCode(string file, string content, CodeLanguage language)
     {
@@ -1132,7 +1271,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1017: Mixed indentation (tabs vs spaces) ————
+    // ���� BP1017: Mixed indentation (tabs vs spaces) ����
 
     private static IEnumerable<JObject> FindMixedIndentation(string file, string content)
     {
@@ -1150,7 +1289,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1018: God class (C#) ————
+    // ���� BP1018: God class (C#) ����
 
     private static IEnumerable<JObject> FindGodClass(string file, string content)
     {
@@ -1171,7 +1310,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             {
                 yield return CreateBestPracticeRow(
                     code: "BP1018",
-                    message: $"Class '{className}' has {methodCount} methods (threshold: {GodClassMethodThreshold}). Split responsibilities into smaller classes.",
+                    message: $"Class '{className}' has {methodCount} methods (threshold: {GodClassMethodThreshold}). Split responsibilities into smaller classes � use create_project to create a class library.",
                     file: file,
                     line: classStartLine,
                     symbol: className,
@@ -1183,7 +1322,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             {
                 yield return CreateBestPracticeRow(
                     code: "BP1018",
-                    message: $"Class '{className}' has {fieldCount} fields (threshold: {GodClassFieldThreshold}). Consider splitting state into smaller classes.",
+                    message: $"Class '{className}' has {fieldCount} fields (threshold: {GodClassFieldThreshold}). Consider splitting state into smaller classes � use create_project to create a class library.",
                     file: file,
                     line: classStartLine,
                     symbol: className,
@@ -1192,6 +1331,41 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             }
 
             if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
+    private static IEnumerable<JObject> FindPropertyBagClass(string file, string content)
+    {
+        MatchCollection classMatches = CSharpClassDeclPattern.Matches(content);
+        int findingCount = 0;
+        string[] lines = content.Split('\n');
+
+        foreach (Match classMatch in classMatches)
+        {
+            string className = classMatch.Groups[1].Value;
+            int classStartLine = GetLineNumber(content, classMatch.Index);
+            string classBody = ExtractBracedBlock(lines, classStartLine - 1);
+            int propertyCount = CSharpAutoPropertyPattern.Matches(classBody).Count;
+            int behaviorCount = CSharpMethodSignaturePattern.Matches(classBody).Count;
+
+            if (propertyCount < PropertyBagPropertyThreshold || behaviorCount > PropertyBagBehaviorThreshold)
+            {
+                continue;
+            }
+
+            yield return CreateBestPracticeRow(
+                code: "BP1027",
+                message: $"Class '{className}' has {propertyCount} auto-properties and only {behaviorCount} behavioral methods. Move shared state behind a focused service or model instead of growing an accessor-only class.",
+                file: file,
+                line: classStartLine,
+                symbol: className,
+                helpUri: BP1027HelpUri);
+            findingCount++;
+
+            if (findingCount >= MaxSuppressionFindingsPerFile)
+            {
+                yield break;
+            }
         }
     }
 
@@ -1216,7 +1390,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         return string.Join("\n", blockLines);
     }
 
-    // ———— BP1019: Missing using for IDisposable (C#) ————
+    // ���� BP1019: Missing using for IDisposable (C#) ����
 
     private static IEnumerable<JObject> FindMissingUsing(string file, string content)
     {
@@ -1244,7 +1418,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1020: DateTime.Now/UtcNow in loops (C#) ————
+    // ���� BP1020: DateTime.Now/UtcNow in loops (C#) ����
 
     private static IEnumerable<JObject> FindDateTimeInLoop(string file, string content)
     {
@@ -1293,7 +1467,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1021: Overuse of dynamic/object (C#) ————
+    // ���� BP1021: Overuse of dynamic/object (C#) ����
 
     private static IEnumerable<JObject> FindDynamicObjectOveruse(string file, string content)
     {
@@ -1310,7 +1484,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1022: Raw new without smart pointer (C++) ————
+    // ���� BP1022: Raw new without smart pointer (C++) ����
 
     private static IEnumerable<JObject> FindRawNew(string file, string content)
     {
@@ -1335,7 +1509,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1023: Heavy macro usage (C++) ————
+    // ���� BP1023: Heavy macro usage (C++) ����
 
     private static IEnumerable<JObject> FindMacroOveruse(string file, string content)
     {
@@ -1353,7 +1527,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1024: Deep inheritance (C++) ————
+    // ���� BP1024: Deep inheritance (C++) ����
 
     private static IEnumerable<JObject> FindDeepInheritance(string file, string content)
     {
@@ -1378,7 +1552,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1025: Missing const correctness (C++) ————
+    // ���� BP1025: Missing const correctness (C++) ����
 
     private static IEnumerable<JObject> FindMissingConst(string file, string content)
     {
@@ -1402,7 +1576,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
     }
 
-    // ———— BP1026: Python == True/False ————
+    // ���� BP1026: Python == True/False ����
 
     private static IEnumerable<JObject> FindBooleanComparison(string file, string content)
     {
@@ -1411,7 +1585,7 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         {
             yield return CreateBestPracticeRow(
                 code: "BP1026",
-                message: $"'{match.Value.Trim()}' is redundant. Use truthy/falsy checks directly (e.g., 'if x:' not 'if x == True:').",
+                message: $"'{match.Value.Trim()}' is redundant. Use truthiness directly: 'if x:' not 'if x == True:', 'if not x:' not 'if x == False:'.",
                 file: file,
                 line: GetLineNumber(content, match.Index),
                 symbol: match.Value.Trim(),
@@ -1420,6 +1594,83 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
         }
     }
+
+    private static int FindFirstMojibakeLine(string content, string[] patterns)
+    {
+        var lines = content.Split(new[] { '\r', '\n' }, StringSplitOptions.None);
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (patterns.Any(p => lines[i].Contains(p)))
+            {
+                return i + 1; // Line numbers are 1-based
+            }
+        }
+
+        return 1; // fallback to first line
+    }
+
+
+    // ���� BP1027: Mojibake / Encoding corruption detected ����
+
+    private static IEnumerable<JObject> FindMojibake(string file, string content)
+    {
+        // Common mojibake patterns caused by UTF-8 being misread as Windows-1252/Latin1
+        var mojibakePatterns = new[]
+        {
+        "Ãƒ", "Â�", "�", "â‚¬", "Ã�", "â€", "Ã�", "â€�", "â€š", "â„¢"
+    };
+
+        if (mojibakePatterns.Any(pattern => content.Contains(pattern)))
+        {
+            int lineNumber = FindFirstMojibakeLine(content, mojibakePatterns);
+
+            yield return CreateBestPracticeRow(
+                code: "BP1021",
+                message: "Mojibake (encoding corruption) detected in this file. " +
+                         "UTF-8 characters appear to have been incorrectly decoded as Windows-1252. " +
+                         "This typically occurs when an AI model or tool mishandles file encoding. " +
+                         "Please fix the encoding (ensure UTF-8 with BOM or without) and verify the file.",
+                file: file,
+                line: lineNumber,
+                symbol: "Mojibake",
+                helpUri: BP1021HelpUri);
+        }
+    }
+
+    // ���� BP1028: Unnecessary or redundant comments ����
+
+    private static IEnumerable<JObject> FindUnnecessaryComments(string file, string content)
+    {
+        var commentMatches = CSharpCommentPattern.Matches(content);
+
+        foreach (Match match in commentMatches)
+        {
+            string comment = match.Groups["comment"]?.Value.Trim() ?? "";
+            if (string.IsNullOrWhiteSpace(comment))
+                continue;
+
+            // Keep actually useful comments
+            if (IsTrulyUsefulComment(comment))
+                continue;
+
+            if (IsUnnecessaryComment(comment))
+            {
+                int line = GetLineNumber(content, match.Index);
+
+                yield return CreateBestPracticeRow(
+                    code: "BP1022",
+                    message: $"Unnecessary comment detected: \"{Truncate(comment, 72)}\". " +
+                             "This comment restates what the code already clearly expresses or adds no meaningful value. " +
+                             "Remove it to reduce visual noise.",
+                    file: file,
+                    line: line,
+                    symbol: "Redundant comment",
+                    helpUri: BP1022HelpUri);
+            }
+        }
+    }
+
 
     private static JObject CreateBestPracticeRow(string code, string message, string file, int line, string symbol, string helpUri = "")
     {
@@ -1455,11 +1706,20 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
             _bestPracticeProvider.Refresh();
         }
 
-        // Keep the custom table source empty so stale rows do not linger, but use ErrorTask
-        // publishing for live best-practice diagnostics because it already supports navigation.
+        // Prefer the table source because it preserves structured columns such as Project.
         if (TryEnsureBestPracticeTableSource() && _bestPracticeTableSource is not null)
         {
-            _bestPracticeTableSource.UpdateRows([]);
+            _bestPracticeTableSource.UpdateRows(rows);
+
+            _bestPracticeProvider.Refresh();
+            if (rows.Count > 0)
+            {
+                ShowErrorListWindow(dte);
+                _bestPracticeProvider.Show();
+                _bestPracticeProvider.BringToFront();
+            }
+
+            return;
         }
 
         _bestPracticeProvider.Tasks.Clear();
@@ -1693,13 +1953,13 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         var dteRows = new List<JObject>(items.Count);
         for (var i = 1; i <= items.Count; i++)
         {
-            var item = items.Item(i);
-            var severity = MapSeverity(item.ErrorLevel);
-            var description = item.Description ?? string.Empty;
-            var project = item.Project ?? string.Empty;
-            var file = item.FileName ?? string.Empty;
-            var line = item.Line;
-            var column = item.Column;
+            var errorItem = items.Item(i);
+            var severity = MapSeverity(errorItem.ErrorLevel);
+            var description = errorItem.Description ?? string.Empty;
+            var project = errorItem.Project ?? string.Empty;
+            var file = errorItem.FileName ?? string.Empty;
+            var line = errorItem.Line;
+            var column = errorItem.Column;
             NormalizeBuildOutputLocation(ref file, ref line, ref column);
             var code = InferCode(description, project, file, line);
             dteRows.Add(new JObject
@@ -2142,81 +2402,6 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         return !string.IsNullOrWhiteSpace(explicitCode)
             ? explicitCode
             : InferCode(description, project, fileName, line);
-    }
-
-    private static Window? TryGetErrorListWindow(DTE2 dte)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-
-        return dte.Windows
-            .Cast<Window>()
-            .FirstOrDefault(IsErrorListWindow);
-    }
-
-    private static bool IsErrorListWindow(Window candidate)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-        return string.Equals(candidate.Caption, "Error List", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string MapSeverity(vsBuildErrorLevel level)
-    {
-        return level switch
-        {
-            vsBuildErrorLevel.vsBuildErrorLevelHigh => "Error",
-            vsBuildErrorLevel.vsBuildErrorLevelMedium => "Warning",
-            _ => "Message",
-        };
-    }
-
-    private static string InferCode(string description, string project, string fileName, int line)
-    {
-        var explicitCode = ExtractExplicitCode(description);
-        if (!string.IsNullOrWhiteSpace(explicitCode))
-        {
-            return explicitCode;
-        }
-
-        if (description.IndexOf("identifier \"", StringComparison.OrdinalIgnoreCase) >= 0 &&
-            description.IndexOf("\" is undefined", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return "E0020";
-        }
-
-        if (description.IndexOf("can be made static", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return "VCR003";
-        }
-
-        if (description.IndexOf("can be made const", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return "VCR001";
-        }
-
-        if (description.IndexOf("Return value ignored", StringComparison.OrdinalIgnoreCase) >= 0 &&
-            description.IndexOf("UnregisterWaitEx", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return "C6031";
-        }
-
-        if (description.IndexOf("PCH warning:", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return "Int-make";
-        }
-
-        if (description.IndexOf("doesn't deduce references", StringComparison.OrdinalIgnoreCase) >= 0 &&
-            description.IndexOf("possibly unintended copy", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return "lnt-accidental-copy";
-        }
-
-        if (description.IndexOf("cannot open file '", StringComparison.OrdinalIgnoreCase) >= 0 &&
-            IsLinkerContext(project, fileName, line))
-        {
-            return "LNK1104";
-        }
-
-        return string.Empty;
     }
 
     private static string ExtractExplicitCode(string description)
@@ -2872,6 +3057,40 @@ internal sealed class ErrorListService(VsIdeBridgePackage package, ReadinessServ
         }
 
         return string.IsNullOrWhiteSpace(project) && string.IsNullOrWhiteSpace(fileName) && line <= 0;
+    }
+
+    private static Window? TryGetErrorListWindow(DTE2 dte)
+    {
+        try
+        {
+            return dte.Windows.Item("{DD1DDD20-D0F8-11ce-8C69-00AA004AC40}");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string MapSeverity(vsBuildErrorLevel errorLevel)
+    {
+        return errorLevel switch
+        {
+            vsBuildErrorLevel.vsBuildErrorLevelHigh => "Error",
+            vsBuildErrorLevel.vsBuildErrorLevelMedium => "Warning",
+            vsBuildErrorLevel.vsBuildErrorLevelLow => "Message",
+            _ => "Error",
+        };
+    }
+
+    private static string InferCode(string description, string project, string file, int line)
+    {
+        var explicitCode = ExtractExplicitCode(description);
+        if (!string.IsNullOrWhiteSpace(explicitCode))
+        {
+            return explicitCode;
+        }
+        // Additional inference logic could go here
+        return string.Empty;
     }
 }
 

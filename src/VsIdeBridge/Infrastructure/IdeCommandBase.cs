@@ -71,7 +71,7 @@ internal abstract class IdeCommandBase
             var args = CommandArgumentParser.Parse(rawArguments);
             outputPath = ResolveOutputPath(args);
             requestId = args.GetString("request-id");
-            var result = await ExecuteAsync(context, args).ConfigureAwait(true);
+            var commandResult = await ExecuteAsync(context, args).ConfigureAwait(true);
             var envelope = new CommandEnvelope
             {
                 SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
@@ -80,74 +80,22 @@ internal abstract class IdeCommandBase
                 Success = true,
                 StartedAtUtc = startedAt.UtcDateTime.ToString("O"),
                 FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
-                Summary = result.Summary,
-                Warnings = result.Warnings,
+                Summary = commandResult.Summary,
+                Warnings = commandResult.Warnings,
                 Error = null,
-                Data = result.Data,
+                Data = commandResult.Data,
             };
 
             await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
-            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} OK - {result.Summary} -> {outputPath}", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
+            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} OK - {commandResult.Summary} -> {outputPath}", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
         }
         catch (CommandErrorException ex)
         {
-            var failureData = await Runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
-            var envelope = new CommandEnvelope
-            {
-                SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
-                Command = CanonicalName,
-                RequestId = requestId,
-                Success = false,
-                StartedAtUtc = startedAt.UtcDateTime.ToString("O"),
-                FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
-                Summary = ex.Message,
-                Warnings = [],
-                Error = new
-                {
-                    code = ex.Code,
-                    message = ex.Message,
-                    details = ex.Details,
-                },
-                Data = failureData,
-            };
-
-            if (!string.IsNullOrWhiteSpace(outputPath))
-            {
-                await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
-            }
-
-            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - {ex.Code}", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
-            ActivityLog.LogError(nameof(VsIdeBridgePackage), ex.ToString());
+            await HandleCommandErrorAsync(context, ex, requestId, outputPath, startedAt).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            var failureData = await Runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
-            var envelope = new CommandEnvelope
-            {
-                SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
-                Command = CanonicalName,
-                RequestId = requestId,
-                Success = false,
-                StartedAtUtc = startedAt.UtcDateTime.ToString("O"),
-                FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
-                Summary = ex.Message,
-                Warnings = [],
-                Error = new
-                {
-                    code = "internal_error",
-                    message = ex.Message,
-                    details = new { exception = ex.ToString() },
-                },
-                Data = failureData,
-            };
-
-            if (!string.IsNullOrWhiteSpace(outputPath))
-            {
-                await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
-            }
-
-            await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - internal_error", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
-            ActivityLog.LogError(nameof(VsIdeBridgePackage), ex.ToString());
+            await HandleUnexpectedExceptionAsync(context, ex, requestId, outputPath, startedAt).ConfigureAwait(true);
         }
     }
 
@@ -163,5 +111,49 @@ internal abstract class IdeCommandBase
             .Replace('.', '-')
             .ToLowerInvariant() + ".json";
         return Path.Combine(Path.GetTempPath(), "vs-ide-bridge", fileName);
+    }
+
+    private async Task HandleCommandErrorAsync(IdeCommandContext context, CommandErrorException ex, string? requestId, string outputPath, DateTimeOffset startedAt)
+    {
+        var failureData = await Runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
+        var envelope = new CommandEnvelope
+        {
+            SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
+            Command = CanonicalName,
+            RequestId = requestId,
+            Success = false,
+            StartedAtUtc = startedAt.UtcDateTime.ToString("O"),
+            FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
+            Summary = ex.Message,
+            Warnings = [],
+            Error = new { code = ex.Code, message = ex.Message, details = ex.Details },
+            Data = failureData,
+        };
+        if (!string.IsNullOrWhiteSpace(outputPath))
+            await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
+        await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - {ex.Code}", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
+        ActivityLog.LogError(nameof(VsIdeBridgePackage), ex.ToString());
+    }
+
+    private async Task HandleUnexpectedExceptionAsync(IdeCommandContext context, Exception ex, string? requestId, string outputPath, DateTimeOffset startedAt)
+    {
+        var failureData = await Runtime.FailureContextService.CaptureAsync(context).ConfigureAwait(true);
+        var envelope = new CommandEnvelope
+        {
+            SchemaVersion = JsonSchemaVersioning.CurrentSchemaVersion,
+            Command = CanonicalName,
+            RequestId = requestId,
+            Success = false,
+            StartedAtUtc = startedAt.UtcDateTime.ToString("O"),
+            FinishedAtUtc = DateTimeOffset.UtcNow.UtcDateTime.ToString("O"),
+            Summary = ex.Message,
+            Warnings = [],
+            Error = new { code = "internal_error", message = ex.Message, details = new { exception = ex.ToString() } },
+            Data = failureData,
+        };
+        if (!string.IsNullOrWhiteSpace(outputPath))
+            await CommandResultWriter.WriteAsync(outputPath, envelope, Package.DisposalToken).ConfigureAwait(false);
+        await context.Logger.LogAsync($"IDE Bridge: {CanonicalName} FAIL - internal_error", Package.DisposalToken, activatePane: true).ConfigureAwait(true);
+        ActivityLog.LogError(nameof(VsIdeBridgePackage), ex.ToString());
     }
 }

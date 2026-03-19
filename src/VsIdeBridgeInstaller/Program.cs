@@ -231,7 +231,7 @@ internal static class Program
 
     private static int RunProcess(string fileName, string arguments)
     {
-        using var process = new Process
+        using var installerProcess = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -244,10 +244,10 @@ internal static class Program
             }
         };
 
-        process.Start();
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        installerProcess.Start();
+        var stdout = installerProcess.StandardOutput.ReadToEnd();
+        var stderr = installerProcess.StandardError.ReadToEnd();
+        installerProcess.WaitForExit();
 
         if (!string.IsNullOrWhiteSpace(stdout))
         {
@@ -259,7 +259,7 @@ internal static class Program
             Console.Error.WriteLine(stderr.Trim());
         }
 
-        return process.ExitCode;
+        return installerProcess.ExitCode;
     }
 
     private static void CopyDirectory(string sourceDir, string destinationDir)

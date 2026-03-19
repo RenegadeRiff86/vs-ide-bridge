@@ -48,22 +48,24 @@ internal sealed class WindowService
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
             var window = TryResolveWindow(dte, query, allowContains: true);
-            if (window is not null)
-            {
-                if (activate)
-                {
-                    window.Activate();
-                }
-
-                return CreateWindowInfo(window);
-            }
-
-            if (DateTime.UtcNow >= deadline)
+            if (window is null && DateTime.UtcNow >= deadline)
             {
                 break;
             }
 
-            await Task.Delay(WindowPollIntervalMilliseconds).ConfigureAwait(true);
+            if (window is null)
+            {
+                await Task.Delay(WindowPollIntervalMilliseconds).ConfigureAwait(true);
+                continue;
+            }
+
+            if (activate)
+            {
+                window.Activate();
+            }
+
+            return CreateWindowInfo(window);
+
         }
 
         return null;

@@ -173,6 +173,17 @@
           <LocCanonicalName>.Tools.IdeGetPythonStartupFile</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeCreateProject" priority="0x0260" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Create Project</ButtonText>
+          <CommandName>IdeCreateProject</CommandName>
+          <CanonicalName>Tools.IdeCreateProject</CanonicalName>
+          <LocCanonicalName>.Tools.IdeCreateProject</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSmokeTest" priority="0x01F1" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -1039,6 +1050,7 @@
       <IDSymbol name="cmdidIdeSetPythonProjectEnv" value="0x024F" />
       <IDSymbol name="cmdidIdeSetPythonStartupFile" value="0x0250" />
       <IDSymbol name="cmdidIdeGetPythonStartupFile" value="0x0251" />
+      <IDSymbol name="cmdidIdeCreateProject" value="0x0260" />
     </GuidSymbol>
   </Symbols>
 </CommandTable>

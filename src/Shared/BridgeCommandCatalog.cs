@@ -79,9 +79,9 @@ public static class BridgeCommandCatalog
             .Select(group => group.Key)
             .OrderBy(key => key, StringComparer.Ordinal)
             .ToArray();
-        foreach (var item in duplicatePipe)
+        foreach (var duplicatePipeName in duplicatePipe)
         {
-            errors.Add($"duplicate pipe command name: {item}");
+            errors.Add($"duplicate pipe command name: {duplicatePipeName}");
         }
 
         var duplicateCanonical = Commands
@@ -90,9 +90,9 @@ public static class BridgeCommandCatalog
             .Select(group => group.Key)
             .OrderBy(key => key, StringComparer.Ordinal)
             .ToArray();
-        foreach (var item in duplicateCanonical)
+        foreach (var duplicateCanonicalName in duplicateCanonical)
         {
-            errors.Add($"duplicate canonical command name: {item}");
+            errors.Add($"duplicate canonical command name: {duplicateCanonicalName}");
         }
 
         foreach (var command in Commands)
@@ -232,7 +232,7 @@ public static class BridgeCommandCatalog
             "batch" => ("Run multiple commands in one request.", @"batch --steps ""[{\""id\"":\""state\"",\""command\"":\""state\""}]"""),
             "find-text" => ("Find text across the solution, project, or current document, with optional subtree filtering.", @"find-text --query ""OnInit"" --path ""src\libslic3r"""),
             "find-text-batch" => ("Find text for multiple queries in one bridge round-trip, internally chunked when needed.", @"find-text-batch --queries ""[\""OnInit\"",\""RunAsync\"",\""BridgeHealth\""]"" --path ""src\VsIdeBridgeCli"" --max-queries-per-chunk 5"),
-            "find-files" => ("Search solution explorer files by name or path fragment and return ranked matches.", @"find-files --query ""CMakeLists.txt"""),
+            "find-files" => ("Search Solution Explorer-style files by name or path fragment and return ranked matches.", @"find-files --query ""CMakeLists.txt"""),
             "open-document" => ("Open a document by absolute path, solution-relative path, or solution item name.", @"open-document --file ""src\CMakeLists.txt"" --line 1 --column 1"),
             "list-documents" => ("List open documents.", commandName),
             "list-tabs" => ("List open editor tabs and identify the active tab.", commandName),

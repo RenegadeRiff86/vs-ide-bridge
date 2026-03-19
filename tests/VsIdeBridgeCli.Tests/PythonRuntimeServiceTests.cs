@@ -19,22 +19,22 @@ public sealed class PythonRuntimeServiceTests
     {
         using var stateScope = new PythonRuntimeStateScope();
 
-        var result = await PythonRuntimeService.ExecuteSnippetAsync(
+        var approvalCheckResult = await PythonRuntimeService.ExecuteSnippetAsync(
             "print('bridge')",
             interpreterPath: GetFakeInterpreterPath(),
             workingDirectory: stateScope.WorkingDirectory,
             timeoutMs: TestTimeoutMilliseconds,
             approved: false);
 
-        Assert.False(result["success"]?.GetValue<bool>() ?? true);
-        Assert.True(result[ApprovalRequiredPropertyName]?.GetValue<bool>());
-        Assert.False(result["approvalGranted"]?.GetValue<bool>() ?? true);
-        Assert.Equal("required", result["approvalChoice"]?.GetValue<string>());
+        Assert.False(approvalCheckResult["success"]?.GetValue<bool>() ?? true);
+        Assert.True(approvalCheckResult[ApprovalRequiredPropertyName]?.GetValue<bool>());
+        Assert.False(approvalCheckResult["approvalGranted"]?.GetValue<bool>() ?? true);
+        Assert.Equal("required", approvalCheckResult["approvalChoice"]?.GetValue<string>());
 
-        var scope = Assert.IsType<JsonObject>(result["approvalScope"]);
+        var scope = Assert.IsType<JsonObject>(approvalCheckResult["approvalScope"]);
         Assert.Equal("python_repl", scope["tool"]?.GetValue<string>());
         Assert.Equal("restricted", scope["executionMode"]?.GetValue<string>());
-        Assert.Contains("restricted scratch mode", result["message"]?.GetValue<string>() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("restricted scratch mode", approvalCheckResult["message"]?.GetValue<string>() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -69,17 +69,17 @@ public sealed class PythonRuntimeServiceTests
     {
         using var stateScope = new PythonRuntimeStateScope();
 
-        var result = await PythonRuntimeService.InstallPackagesAsync(
+        var installApprovalResult = await PythonRuntimeService.InstallPackagesAsync(
             ["requests"],
             interpreterPath: GetFakeInterpreterPath(),
             timeoutMs: TestTimeoutMilliseconds,
             approved: false);
 
-        Assert.False(result["success"]?.GetValue<bool>() ?? true);
-        Assert.True(result[ApprovalRequiredPropertyName]?.GetValue<bool>());
-        Assert.Contains("modify", result["message"]?.GetValue<string>() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(installApprovalResult["success"]?.GetValue<bool>() ?? true);
+        Assert.True(installApprovalResult[ApprovalRequiredPropertyName]?.GetValue<bool>());
+        Assert.Contains("modify", installApprovalResult["message"]?.GetValue<string>() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
-        var scope = Assert.IsType<JsonObject>(result["approvalScope"]);
+        var scope = Assert.IsType<JsonObject>(installApprovalResult["approvalScope"]);
         Assert.True(scope["mutating"]?.GetValue<bool>());
     }
 
@@ -88,7 +88,7 @@ public sealed class PythonRuntimeServiceTests
     {
         using var stateScope = new PythonRuntimeStateScope();
 
-        var result = await PythonRuntimeService.RunFileAsync(
+        var runFileResult = await PythonRuntimeService.RunFileAsync(
             filePath: "script.py",
             scriptArguments: ["--check"],
             interpreterPath: GetFakeInterpreterPath(),
@@ -97,11 +97,11 @@ public sealed class PythonRuntimeServiceTests
             approved: false,
             allowUnrestrictedExecution: true);
 
-        Assert.False(result["success"]?.GetValue<bool>() ?? true);
-        Assert.True(result[ApprovalRequiredPropertyName]?.GetValue<bool>());
-        Assert.Contains("modify files", result["message"]?.GetValue<string>() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.False(runFileResult["success"]?.GetValue<bool>() ?? true);
+        Assert.True(runFileResult[ApprovalRequiredPropertyName]?.GetValue<bool>());
+        Assert.Contains("modify files", runFileResult["message"]?.GetValue<string>() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
-        var scope = Assert.IsType<JsonObject>(result["approvalScope"]);
+        var scope = Assert.IsType<JsonObject>(runFileResult["approvalScope"]);
         Assert.Equal("unrestricted", scope["executionMode"]?.GetValue<string>());
     }
 
@@ -123,8 +123,8 @@ public sealed class PythonRuntimeServiceTests
         var interpreterPath = GetFakeInterpreterPath();
         stateScope.WritePythonRuntimeConfig("managed", interpreterPath);
 
-        var result = await PythonRuntimeService.ListEnvironmentsAsync();
-        var envs = Assert.IsType<JsonArray>(result["envs"]);
+        var envsResult = await PythonRuntimeService.ListEnvironmentsAsync();
+        var envs = Assert.IsType<JsonArray>(envsResult["envs"]);
 
         Assert.Contains(envs, env => PathMatches(env, interpreterPath));
     }
@@ -136,8 +136,8 @@ public sealed class PythonRuntimeServiceTests
         var interpreterPath = GetFakeInterpreterPath();
         stateScope.WritePythonRuntimeConfig("skip", interpreterPath);
 
-        var result = await PythonRuntimeService.ListEnvironmentsAsync();
-        var envs = Assert.IsType<JsonArray>(result["envs"]);
+        var envsResult = await PythonRuntimeService.ListEnvironmentsAsync();
+        var envs = Assert.IsType<JsonArray>(envsResult["envs"]);
 
         Assert.DoesNotContain(envs, env => PathMatches(env, interpreterPath));
     }

@@ -52,16 +52,21 @@ internal static class CommandResultWriter
         finally
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (File.Exists(tempPath))
-            {
-                try
-                {
-                    File.Delete(tempPath);
-                }
-                catch
-                {
-                }
-            }
+            TryDeleteTempFile(tempPath);
+        }
+    }
+
+    private static void TryDeleteTempFile(string path)
+    {
+        if (!File.Exists(path))
+            return;
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Temp file cleanup failed: {ex.Message}");
         }
     }
 }

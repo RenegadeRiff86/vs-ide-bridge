@@ -48,7 +48,7 @@ internal static partial class CliApp
     {
         public const string SystemRoot = "SystemRoot";
         public const string WindowsDirectory = "windir";
-        public const string Temp = "TEMP";
+        public const string TempDirectory = "TEMP";
         public const string TempAlternative = "TMP";
         public const string UserProfile = "USERPROFILE";
         public const string HomeDrive = "HOMEDRIVE";
@@ -953,8 +953,8 @@ internal static partial class CliApp
                 return null;
             }
 
-            var data = response["Data"] as JsonObject;
-            var path = data?["solutionPath"]?.GetValue<string>();
+            var responseData = response["Data"] as JsonObject;
+            var path = responseData?["solutionPath"]?.GetValue<string>();
             var normalized = NormalizeExistingPathOrEmpty(path);
             return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
         }
@@ -1035,7 +1035,7 @@ internal static partial class CliApp
             return;
         }
 
-        startInfo.EnvironmentVariables[EnvVars.Temp] = tempDirectory;
+        startInfo.EnvironmentVariables[EnvVars.TempDirectory] = tempDirectory;
         startInfo.EnvironmentVariables[EnvVars.TempAlternative] = tempDirectory;
     }
 
@@ -1676,7 +1676,7 @@ internal static class HelpText
         find-files
 
         Purpose
-          Search solution explorer files by name or path fragment.
+          Search Solution Explorer-style files by name or path fragment.
 
         Required
           --query <text>
@@ -2521,9 +2521,9 @@ internal sealed class PipeDiscovery
             .Select(path => path!)
             .Distinct(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var temp in tempCandidates)
+        foreach (var tempDir in tempCandidates)
         {
-            var directory = Path.Combine(temp, "vs-ide-bridge", "pipes");
+            var directory = Path.Combine(tempDir, "vs-ide-bridge", "pipes");
             try
             {
                 if (!Directory.Exists(directory))
@@ -2777,17 +2777,17 @@ internal sealed class PipeDiscovery
     {
         var merged = new Dictionary<string, PipeDiscovery>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var item in primary)
+        foreach (var primaryEntry in primary)
         {
-            merged[BuildInstanceKey(item)] = item;
+            merged[BuildInstanceKey(primaryEntry)] = primaryEntry;
         }
 
-        foreach (var item in secondary)
+        foreach (var secondaryEntry in secondary)
         {
-            var key = BuildInstanceKey(item);
+            var key = BuildInstanceKey(secondaryEntry);
             if (!merged.TryGetValue(key, out var existing))
             {
-                merged[key] = item;
+                merged[key] = secondaryEntry;
                 continue;
             }
 
@@ -2796,9 +2796,9 @@ internal sealed class PipeDiscovery
                 continue;
             }
 
-            if (item.LastWriteTimeUtc > existing.LastWriteTimeUtc)
+            if (secondaryEntry.LastWriteTimeUtc > existing.LastWriteTimeUtc)
             {
-                merged[key] = item;
+                merged[key] = secondaryEntry;
             }
         }
 
@@ -3256,12 +3256,12 @@ internal static class ResponseFormatter
 
             if (data["results"] is JsonArray results)
             {
-                foreach (var item in results.OfType<JsonObject>())
+                foreach (var batchResultEntry in results.OfType<JsonObject>())
                 {
-                    var itemSuccess = item["success"]?.GetValue<bool>() ?? false;
-                    var itemId = item["id"]?.GetValue<string>();
-                    var itemCommand = item["command"]?.GetValue<string>() ?? string.Empty;
-                    var itemSummary = item["summary"]?.GetValue<string>() ?? string.Empty;
+                    var itemSuccess = batchResultEntry["success"]?.GetValue<bool>() ?? false;
+                    var itemId = batchResultEntry["id"]?.GetValue<string>();
+                    var itemCommand = batchResultEntry["command"]?.GetValue<string>() ?? string.Empty;
+                    var itemSummary = batchResultEntry["summary"]?.GetValue<string>() ?? string.Empty;
                     var prefix = itemSuccess ? "OK" : "FAIL";
                     var label = string.IsNullOrWhiteSpace(itemId) ? itemCommand : $"{itemId} {itemCommand}";
                     lines.Add($"  [{prefix}] {label} - {itemSummary}");

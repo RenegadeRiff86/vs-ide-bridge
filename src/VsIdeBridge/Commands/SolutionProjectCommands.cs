@@ -745,11 +745,11 @@ internal static class SolutionProjectCommands
             yield break;
         }
 
-        foreach (var item in enumerable)
+        foreach (var automationObject in enumerable)
         {
-            if (item is not null)
+            if (automationObject is not null)
             {
-                yield return item;
+                yield return automationObject;
             }
         }
     }
@@ -1186,6 +1186,156 @@ internal static class SolutionProjectCommands
 
     // ── remove-project ────────────────────────────────────────────────────────
 
+    // ── create-project ────────────────────────────────────────────────────────
+
+    internal sealed class IdeCreateProjectCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+        : IdeCommandBase(package, runtime, commandService, 0x0260)
+    {
+        protected override string CanonicalName => "Tools.IdeCreateProject";
+
+        private static readonly Dictionary<string, string> TemplateAliases = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["classlib"] = "ClassLibrary",
+            ["class-library"] = "ClassLibrary",
+            ["console"] = "ConsoleApplication",
+            ["wpf"] = "WpfApplication",
+            ["winforms"] = "WindowsFormsApplication",
+            ["web"] = "WebApplication",
+            ["webapi"] = "WebApiApplication",
+            ["razor"] = "RazorClassLibrary",
+            ["test"] = "TestProject",
+            ["xunit"] = "xUnitTestProject",
+            ["nunit"] = "NUnitTestProject",
+            ["mstest"] = "MSTestProject",
+        };
+
+        private static readonly Dictionary<string, string> LanguageAliases = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["cs"] = "CSharp",
+            ["csharp"] = "CSharp",
+            ["c#"] = "CSharp",
+            ["vb"] = "VisualBasic",
+            ["fs"] = "FSharp",
+            ["fsharp"] = "FSharp",
+            ["f#"] = "FSharp",
+            ["cpp"] = "VC",
+            ["c++"] = "VC",
+        };
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            var name = args.GetRequiredString("name");
+            var templateName = args.GetString("template") ?? "ClassLibrary";
+            var language = args.GetString("language") ?? "CSharp";
+            var directory = args.GetString("directory");
+            var folderName = args.GetString("solution-folder");
+
+            // Resolve aliases
+            if (TemplateAliases.TryGetValue(templateName, out var resolvedTemplate))
+            {
+                templateName = resolvedTemplate;
+            }
+            if (LanguageAliases.TryGetValue(language, out var resolvedLanguage))
+            {
+                language = resolvedLanguage;
+            }
+
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            EnsureSolutionOpen(context.Dte);
+
+            var solution = (Solution2)context.Dte.Solution;
+
+            // Resolve directory: default to solution dir / src / name
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                var solutionDir = Path.GetDirectoryName(solution.FullName) ?? ".";
+                var srcDir = Path.Combine(solutionDir, "src");
+                directory = Path.Combine(Directory.Exists(srcDir) ? srcDir : solutionDir, name);
+            }
+            directory = PathNormalization.NormalizeFilePath(directory!);
+
+            if (Directory.Exists(directory) && Directory.GetFiles(directory).Length > 0)
+            {
+                throw new CommandErrorException("already_exists",
+                    $"Directory already exists and is not empty: {directory}. Choose a different name or directory.");
+            }
+
+            // Get template path from VS
+            string templatePath;
+            try
+            {
+                templatePath = solution.GetProjectTemplate(templateName, language);
+            }
+            catch (Exception ex)
+            {
+                throw new CommandErrorException("template_not_found",
+                    $"Could not find project template '{templateName}' for language '{language}'. " +
+                    $"Common aliases: classlib, console, wpf, winforms, web, webapi, test, xunit, nunit, mstest. " +
+                    $"You can also pass any VS template name directly (e.g. BlazorServerApp, WorkerService). Error: {ex.Message}");
+            }
+
+            if (string.IsNullOrWhiteSpace(templatePath))
+            {
+                throw new CommandErrorException("template_not_found",
+                    $"Template '{templateName}' not found for language '{language}'. " +
+                    "Common aliases: classlib, console, wpf, winforms, web, webapi, test, xunit, nunit, mstest. " +
+                    "You can also pass any VS template name directly (e.g. BlazorServerApp, WorkerService).");
+            }
+
+            // Create the project
+            Directory.CreateDirectory(directory);
+
+            if (!string.IsNullOrWhiteSpace(folderName))
+            {
+                var folder = FindOrCreateSolutionFolder(context.Dte, folderName!);
+                ((SolutionFolder)folder.Object).AddFromTemplate(templatePath, directory, name);
+            }
+            else
+            {
+                solution.AddFromTemplate(templatePath, directory, name, false);
+            }
+
+            // Find the created project
+            Project? created = null;
+            foreach (Project p in solution.Projects)
+            {
+                if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    created = p;
+                    break;
+                }
+            }
+
+            var projectPath = created?.FullName ?? Path.Combine(directory, name + ".csproj");
+
+            return new CommandExecutionResult(
+                $"Created '{templateName}' project '{name}' at {directory}.",
+                new JObject
+                {
+                    ["name"] = created?.Name ?? name,
+                    [UniqueNamePropertyName] = created?.UniqueName ?? name,
+                    ["path"] = projectPath,
+                    ["template"] = templateName,
+                    ["language"] = language,
+                    ["directory"] = directory,
+                });
+        }
+
+        private static Project FindOrCreateSolutionFolder(DTE2 dte, string name)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+            foreach (Project p in dte.Solution.Projects)
+            {
+                if (string.Equals(p.Kind, ProjectKinds.vsProjectKindSolutionFolder, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    return p;
+                }
+            }
+            return ((Solution2)dte.Solution).AddSolutionFolder(name);
+        }
+    }
+
     internal sealed class IdeRemoveProjectCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
         : IdeCommandBase(package, runtime, commandService, 0x0240)
     {
@@ -1253,11 +1403,11 @@ internal static class SolutionProjectCommands
             var project = FindProject(context.Dte, projectQuery)
                 ?? throw CreateProjectNotFound(projectQuery);
 
-            var item = project.ProjectItems.AddFromFile(filePath);
+            var projectItem = project.ProjectItems.AddFromFile(filePath);
 
             return new CommandExecutionResult(
                 $"File '{Path.GetFileName(filePath)}' added to project '{project.Name}'.",
-                new JObject { ["file"] = filePath, ["fileName"] = item.Name, ["project"] = project.Name });
+                new JObject { ["file"] = filePath, ["fileName"] = projectItem.Name, ["project"] = project.Name });
         }
     }
 
@@ -1278,11 +1428,11 @@ internal static class SolutionProjectCommands
             var project = FindProject(context.Dte, projectQuery)
                 ?? throw CreateProjectNotFound(projectQuery);
 
-            var item = FindProjectItem(project.ProjectItems, fileQuery)
+            var projectItem = FindProjectItem(project.ProjectItems, fileQuery)
                 ?? throw new CommandErrorException("file_not_found", $"File '{fileQuery}' not found in project '{project.Name}'.");
 
-            var fileName = item.Name;
-            item.Remove(); // removes from project, does not delete from disk
+            var fileName = projectItem.Name;
+            projectItem.Remove(); // removes from project, does not delete from disk
 
             return new CommandExecutionResult(
                 $"File '{fileName}' removed from project '{project.Name}'.",
@@ -1331,15 +1481,15 @@ internal static class SolutionProjectCommands
 
             var solutionDirectory = Path.GetDirectoryName(context.Dte.Solution.FullName) ?? string.Empty;
             var items = new List<JObject>();
-            foreach (var item in EnumerateProjectItems(project.ProjectItems))
+            foreach (var projectItem in EnumerateProjectItems(project.ProjectItems))
             {
-                var paths = GetProjectItemPaths(item);
+                var paths = GetProjectItemPaths(projectItem);
                 if (!MatchesPathFilter(paths, pathFilter, solutionDirectory))
                 {
                     continue;
                 }
 
-                items.Add(ProjectItemToJson(item, paths));
+                items.Add(ProjectItemToJson(projectItem, paths));
                 if (items.Count >= max)
                 {
                     break;

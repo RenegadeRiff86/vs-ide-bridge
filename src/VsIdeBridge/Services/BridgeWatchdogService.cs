@@ -107,11 +107,7 @@ internal sealed class BridgeWatchdogService(AsyncPackage package, int probeInter
                 {
                     _timeoutCommands++;
                     _lastTimeoutCommandAtUtc = now;
-                    if (!_isDegraded)
-                    {
-                        _degradedSinceUtc = now;
-                    }
-
+                    if (!_isDegraded) _degradedSinceUtc = now;
                     _isDegraded = true;
                     _degradedReason = "command_timeout";
                 }

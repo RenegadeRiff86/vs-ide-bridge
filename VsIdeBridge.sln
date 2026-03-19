@@ -1,6 +1,6 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.0.31903.59
+# Visual Studio Version 18
+VisualStudioVersion = 18.4.11612.150 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VsIdeBridge", "src\VsIdeBridge\VsIdeBridge.csproj", "{96A2B4F0-6FB5-44F0-852A-CE485ECDB91D}"
 EndProject
@@ -8,9 +8,11 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VsIdeBridgeCli", "src\VsIde
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VsIdeBridgeCli.Tests", "tests\VsIdeBridgeCli.Tests\VsIdeBridgeCli.Tests.csproj", "{5A4E80B8-5F8B-4A8F-9B6E-2C5F2F9CF0F1}"
 EndProject
-Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "IdeBridgeJsonProbe", "src\IdeBridgeJsonProbe\IdeBridgeJsonProbe.vcxproj", "{E43C296A-6DFD-44F5-9361-71B3915EAD5E}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "IdeBridgeJsonProbe", "src\IdeBridgeJsonProbe\IdeBridgeJsonProbe.vcxproj", "{E43C296A-6DFD-44F5-9361-71B3915EAD5E}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VsIdeBridgeInstaller", "src\VsIdeBridgeInstaller\VsIdeBridgeInstaller.csproj", "{A1C5D8F9-7B2E-4EAD-9C73-412B7C0F1E22}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VsIdeBridgeService", "src\VsIdeBridgeService\VsIdeBridgeService.csproj", "{433FB089-5BA8-E2FE-7F65-C5A0ED26E928}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -38,11 +40,15 @@ Global
 		{A1C5D8F9-7B2E-4EAD-9C73-412B7C0F1E22}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1C5D8F9-7B2E-4EAD-9C73-412B7C0F1E22}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1C5D8F9-7B2E-4EAD-9C73-412B7C0F1E22}.Release|Any CPU.Build.0 = Release|Any CPU
+		{433FB089-5BA8-E2FE-7F65-C5A0ED26E928}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{433FB089-5BA8-E2FE-7F65-C5A0ED26E928}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{433FB089-5BA8-E2FE-7F65-C5A0ED26E928}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{433FB089-5BA8-E2FE-7F65-C5A0ED26E928}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
-EndProject("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "VsIdeBridgeService", "src\VsIdeBridgeService\VsIdeBridgeService.csproj", "{C38E51A7-8C5B-4E20-8A41-6F4C03F0F4A9}"
-EndProject
-Global
-
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {36FEE03D-E293-42A6-8AF4-E4DCE5D8D766}
+	EndGlobalSection
+EndGlobal

@@ -16,6 +16,15 @@ internal static class CommandRegistrar
         var commandService = await package.GetServiceAsync(typeof(IMenuCommandService)).ConfigureAwait(false) as OleMenuCommandService;
         Assumes.Present(commandService);
 
+        RegisterCoreCommands(package, runtime, commandService);
+        RegisterSearchNavigationCommands(package, runtime, commandService);
+        RegisterBreakpointCommands(package, runtime, commandService);
+        RegisterDebugBuildCommands(package, runtime, commandService);
+        RegisterSolutionProjectCommands(package, runtime, commandService);
+    }
+
+    private static void RegisterCoreCommands(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+    {
         runtime.RegisterCommand(new IdeCoreCommands.IdeHelpMenuCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeToggleAllowBridgeEditsMenuCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeToggleAllowBridgeShellExecMenuCommand(package, runtime, commandService));
@@ -32,7 +41,12 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new IdeCoreCommands.IdeWaitForReadyCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeOpenSolutionCommand(package, runtime, commandService));
         runtime.RegisterCommand(new IdeCoreCommands.IdeCreateSolutionCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeCloseIdeCommand(package, runtime, commandService));
+        runtime.RegisterCommand(new IdeCoreCommands.IdeBatchCommandsCommand(package, runtime, commandService));
+    }
 
+    private static void RegisterSearchNavigationCommands(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+    {
         runtime.RegisterCommand(new SearchNavigationCommands.IdeFindTextCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeFindTextBatchCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SearchNavigationCommands.IdeFindFilesCommand(package, runtime, commandService));
@@ -62,7 +76,10 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new SearchNavigationCommands.IdeGetFileSymbolsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new PatchCommands.IdeApplyUnifiedDiffCommand(package, runtime, commandService));
         runtime.RegisterCommand(new PatchCommands.IdeWriteFileCommand(package, runtime, commandService));
+    }
 
+    private static void RegisterBreakpointCommands(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+    {
         runtime.RegisterCommand(new BreakpointCommands.IdeSetBreakpointCommand(package, runtime, commandService));
         runtime.RegisterCommand(new BreakpointCommands.IdeListBreakpointsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new BreakpointCommands.IdeRemoveBreakpointCommand(package, runtime, commandService));
@@ -71,7 +88,10 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new BreakpointCommands.IdeDisableBreakpointCommand(package, runtime, commandService));
         runtime.RegisterCommand(new BreakpointCommands.IdeEnableAllBreakpointsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new BreakpointCommands.IdeDisableAllBreakpointsCommand(package, runtime, commandService));
+    }
 
+    private static void RegisterDebugBuildCommands(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+    {
         runtime.RegisterCommand(new DebugBuildCommands.IdeDebugGetStateCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeDebugStartCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeDebugStopCommand(package, runtime, commandService));
@@ -93,9 +113,10 @@ internal static class CommandRegistrar
         runtime.RegisterCommand(new DebugBuildCommands.IdeGetErrorListCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeGetWarningsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new DebugBuildCommands.IdeBuildAndCaptureErrorsCommand(package, runtime, commandService));
-        runtime.RegisterCommand(new IdeCoreCommands.IdeCloseIdeCommand(package, runtime, commandService));
-        runtime.RegisterCommand(new IdeCoreCommands.IdeBatchCommandsCommand(package, runtime, commandService));
+    }
 
+    private static void RegisterSolutionProjectCommands(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService)
+    {
         runtime.RegisterCommand(new SolutionProjectCommands.IdeListProjectsCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SolutionProjectCommands.IdeAddProjectCommand(package, runtime, commandService));
         runtime.RegisterCommand(new SolutionProjectCommands.IdeRemoveProjectCommand(package, runtime, commandService));

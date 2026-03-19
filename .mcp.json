@@ -1,10 +1,9 @@
 {
   "mcpServers": {
     "vs-ide-bridge": {
-      "command": "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
+      "command": "C:\\Program Files\\VsIdeBridge\\service\\VsIdeBridgeService.exe",
       "args": [
-        "mcp-server",
-        "--tools-only"
+        "mcp-server"
       ]
     }
   }

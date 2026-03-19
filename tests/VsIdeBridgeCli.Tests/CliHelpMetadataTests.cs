@@ -15,7 +15,7 @@ public sealed class CliHelpMetadataTests
     public async Task HelpTopics_IncludeCatalogMetadata(string topic, string expectedCanonical, string expectedExample)
     {
         var cliDll = ResolveCliDllPath();
-        using var process = new Process
+        using var helpTopicsProcess = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -28,15 +28,15 @@ public sealed class CliHelpMetadataTests
             },
         };
 
-        Assert.True(process.Start(), "Failed to start CLI process.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        Assert.True(helpTopicsProcess.Start(), "Failed to start CLI process.");
+        var stdoutTask = helpTopicsProcess.StandardOutput.ReadToEndAsync();
+        var stderrTask = helpTopicsProcess.StandardError.ReadToEndAsync();
+        await helpTopicsProcess.WaitForExitAsync();
 
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
 
-        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(0, helpTopicsProcess.ExitCode);
         Assert.Contains("Metadata", stdout);
         Assert.Contains(expectedCanonical, stdout);
         Assert.Contains(expectedExample, stdout);
@@ -47,7 +47,7 @@ public sealed class CliHelpMetadataTests
     public async Task ApplyDiffHelp_ShowsVisibleByDefaultBehavior()
     {
         var cliDll = ResolveCliDllPath();
-        using var process = new Process
+        using var applyDiffHelpProcess = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -60,15 +60,15 @@ public sealed class CliHelpMetadataTests
             },
         };
 
-        Assert.True(process.Start(), "Failed to start CLI process.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        Assert.True(applyDiffHelpProcess.Start(), "Failed to start CLI process.");
+        var stdoutTask = applyDiffHelpProcess.StandardOutput.ReadToEndAsync();
+        var stderrTask = applyDiffHelpProcess.StandardError.ReadToEndAsync();
+        await applyDiffHelpProcess.WaitForExitAsync();
 
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
 
-        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(0, applyDiffHelpProcess.ExitCode);
         Assert.Contains("--open-changed-files <true|false> (default: true)", stdout);
         Assert.Contains("Changed files are opened by default", stdout);
         Assert.Contains("---/+++ file headers and @@ hunks", stdout);
@@ -80,7 +80,7 @@ public sealed class CliHelpMetadataTests
     public async Task CatalogHelp_DescribesStandardizedCatalogPayload()
     {
         var cliDll = ResolveCliDllPath();
-        using var process = new Process
+        using var catalogHelpProcess = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -93,15 +93,15 @@ public sealed class CliHelpMetadataTests
             },
         };
 
-        Assert.True(process.Start(), "Failed to start CLI process.");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        Assert.True(catalogHelpProcess.Start(), "Failed to start CLI process.");
+        var stdoutTask = catalogHelpProcess.StandardOutput.ReadToEndAsync();
+        var stderrTask = catalogHelpProcess.StandardError.ReadToEndAsync();
+        await catalogHelpProcess.WaitForExitAsync();
 
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
 
-        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(0, catalogHelpProcess.ExitCode);
         Assert.Contains("schemaVersion, generatedAtUtc, catalog.commands[]", stdout);
         Assert.Contains("name, canonicalName, description, example, aliases", stdout);
         Assert.True(string.IsNullOrWhiteSpace(stderr), $"Unexpected stderr: {stderr}");

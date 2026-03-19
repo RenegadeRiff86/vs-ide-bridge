@@ -12,21 +12,21 @@ Lets you drive a running Visual Studio instance from outside the IDE: search cod
 
 Commands are invoked through simple pipe names like `state`, `search-symbols`, and `quick-info`. The legacy `Tools.Ide*` names still work for compatibility. The native CLI can print `json`, `summary`, or `keyvalue` to stdout and can also write envelopes to a caller-specified output file.
 
-The CLI also includes a Windows-side stdio MCP facade (`vs-ide-bridge mcp-server`) that forwards MCP tool/resource/prompt requests to the existing bridge pipe server. This keeps the VSIX bridge as the source of truth while exposing an LLM-friendly command surface.
+The installed Windows service (`VsIdeBridgeService`) is the primary MCP host. The CLI remains available as a backup path and for direct terminal fallback commands, but client MCP configs should prefer the service executable so discovery and editing stay on the bridge-native path.
 
 ## Getting Started
 
 1. **Close Visual Studio and your MCP client**, then download and run `vs-ide-bridge-setup-<version>.exe` from [GitHub Releases](https://github.com/RenegadeRiff86/vs-ide-bridge/releases/latest). The installer sets everything up automatically.
 
-2. **Add the installed bridge to your client config.** Use the same installed CLI for every client:
+2. **Add the installed bridge to your client config.** Prefer the installed service host for MCP clients:
 
-   `C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe mcp-server --tools-only`
+   `C:\Program Files\VsIdeBridge\service\VsIdeBridgeService.exe mcp-server`
 
    If your app asks for separate UI fields, use:
 
    - `Server name`: `vs-ide-bridge`
-   - `Command`: `C:\Program Files\VsIdeBridge\cli\vs-ide-bridge.exe`
-   - `Arguments`: `mcp-server --tools-only`
+   - `Command`: `C:\Program Files\VsIdeBridge\service\VsIdeBridgeService.exe`
+   - `Arguments`: `mcp-server`
 
    Both **Codex** and **Claude Code / Claude Desktop** are first-class supported MCP clients. The only real difference is the config file format.
 
@@ -34,8 +34,8 @@ The CLI also includes a Windows-side stdio MCP facade (`vs-ide-bridge mcp-server
 
    ```toml
    [mcp_servers.vs-ide-bridge]
-   command = "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe"
-   args = ["mcp-server", "--tools-only"]
+   command = "C:\\Program Files\\VsIdeBridge\\service\\VsIdeBridgeService.exe"
+   args = ["mcp-server"]
    ```
 
    **Claude Code / Claude Desktop / other JSON-based clients** use `.mcp.json` or the client's JSON MCP config file:
@@ -44,8 +44,8 @@ The CLI also includes a Windows-side stdio MCP facade (`vs-ide-bridge mcp-server
    {
      "mcpServers": {
        "vs-ide-bridge": {
-         "command": "C:\\Program Files\\VsIdeBridge\\cli\\vs-ide-bridge.exe",
-         "args": ["mcp-server", "--tools-only"]
+         "command": "C:\\Program Files\\VsIdeBridge\\service\\VsIdeBridgeService.exe",
+         "args": ["mcp-server"]
        }
      }
    }
@@ -63,7 +63,7 @@ The CLI also includes a Windows-side stdio MCP facade (`vs-ide-bridge mcp-server
    > "Take a slice of AuthService.cs around the login code."
    > "Apply this fix to AuthService.cs."
 
-**CLI fallback:** If your MCP client is unavailable, the installed `vs-ide-bridge` command exposes the same functionality from any terminal. Run `vs-ide-bridge help` for a full list of commands.
+**CLI fallback:** If your MCP client is unavailable, the installed `vs-ide-bridge` command still exposes terminal fallback commands. Run `vs-ide-bridge help` for a full list of backup verbs.
 
 ## Requirements
 

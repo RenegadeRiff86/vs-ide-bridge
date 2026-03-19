@@ -15,6 +15,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
+using VsIdeBridge.Services.Diagnostics;
 
 namespace VsIdeBridge.Services;
 
@@ -27,8 +28,11 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
     private const string ImplementationFoundProperty = "implementationFound";
     private const string ImplementationLocationProperty = "implementationLocation";
     private const string ResolvedPathProperty = "resolvedPath";
+    private const int RecommendedMaxOpenTabs = 7;
     private const string SelectedTextProperty = "selectedText";
     private const string SourceLocationProperty = "sourceLocation";
+    private const string TabManagementNote =
+        "Prefer keeping about 7 tabs open. Use close_others, close_document, or close_file when tab count grows.";
     private const string TextDocumentKind = "TextDocument";
     private const string UnsupportedOperationCode = "unsupported_operation";
 
@@ -36,10 +40,10 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-        var activePath = TryGetDocumentFullName(dte.ActiveDocument);
-        var documents = EnumerateOpenDocuments(dte);
-        var items = new JArray();
-        for (var i = 0; i < documents.Count; i++)
+        string? activePath = TryGetDocumentFullName(dte.ActiveDocument);
+        IReadOnlyList<Document> documents = EnumerateOpenDocuments(dte);
+        JArray items = new();
+        for (int i = 0; i < documents.Count; i++)
         {
             items.Add(CreateDocumentInfo(documents[i], activePath, i + 1));
         }
@@ -48,6 +52,9 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         {
             ["count"] = items.Count,
             ["activePath"] = string.IsNullOrWhiteSpace(activePath) ? string.Empty : PathNormalization.NormalizeFilePath(activePath),
+            ["recommendedMaxOpenTabs"] = RecommendedMaxOpenTabs,
+            ["isOverRecommendedTabCount"] = items.Count > RecommendedMaxOpenTabs,
+            ["note"] = TabManagementNote,
             ["items"] = items,
         };
     }
@@ -247,7 +254,8 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
         }
 
         // Pre-write best-practice analysis for the write_file code path.
-        var preWriteWarnings = ErrorListService.AnalyzeContentBeforeWrite(normalizedPath, content);
+        IReadOnlyList<JObject> preWriteWarnings = ErrorListService.AnalyzeContentBeforeWrite(normalizedPath, content);
+        string? projectUniqueName = TryGetDocumentProjectUniqueName(window.Document) ?? SolutionFileLocator.TryFindProjectUniqueName(dte, normalizedPath);
 
         return new JObject
         {
@@ -260,12 +268,7 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             ["column"] = Math.Max(1, column),
             ["windowCaption"] = window.Caption,
             ["bestPracticeWarnings"] = preWriteWarnings.Count > 0
-                ? new JArray(preWriteWarnings.Select(w => new JObject
-                {
-                    ["code"] = w["code"],
-                    ["line"] = w["line"],
-                    ["message"] = w["message"],
-                }))
+                ? BestPracticeWarningProjector.CreateResponseWarnings(preWriteWarnings, projectUniqueName)
                 : null,
         };
     }
@@ -945,14 +948,14 @@ internal sealed class DocumentService(IServiceProvider serviceProvider)
             note = $"Code model unavailable: {ex.Message}";
         }
 
-        var result = new JObject
+        var outlineResult = new JObject
         {
             [ResolvedPathProperty] = resolvedPath,
             ["count"] = symbols.Count,
             ["symbols"] = symbols,
         };
-        if (note is not null) result["note"] = note;
-        return result;
+        if (note is not null) outlineResult["note"] = note;
+        return outlineResult;
     }
 
     private static readonly HashSet<vsCMElement> s_outlineKinds =

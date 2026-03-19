@@ -77,7 +77,7 @@ internal static partial class PythonRuntimeService
     internal static async Task<JsonObject> ListPackagesAsync(string? interpreterPath = null)
     {
         var environment = await ResolveEnvironmentAsync(interpreterPath).ConfigureAwait(false);
-        var result = await ProcessRunner.RunAsync(
+        var pipListResult = await ProcessRunner.RunAsync(
             new ProcessStartInfo
             {
                 FileName = environment.Path,
@@ -91,11 +91,11 @@ internal static partial class PythonRuntimeService
             }).ConfigureAwait(false);
 
         JsonArray packages;
-        if (result.Success)
+        if (pipListResult.Success)
         {
             try
             {
-                packages = JsonNode.Parse(result.Stdout) as JsonArray ?? [];
+                packages = JsonNode.Parse(pipListResult.Stdout) as JsonArray ?? [];
             }
             catch (JsonException)
             {
@@ -109,13 +109,13 @@ internal static partial class PythonRuntimeService
 
         return new JsonObject
         {
-            ["success"] = result.Success,
+            ["success"] = pipListResult.Success,
             ["env"] = environment.ToJson(),
             ["count"] = packages.Count,
             ["packages"] = packages,
-            ["stderr"] = result.Stderr,
-            ["stdout"] = result.Stdout,
-            ["exitCode"] = result.ExitCode,
+            ["stderr"] = pipListResult.Stderr,
+            ["stdout"] = pipListResult.Stdout,
+            ["exitCode"] = pipListResult.ExitCode,
         };
     }
 
@@ -371,7 +371,7 @@ internal static partial class PythonRuntimeService
         var resolvedTargetPath = ResolvePathFromWorkingDirectory(targetPath, resolvedWorkingDirectory);
         EnsureEnvironmentTargetIsEmpty(resolvedTargetPath);
 
-        var result = await RunInterpreterAsync(
+        var createEnvResult = await RunInterpreterAsync(
             baseEnvironment,
             toolName: "python_create_env",
             arguments: "-I -m venv " + QuoteArgument(resolvedTargetPath),
@@ -384,14 +384,14 @@ internal static partial class PythonRuntimeService
             }).ConfigureAwait(false);
 
         var createdInterpreterPath = GetEnvironmentInterpreterPath(resolvedTargetPath);
-        result["createdInterpreterPath"] = createdInterpreterPath;
-        if (result["success"]?.GetValue<bool>() == true && File.Exists(createdInterpreterPath))
+        createEnvResult["createdInterpreterPath"] = createdInterpreterPath;
+        if (createEnvResult["success"]?.GetValue<bool>() == true && File.Exists(createdInterpreterPath))
         {
             var createdEnvironment = await InspectInterpreterAsync(createdInterpreterPath, selected: false, source: "created").ConfigureAwait(false);
-            result["createdEnv"] = createdEnvironment.ToJson();
+            createEnvResult["createdEnv"] = createdEnvironment.ToJson();
         }
 
-        return result;
+        return createEnvResult;
     }
 
     private static async Task<PythonEnvironment> ResolveEnvironmentAsync(string? interpreterPath, string? name = null)
@@ -511,20 +511,20 @@ internal static partial class PythonRuntimeService
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var result = await ProcessRunner.RunAsync(startInfo, normalizedTimeout).ConfigureAwait(false);
+        var processRunResult = await ProcessRunner.RunAsync(startInfo, normalizedTimeout).ConfigureAwait(false);
         stopwatch.Stop();
 
         var payload = new JsonObject
         {
-            ["success"] = result.Success,
+            ["success"] = processRunResult.Success,
             ["tool"] = toolName,
             ["env"] = environment.ToJson(),
             ["workingDirectory"] = workingDirectory,
-            ["command"] = result.Command,
-            ["args"] = result.Arguments,
-            ["stdout"] = result.Stdout,
-            ["stderr"] = result.Stderr,
-            ["exitCode"] = result.ExitCode,
+            ["command"] = processRunResult.Command,
+            ["args"] = processRunResult.Arguments,
+            ["stdout"] = processRunResult.Stdout,
+            ["stderr"] = processRunResult.Stderr,
+            ["exitCode"] = processRunResult.ExitCode,
             ["durationMs"] = stopwatch.ElapsedMilliseconds,
         };
 
@@ -779,16 +779,16 @@ else:
             CreateNoWindow = true,
         };
 
-        var result = await ProcessRunner.RunAsync(startInfo, timeoutMs: 10_000).ConfigureAwait(false);
-        if (!result.Success)
+        var interpreterMetadataRunResult = await ProcessRunner.RunAsync(startInfo, timeoutMs: 10_000).ConfigureAwait(false);
+        if (!interpreterMetadataRunResult.Success)
         {
-            var fallbackVersion = TryParseVersionFromStdErr(result.Stderr);
+            var fallbackVersion = TryParseVersionFromStdErr(interpreterMetadataRunResult.Stderr);
             return new PythonInterpreterMetadata(fallbackVersion, null, null, interpreterPath);
         }
 
         try
         {
-            var json = JsonNode.Parse(result.Stdout) as JsonObject;
+            var json = JsonNode.Parse(interpreterMetadataRunResult.Stdout) as JsonObject;
             return new PythonInterpreterMetadata(
                 json?["version"]?.GetValue<string>(),
                 json?["prefix"]?.GetValue<string>(),
@@ -805,7 +805,7 @@ else:
     {
         try
         {
-            var result = await ProcessRunner.RunAsync(
+            var pyLauncherRunResult = await ProcessRunner.RunAsync(
                 new ProcessStartInfo
                 {
                     FileName = "py",
@@ -819,13 +819,13 @@ else:
                 },
                 timeoutMs: 10_000).ConfigureAwait(false);
 
-            if (!result.Success)
+            if (!pyLauncherRunResult.Success)
             {
                 return [];
             }
 
             var paths = new List<string>();
-            foreach (var line in result.Stdout.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries))
+            foreach (var line in pyLauncherRunResult.Stdout.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries))
             {
                 var match = PyLauncherLineRegex().Match(line);
                 if (match.Success)

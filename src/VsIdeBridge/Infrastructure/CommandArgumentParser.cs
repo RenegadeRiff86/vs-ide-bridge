@@ -55,17 +55,12 @@ internal static class CommandArgumentParser
         for (var i = 0; i < text.Length; i++)
         {
             var ch = text[i];
-            if (ch == '\\' && i + 1 < text.Length)
+            if (ch == '\\' && i + 1 < text.Length && (text[i + 1] == '"' || text[i + 1] == '\\'))
             {
-                var next = text[i + 1];
-                if (next == '"' || next == '\\')
-                {
-                    buffer.Append(next);
-                    i++;
-                    continue;
-                }
+                buffer.Append(text[i + 1]);
+                i++;
+                continue;
             }
-
             if (ch == '"')
             {
                 inQuotes = !inQuotes;

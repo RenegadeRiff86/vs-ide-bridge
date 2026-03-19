@@ -54,11 +54,12 @@ internal sealed class ReadinessService
             if (stage is not null)
             {
                 intellisenseCompleted = !stage.IsInProgress;
-                if (intellisenseCompleted)
-                {
-                    satisfiedBy = "intellisense";
-                    break;
-                }
+            }
+
+            if (intellisenseCompleted)
+            {
+                satisfiedBy = "intellisense";
+                break;
             }
 
             lastStatusBarText = TryGetStatusBarText(statusbar);

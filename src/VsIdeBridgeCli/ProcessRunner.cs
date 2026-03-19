@@ -29,41 +29,41 @@ internal static class ProcessRunner
 
     internal static async Task<JsonObject> RunJsonAsync(ProcessStartInfo startInfo, int timeoutMs = DefaultTimeoutMilliseconds)
     {
-        var result = await RunAsync(startInfo, timeoutMs).ConfigureAwait(false);
+        var runResult = await RunAsync(startInfo, timeoutMs).ConfigureAwait(false);
         return new JsonObject
         {
-            ["success"] = result.Success,
-            ["exitCode"] = result.ExitCode,
-            ["command"] = result.Command,
-            ["workingDirectory"] = result.WorkingDirectory,
-            ["args"] = result.Arguments,
-            ["stdout"] = result.Stdout,
-            ["stderr"] = result.Stderr,
+            ["success"] = runResult.Success,
+            ["exitCode"] = runResult.ExitCode,
+            ["command"] = runResult.Command,
+            ["workingDirectory"] = runResult.WorkingDirectory,
+            ["args"] = runResult.Arguments,
+            ["stdout"] = runResult.Stdout,
+            ["stderr"] = runResult.Stderr,
         };
     }
 
     internal static async Task<ProcessRunResult> RunAsync(ProcessStartInfo startInfo, int timeoutMs = DefaultTimeoutMilliseconds, int pollIntervalMs = DefaultPollIntervalMilliseconds)
     {
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
+        using var childProcess = new Process { StartInfo = startInfo };
+        childProcess.Start();
 
-        if (process.StartInfo.RedirectStandardInput)
+        if (childProcess.StartInfo.RedirectStandardInput)
         {
-            process.StandardInput.Close();
+            childProcess.StandardInput.Close();
         }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
+        var stdoutTask = childProcess.StandardOutput.ReadToEndAsync();
+        var stderrTask = childProcess.StandardError.ReadToEndAsync();
 
         var effectiveTimeout = timeoutMs <= 0 ? DefaultTimeoutMilliseconds : timeoutMs;
         var effectivePollInterval = pollIntervalMs <= 0 ? DefaultPollIntervalMilliseconds : pollIntervalMs;
         var deadline = DateTime.UtcNow.AddMilliseconds(effectiveTimeout);
 
-        while (!process.HasExited)
+        while (!childProcess.HasExited)
         {
             if (DateTime.UtcNow >= deadline)
             {
-                var killError = TryKillProcess(process);
+                var killError = TryKillProcess(childProcess);
                 return new ProcessRunResult(
                     false,
                     -1,
@@ -77,10 +77,10 @@ internal static class ProcessRunner
             await Task.Delay(effectivePollInterval).ConfigureAwait(false);
         }
 
-        process.WaitForExit();
+        childProcess.WaitForExit();
         var stdout = await stdoutTask.ConfigureAwait(false);
         var stderr = await stderrTask.ConfigureAwait(false);
-        return new ProcessRunResult(process.ExitCode == 0, process.ExitCode, startInfo.FileName, startInfo.WorkingDirectory, startInfo.Arguments, stdout, stderr);
+        return new ProcessRunResult(childProcess.ExitCode == 0, childProcess.ExitCode, startInfo.FileName, startInfo.WorkingDirectory, startInfo.Arguments, stdout, stderr);
     }
 
     internal sealed record ProcessRunResult(

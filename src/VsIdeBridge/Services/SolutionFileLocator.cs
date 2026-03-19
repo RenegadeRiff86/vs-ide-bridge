@@ -39,7 +39,7 @@ internal static class SolutionFileLocator
         var normalizedQuery = NormalizeQuery(trimmedQuery);
         var queryFileName = Path.GetFileName(trimmedQuery.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
 
-        return EnumerateSolutionFiles(dte)
+        return [.. EnumerateSolutionFiles(dte)
             .Select(item => new Match
             {
                 Path = item.Path,
@@ -51,7 +51,37 @@ internal static class SolutionFileLocator
             .OrderByDescending(item => item.Score)
             .ThenBy(item => item.Path.Length)
             .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            ];
+    }
+
+    public static string? TryFindProjectUniqueName(DTE2 dte, string filePath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return null;
+        }
+
+        string normalizedPath;
+        try
+        {
+            normalizedPath = PathNormalization.NormalizeFilePath(filePath);
+        }
+        catch
+        {
+            return null;
+        }
+
+        foreach ((string Path, string ProjectUniqueName) item in EnumerateSolutionFiles(dte))
+        {
+            if (string.Equals(item.Path, normalizedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return string.IsNullOrWhiteSpace(item.ProjectUniqueName) ? null : item.ProjectUniqueName;
+            }
+        }
+
+        return null;
     }
 
     public static IReadOnlyList<Match> FindDiskMatches(
@@ -132,11 +162,11 @@ internal static class SolutionFileLocator
             }
         }
 
-        return results
+        return [.. results
             .OrderByDescending(item => item.Score)
             .ThenBy(item => item.Path.Length)
             .ThenBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            ];
     }
 
     private static int ScoreMatch(string candidatePath, string rawQuery, string normalizedQuery, string queryFileName)
@@ -255,7 +285,7 @@ internal static class SolutionFileLocator
         return Path.GetDirectoryName(PathNormalization.NormalizeFilePath(dte.Solution.FullName)) ?? string.Empty;
     }
 
-    private static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateSolutionFiles(DTE2 dte)
+    internal static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateSolutionFiles(DTE2 dte)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -273,7 +303,7 @@ internal static class SolutionFileLocator
         }
     }
 
-    private static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateProjectFiles(Project? project)
+    internal static IEnumerable<(string Path, string ProjectUniqueName)> EnumerateProjectFiles(Project? project)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
 
@@ -286,13 +316,10 @@ internal static class SolutionFileLocator
         {
             foreach (ProjectItem item in project.ProjectItems)
             {
-                if (item.SubProject is not null)
-                {
-                    foreach (var file in EnumerateProjectFiles(item.SubProject))
-                    {
-                        yield return file;
-                    }
-                }
+                if (item.SubProject is null)
+                    continue;
+                foreach (var file in EnumerateProjectFiles(item.SubProject))
+                    yield return file;
             }
 
             yield break;
@@ -317,9 +344,7 @@ internal static class SolutionFileLocator
             {
                 var fileName = item.FileNames[i];
                 if (!string.IsNullOrWhiteSpace(fileName))
-                {
                     yield return (PathNormalization.NormalizeFilePath(fileName), projectUniqueName);
-                }
             }
         }
 

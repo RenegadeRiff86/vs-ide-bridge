@@ -10,9 +10,9 @@ internal sealed class BridgeInstanceService
 {
     public BridgeInstanceService()
     {
-        var process = Process.GetCurrentProcess();
-        ProcessId = process.Id;
-        ProcessStartedAtUtc = process.StartTime.ToUniversalTime();
+        var currentProcess = Process.GetCurrentProcess();
+        ProcessId = currentProcess.Id;
+        ProcessStartedAtUtc = currentProcess.StartTime.ToUniversalTime();
         PipeName = $"VsIdeBridge18_{ProcessId}";
         InstanceId = $"vs18-{ProcessId}-{ProcessStartedAtUtc:yyyyMMddTHHmmssZ}";
     }

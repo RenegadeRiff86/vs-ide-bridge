@@ -85,9 +85,9 @@ internal sealed class VsCommandService
                 new { candidates = candidateCommands, error = commandError ?? string.Empty });
         }
 
-        var data = CreateCommandInfo(executed, string.Empty);
-        data["location"] = location;
-        data["candidateCommands"] = new JArray(candidateCommands);
+        var commandInfo = CreateCommandInfo(executed, string.Empty);
+        commandInfo["location"] = location;
+        commandInfo["candidateCommands"] = new JArray(candidateCommands);
 
         var window = await windowService.WaitForWindowAsync(
                 dte,
@@ -95,10 +95,10 @@ internal sealed class VsCommandService
                 activateResultWindow,
                 Math.Max(0, timeoutMs))
             .ConfigureAwait(true);
-        data["resultWindowQuery"] = resultWindowQuery;
-        data["resultWindowActivated"] = window is not null;
-        data["resultWindow"] = window;
-        return data;
+        commandInfo["resultWindowQuery"] = resultWindowQuery;
+        commandInfo["resultWindowActivated"] = window is not null;
+        commandInfo["resultWindow"] = window;
+        return commandInfo;
     }
 
     public async Task<JObject> ExecutePositionedCommandAsync(
@@ -134,12 +134,12 @@ internal sealed class VsCommandService
                 new { command = commandName, args = commandArgs, error = ex.Message, hresult = ex.HResult });
         }
 
-        var data = CreateCommandInfo(command, commandArgs);
+        var commandInfo = CreateCommandInfo(command, commandArgs);
         if (location is not null)
         {
-            data["location"] = location;
+            commandInfo["location"] = location;
         }
-        return data;
+        return commandInfo;
     }
 
     private static void EnsureCommandAllowed(string commandName)

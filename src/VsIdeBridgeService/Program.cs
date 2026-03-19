@@ -19,6 +19,23 @@ internal static class Program
             return;
         }
 
+        if (args.Length > 0 && args[0].Equals("mcp-server", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                McpServerLog.Write("mcp-server starting");
+                McpServerMode.RunAsync(args[1..]).GetAwaiter().GetResult();
+                McpServerLog.Write("mcp-server stopped normally");
+            }
+            catch (Exception ex)
+            {
+                McpServerLog.Write($"mcp-server fatal error: {ex}");
+                Environment.ExitCode = 1;
+            }
+
+            return;
+        }
+
         try
         {
             ServiceBase.Run(new BridgeService(args));

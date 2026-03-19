@@ -10,6 +10,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
+using VsIdeBridge.Services.Diagnostics;
 using VsIdeBridge.Shared;
 
 namespace VsIdeBridge.Services;
@@ -300,7 +301,8 @@ internal sealed class PatchService
                 Directory.CreateDirectory(Path.GetDirectoryName(paths.TargetPath)!);
 
                 // Pre-write best-practice analysis — surface warnings before the content lands.
-                var preWriteWarnings = ErrorListService.AnalyzeContentBeforeWrite(paths.TargetPath, result.Content);
+                IReadOnlyList<JObject> preWriteWarnings = ErrorListService.AnalyzeContentBeforeWrite(paths.TargetPath, result.Content);
+                string? projectUniqueName = SolutionFileLocator.TryFindProjectUniqueName(dte, paths.TargetPath);
 
                 var writeResult = await documentService.WriteDocumentTextAsync(
                     dte,
@@ -344,13 +346,7 @@ internal sealed class PatchService
 
                 if (preWriteWarnings.Count > 0)
                 {
-                    fileItem["bestPracticeWarnings"] = new JArray(
-                        preWriteWarnings.Select(w => new JObject
-                        {
-                            ["code"] = w["code"],
-                            ["line"] = w["line"],
-                            ["message"] = w["message"],
-                        }));
+                    fileItem["bestPracticeWarnings"] = BestPracticeWarningProjector.CreateResponseWarnings(preWriteWarnings, projectUniqueName);
                 }
 
                 appliedFiles.Add(fileItem);

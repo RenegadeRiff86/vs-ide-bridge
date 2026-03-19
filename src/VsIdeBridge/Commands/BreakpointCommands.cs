@@ -20,7 +20,7 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.SetBreakpointAsync(
+            var breakpointInfo = await context.Runtime.BreakpointService.SetBreakpointAsync(
                 context.Dte,
                 args.GetRequiredString("file"),
                 args.GetInt32("line", 1),
@@ -42,11 +42,11 @@ internal static class BreakpointCommands
                     args.GetInt32("column", 1),
                     selectWord: false).ConfigureAwait(true);
 
-                data["revealedInEditor"] = true;
-                data["reveal"] = reveal;
+                breakpointInfo["revealedInEditor"] = true;
+                breakpointInfo["reveal"] = reveal;
             }
 
-            return new CommandExecutionResult("Breakpoint set.", data);
+            return new CommandExecutionResult("Breakpoint set.", breakpointInfo);
         }
     }
 
@@ -56,8 +56,8 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.ListBreakpointsAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult(FormatBreakpointCountMessage("Enumerated", data["count"]), data);
+            var breakpointInfo = await context.Runtime.BreakpointService.ListBreakpointsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult(FormatBreakpointCountMessage("Enumerated", breakpointInfo["count"]), breakpointInfo);
         }
     }
 
@@ -67,12 +67,12 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.RemoveBreakpointAsync(
+            var breakpointInfo = await context.Runtime.BreakpointService.RemoveBreakpointAsync(
                 context.Dte,
                 args.GetRequiredString("file"),
                 args.GetInt32("line", 1)).ConfigureAwait(true);
 
-            return new CommandExecutionResult(FormatBreakpointCountMessage("Removed", data["removedCount"]), data);
+            return new CommandExecutionResult(FormatBreakpointCountMessage("Removed", breakpointInfo["removedCount"]), breakpointInfo);
         }
     }
 
@@ -82,8 +82,8 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.ClearAllBreakpointsAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult(FormatBreakpointCountMessage("Removed", data["removedCount"]), data);
+            var breakpointInfo = await context.Runtime.BreakpointService.ClearAllBreakpointsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult(FormatBreakpointCountMessage("Removed", breakpointInfo["removedCount"]), breakpointInfo);
         }
     }
 
@@ -93,12 +93,12 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.EnableBreakpointAsync(
+            var breakpointInfo = await context.Runtime.BreakpointService.EnableBreakpointAsync(
                 context.Dte,
                 args.GetRequiredString("file"),
                 args.GetInt32("line", 1)).ConfigureAwait(true);
 
-            return new CommandExecutionResult("Breakpoint enabled.", data);
+            return new CommandExecutionResult("Breakpoint enabled.", breakpointInfo);
         }
     }
 
@@ -108,12 +108,12 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.DisableBreakpointAsync(
+            var breakpointInfo = await context.Runtime.BreakpointService.DisableBreakpointAsync(
                 context.Dte,
                 args.GetRequiredString("file"),
                 args.GetInt32("line", 1)).ConfigureAwait(true);
 
-            return new CommandExecutionResult("Breakpoint disabled.", data);
+            return new CommandExecutionResult("Breakpoint disabled.", breakpointInfo);
         }
     }
 
@@ -123,8 +123,8 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.EnableAllBreakpointsAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult(FormatBreakpointCountMessage("Enabled", data["enabledCount"]), data);
+            var breakpointInfo = await context.Runtime.BreakpointService.EnableAllBreakpointsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult(FormatBreakpointCountMessage("Enabled", breakpointInfo["enabledCount"]), breakpointInfo);
         }
     }
 
@@ -134,8 +134,8 @@ internal static class BreakpointCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BreakpointService.DisableAllBreakpointsAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult(FormatBreakpointCountMessage("Disabled", data["disabledCount"]), data);
+            var breakpointInfo = await context.Runtime.BreakpointService.DisableAllBreakpointsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult(FormatBreakpointCountMessage("Disabled", breakpointInfo["disabledCount"]), breakpointInfo);
         }
     }
 }

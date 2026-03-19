@@ -31,7 +31,7 @@ public sealed class VisualStudioLauncherTests
     [Fact]
     public async Task LaunchAsync_UsesProcessRunnerOutputAsPid()
     {
-        var result = await VisualStudioLauncher.LaunchAsync(
+        var launchResult = await VisualStudioLauncher.LaunchAsync(
             @"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\devenv.exe",
             @"C:\repo\VsIdeBridge.sln",
             static (startInfo, _, _) => Task.FromResult(new ProcessRunner.ProcessRunResult(
@@ -43,15 +43,15 @@ public sealed class VisualStudioLauncherTests
                 "24680\r\n",
                 string.Empty)));
 
-        Assert.True(result.Success);
-        Assert.Equal(24680, result.ProcessId);
-        Assert.Equal("powershell-start-process", result.Launcher);
+        Assert.True(launchResult.Success);
+        Assert.Equal(24680, launchResult.ProcessId);
+        Assert.Equal("powershell-start-process", launchResult.Launcher);
     }
 
     [Fact]
     public async Task LaunchAsync_FailsWhenRunnerDoesNotReturnPid()
     {
-        var result = await VisualStudioLauncher.LaunchAsync(
+        var launchResult = await VisualStudioLauncher.LaunchAsync(
             @"C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\devenv.exe",
             null,
             static (startInfo, _, _) => Task.FromResult(new ProcessRunner.ProcessRunResult(
@@ -63,8 +63,8 @@ public sealed class VisualStudioLauncherTests
                 string.Empty,
                 "launch failed")));
 
-        Assert.False(result.Success);
-        Assert.Equal(0, result.ProcessId);
-        Assert.Equal("launch failed", result.Stderr);
+        Assert.False(launchResult.Success);
+        Assert.Equal(0, launchResult.ProcessId);
+        Assert.Equal("launch failed", launchResult.Stderr);
     }
 }

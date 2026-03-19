@@ -73,13 +73,13 @@ public sealed class McpToolHelpTests
         Assert.NotEmpty(items);
         Assert.True(items.Length >= MinimumToolCount, "Expected a broad MCP tool catalog.");
 
-        foreach (var item in items)
+        foreach (var toolEntry in items)
         {
-            var name = item.GetProperty("name").GetString();
-            var description = item.GetProperty("description").GetString();
-            var inputSchema = item.GetProperty("inputSchema");
-            var example = item.GetProperty("example").GetString();
-            var title = item.GetProperty(TitlePropertyName).GetString();
+            var name = toolEntry.GetProperty("name").GetString();
+            var description = toolEntry.GetProperty("description").GetString();
+            var inputSchema = toolEntry.GetProperty("inputSchema");
+            var example = toolEntry.GetProperty("example").GetString();
+            var title = toolEntry.GetProperty(TitlePropertyName).GetString();
 
             Assert.False(string.IsNullOrWhiteSpace(name));
             Assert.False(string.IsNullOrWhiteSpace(description));
@@ -350,9 +350,9 @@ public sealed class McpToolHelpTests
     [Fact]
     public async Task McpServer_PersistentSession_ServesMultipleSequentialRequests()
     {
-        using var process = StartMcpProcess();
+        using var mcpSessionProcess = StartMcpProcess();
 
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             id = 1,
@@ -365,28 +365,28 @@ public sealed class McpToolHelpTests
             },
         });
 
-        using var initialize = await ReadResponseAsync(process);
+        using var initialize = await ReadResponseAsync(mcpSessionProcess);
         Assert.Equal(JsonRpcVersion, initialize.RootElement.GetProperty("jsonrpc").GetString());
         Assert.Equal(1, initialize.RootElement.GetProperty("id").GetInt32());
 
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             method = "notifications/initialized",
         });
 
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             id = 2,
             method = "tools/list",
         });
 
-        using var toolsList = await ReadResponseAsync(process);
+        using var toolsList = await ReadResponseAsync(mcpSessionProcess);
         var tools = toolsList.RootElement.GetProperty("result").GetProperty("tools");
         Assert.True(tools.GetArrayLength() >= MinimumToolCount);
 
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             id = 3,
@@ -398,7 +398,7 @@ public sealed class McpToolHelpTests
             },
         });
 
-        using var toolHelp = await ReadResponseAsync(process);
+        using var toolHelp = await ReadResponseAsync(mcpSessionProcess);
         var itemCount = toolHelp.RootElement
             .GetProperty("result")
             .GetProperty(StructuredContentPropertyName)
@@ -406,20 +406,20 @@ public sealed class McpToolHelpTests
             .GetInt32();
         Assert.True(itemCount >= MinimumToolCount);
 
-        process.StandardInput.Close();
-        var stderr = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        mcpSessionProcess.StandardInput.Close();
+        var stderr = await mcpSessionProcess.StandardError.ReadToEndAsync();
+        await mcpSessionProcess.WaitForExitAsync();
 
-        Assert.Equal(0, process.ExitCode);
+        Assert.Equal(0, mcpSessionProcess.ExitCode);
         Assert.DoesNotContain("Unhandled exception", stderr, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task McpServer_PersistentSession_ServesMultiplePipelinedRequests()
     {
-        using var process = StartMcpProcess();
+        using var mcpSessionProcess = StartMcpProcess();
 
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             id = 1,
@@ -432,17 +432,17 @@ public sealed class McpToolHelpTests
             },
         });
 
-        using var initialize = await ReadResponseAsync(process);
+        using var initialize = await ReadResponseAsync(mcpSessionProcess);
         Assert.Equal(1, initialize.RootElement.GetProperty("id").GetInt32());
 
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             method = "notifications/initialized",
         });
 
-        await WriteRequestAsync(process, new { jsonrpc = JsonRpcVersion, id = 2, method = "tools/list" });
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new { jsonrpc = JsonRpcVersion, id = 2, method = "tools/list" });
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             id = 3,
@@ -453,7 +453,7 @@ public sealed class McpToolHelpTests
                 arguments = new { },
             },
         });
-        await WriteRequestAsync(process, new
+        await WriteRequestAsync(mcpSessionProcess, new
         {
             jsonrpc = JsonRpcVersion,
             id = 4,
@@ -465,9 +465,9 @@ public sealed class McpToolHelpTests
             },
         });
 
-        using var first = await ReadResponseAsync(process);
-        using var second = await ReadResponseAsync(process);
-        using var third = await ReadResponseAsync(process);
+        using var first = await ReadResponseAsync(mcpSessionProcess);
+        using var second = await ReadResponseAsync(mcpSessionProcess);
+        using var third = await ReadResponseAsync(mcpSessionProcess);
 
         var responses = new[] { first, second, third }
             .ToDictionary(document => document.RootElement.GetProperty("id").GetInt32());
@@ -520,8 +520,8 @@ public sealed class McpToolHelpTests
 
     private static async Task<JsonDocument> CallToolAsync(string toolName, object arguments)
     {
-        using var process = StartMcpProcess();
-        await WriteRequestAsync(process, new
+        using var mcpProcess = StartMcpProcess();
+        await WriteRequestAsync(mcpProcess, new
         {
             jsonrpc = JsonRpcVersion,
             id = 1,
@@ -533,16 +533,16 @@ public sealed class McpToolHelpTests
             },
         });
 
-        using var response = await ReadResponseAsync(process);
+        using var response = await ReadResponseAsync(mcpProcess);
         var json = response.RootElement.GetRawText();
 
-        process.StandardInput.Close();
-        var errorText = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
+        mcpProcess.StandardInput.Close();
+        var errorText = await mcpProcess.StandardError.ReadToEndAsync();
+        await mcpProcess.WaitForExitAsync();
 
-        if (process.ExitCode != 0)
+        if (mcpProcess.ExitCode != 0)
         {
-            throw new InvalidOperationException($"MCP process exited with code {process.ExitCode}: {errorText}");
+            throw new InvalidOperationException($"MCP process exited with code {mcpProcess.ExitCode}: {errorText}");
         }
 
         return JsonDocument.Parse(json);
@@ -556,7 +556,7 @@ public sealed class McpToolHelpTests
             throw new FileNotFoundException($"CLI binary not found. Build first: {cliDll}");
         }
 
-        var process = new Process
+        var mcpProcess = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -570,13 +570,13 @@ public sealed class McpToolHelpTests
             },
         };
 
-        if (!process.Start())
+        if (!mcpProcess.Start())
         {
-            process.Dispose();
+            mcpProcess.Dispose();
             throw new InvalidOperationException("Failed to start MCP server process.");
         }
 
-        return process;
+        return mcpProcess;
     }
 
     private static Task WriteRequestAsync(Process process, object request)

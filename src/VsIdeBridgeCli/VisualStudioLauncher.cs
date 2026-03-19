@@ -74,10 +74,10 @@ internal static class VisualStudioLauncher
         ProcessRunnerDelegate processRunner)
     {
         var startInfo = CreateStartInfo(devenvPath, solutionPath);
-        var result = await processRunner(startInfo, LaunchTimeoutMilliseconds, LaunchPollIntervalMilliseconds).ConfigureAwait(false);
+        var processRunnerResult = await processRunner(startInfo, LaunchTimeoutMilliseconds, LaunchPollIntervalMilliseconds).ConfigureAwait(false);
         var processId = 0;
-        var success = result.Success && TryParseProcessId(result.Stdout, out processId);
-        return new LaunchResult(success, processId, "powershell-start-process", result.Stderr);
+        var success = processRunnerResult.Success && TryParseProcessId(processRunnerResult.Stdout, out processId);
+        return new LaunchResult(success, processId, "powershell-start-process", processRunnerResult.Stderr);
     }
 
     private static string QuotePowerShellLiteral(string value)

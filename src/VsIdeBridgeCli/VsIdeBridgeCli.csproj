@@ -13,5 +13,13 @@
     <Compile Include="..\Shared\AddFilePatchSemantics.cs" Link="Shared\AddFilePatchSemantics.cs" />
     <Compile Include="..\Shared\BridgeCommandCatalog.cs" Link="Shared\BridgeCommandCatalog.cs" />
     <Compile Include="..\Shared\NamedPipeAccessDefaults.cs" Link="Shared\NamedPipeAccessDefaults.cs" />
+    <Compile Include="..\Shared\ToolCategoryDefinition.cs" Link="Shared\ToolCategoryDefinition.cs" />
+    <Compile Include="..\Shared\ToolDefinition.cs" Link="Shared\ToolDefinition.cs" />
+    <Compile Include="..\Shared\ToolDefinitionCatalog.cs" Link="Shared\ToolDefinitionCatalog.cs" />
+    <Compile Include="..\Shared\ToolRegistry.cs" Link="Shared\ToolRegistry.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
   </ItemGroup>
 </Project>

@@ -91,7 +91,7 @@ internal sealed class BuildService(ReadinessService readinessService)
             lastBuildInfoReason = ex.Message;
         }
 
-        var data = new JObject
+        var buildStatus = new JObject
         {
             ["solutionPath"] = dte.Solution.FullName,
             ["activeConfiguration"] = solutionBuild.ActiveConfiguration?.Name ?? string.Empty,
@@ -103,10 +103,10 @@ internal sealed class BuildService(ReadinessService readinessService)
 
         if (!string.IsNullOrWhiteSpace(lastBuildInfoReason))
         {
-            data["lastBuildInfoReason"] = lastBuildInfoReason;
+            buildStatus["lastBuildInfoReason"] = lastBuildInfoReason;
         }
 
-        return data;
+        return buildStatus;
     }
 
     public async Task<JObject> ListConfigurationsAsync(DTE2 dte)

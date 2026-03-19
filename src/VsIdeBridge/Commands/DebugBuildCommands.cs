@@ -111,7 +111,7 @@ internal static class DebugBuildCommands
             return;
         }
 
-        var data = new JObject
+        var commandData = new JObject
         {
             ["requireCleanDiagnostics"] = args.GetBoolean(RequireCleanDiagnosticsArgument, true),
             ["diagnostics"] = diagnostics,
@@ -127,14 +127,14 @@ internal static class DebugBuildCommands
         {
             foreach (var property in extraData.Properties())
             {
-                data[property.Name] = property.Value;
+                commandData[property.Name] = property.Value;
             }
         }
 
         throw new CommandErrorException(
             DirtyDiagnosticsCode,
             $"{summaryPrefix}: {FormatBlockingDiagnosticsSummary(errorCount, warningCount, messageCount)}. Fix them first or set --{RequireCleanDiagnosticsArgument} false to override.",
-            data);
+            commandData);
     }
 
     private static ErrorListQuery CreateErrorListQuery(CommandArguments args, string? defaultSeverity = null)
@@ -158,11 +158,11 @@ internal static class DebugBuildCommands
         if (max is > 0)
             filtered = filtered.Take(max.Value);
 
-        var result = filtered.ToArray();
+        var commandResult = filtered.ToArray();
         return new JObject
         {
-            ["count"] = result.Length,
-            ["rows"] = new JArray(result.Select(r => r.DeepClone())),
+            ["count"] = commandResult.Length,
+            ["rows"] = new JArray(commandResult.Select(r => r.DeepClone())),
         };
     }
 
@@ -172,8 +172,8 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.GetStateAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger state captured.", data);
+            var commandData = await context.Runtime.DebuggerService.GetStateAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult("Debugger state captured.", commandData);
         }
     }
 
@@ -183,11 +183,11 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StartAsync(
+            var commandData = await context.Runtime.DebuggerService.StartAsync(
                 context.Dte,
                 args.GetBoolean("wait-for-break", false),
                 args.GetInt32(TimeoutMillisecondsArgument, DefaultDebuggerTimeoutMilliseconds)).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger started.", data);
+            return new CommandExecutionResult("Debugger started.", commandData);
         }
     }
 
@@ -197,8 +197,8 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StopAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger stopped.", data);
+            var commandData = await context.Runtime.DebuggerService.StopAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult("Debugger stopped.", commandData);
         }
     }
 
@@ -208,8 +208,8 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.BreakAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger break requested.", data);
+            var commandData = await context.Runtime.DebuggerService.BreakAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult("Debugger break requested.", commandData);
         }
     }
 
@@ -219,11 +219,11 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.ContinueAsync(
+            var commandData = await context.Runtime.DebuggerService.ContinueAsync(
                 context.Dte,
                 args.GetBoolean("wait-for-break", false),
                 args.GetInt32(TimeoutMillisecondsArgument, DefaultDebuggerTimeoutMilliseconds)).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger continued.", data);
+            return new CommandExecutionResult("Debugger continued.", commandData);
         }
     }
 
@@ -233,10 +233,10 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StepOverAsync(
+            var commandData = await context.Runtime.DebuggerService.StepOverAsync(
                 context.Dte,
                 args.GetInt32(TimeoutMillisecondsArgument, DefaultDebuggerTimeoutMilliseconds)).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger step over completed.", data);
+            return new CommandExecutionResult("Debugger step over completed.", commandData);
         }
     }
 
@@ -246,10 +246,10 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StepIntoAsync(
+            var commandData = await context.Runtime.DebuggerService.StepIntoAsync(
                 context.Dte,
                 args.GetInt32(TimeoutMillisecondsArgument, DefaultDebuggerTimeoutMilliseconds)).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger step into completed.", data);
+            return new CommandExecutionResult("Debugger step into completed.", commandData);
         }
     }
 
@@ -259,10 +259,10 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.StepOutAsync(
+            var commandData = await context.Runtime.DebuggerService.StepOutAsync(
                 context.Dte,
                 args.GetInt32(TimeoutMillisecondsArgument, DefaultDebuggerTimeoutMilliseconds)).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger step out completed.", data);
+            return new CommandExecutionResult("Debugger step out completed.", commandData);
         }
     }
 
@@ -272,8 +272,8 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.GetThreadsAsync(context.Dte).ConfigureAwait(true);
-            return CreateCapturedResult("debugger thread(s)", data);
+            var commandData = await context.Runtime.DebuggerService.GetThreadsAsync(context.Dte).ConfigureAwait(true);
+            return CreateCapturedResult("debugger thread(s)", commandData);
         }
     }
 
@@ -283,11 +283,11 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.GetStackAsync(
+            var commandData = await context.Runtime.DebuggerService.GetStackAsync(
                 context.Dte,
                 args.GetNullableInt32("thread-id"),
                 args.GetInt32("max-frames", 100)).ConfigureAwait(true);
-            return CreateCapturedResult("stack frame(s)", data);
+            return CreateCapturedResult("stack frame(s)", commandData);
         }
     }
 
@@ -297,10 +297,10 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.GetLocalsAsync(
+            var commandData = await context.Runtime.DebuggerService.GetLocalsAsync(
                 context.Dte,
                 args.GetInt32("max", 200)).ConfigureAwait(true);
-            return CreateCapturedResult("local variable(s)", data);
+            return CreateCapturedResult("local variable(s)", commandData);
         }
     }
 
@@ -310,8 +310,8 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.GetModulesAsync(context.Dte).ConfigureAwait(true);
-            return CreateCapturedResult("process(es) in the module snapshot", data);
+            var commandData = await context.Runtime.DebuggerService.GetModulesAsync(context.Dte).ConfigureAwait(true);
+            return CreateCapturedResult("process(es) in the module snapshot", commandData);
         }
     }
 
@@ -321,11 +321,11 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.EvaluateWatchAsync(
+            var commandData = await context.Runtime.DebuggerService.EvaluateWatchAsync(
                 context.Dte,
                 args.GetRequiredString("expression"),
                 args.GetInt32("timeout-ms", 1000)).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger watch expression evaluated.", data);
+            return new CommandExecutionResult("Debugger watch expression evaluated.", commandData);
         }
     }
 
@@ -335,8 +335,8 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.DebuggerService.GetExceptionsAsync(context.Dte).ConfigureAwait(true);
-            return new CommandExecutionResult("Debugger exception settings snapshot captured.", data);
+            var exceptionSettings = await context.Runtime.DebuggerService.GetExceptionsAsync(context.Dte).ConfigureAwait(true);
+            return new CommandExecutionResult("Debugger exception settings snapshot captured.", exceptionSettings);
         }
     }
 
@@ -363,7 +363,7 @@ internal static class DebugBuildCommands
             var warnings = FilterRowsBySeverity(allRows, "Warning", max);
             var messages = FilterRowsBySeverity(allRows, "Message", max);
 
-            var data = new JObject
+            var diagnosticsSnapshot = new JObject
             {
                 ["state"] = await context.Runtime.IdeStateService.GetStateAsync(context.Dte).ConfigureAwait(true),
                 ["debug"] = await context.Runtime.DebuggerService.GetStateAsync(context.Dte).ConfigureAwait(true),
@@ -373,7 +373,7 @@ internal static class DebugBuildCommands
                 ["messages"] = messages,
             };
 
-            return new CommandExecutionResult("Diagnostics snapshot captured.", data);
+            return new CommandExecutionResult("Diagnostics snapshot captured.", diagnosticsSnapshot);
         }
     }
 
@@ -383,8 +383,8 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BuildService.ListConfigurationsAsync(context.Dte).ConfigureAwait(true);
-            return CreateCapturedResult("build configuration(s)", data);
+            var buildConfigurations = await context.Runtime.BuildService.ListConfigurationsAsync(context.Dte).ConfigureAwait(true);
+            return CreateCapturedResult("build configuration(s)", buildConfigurations);
         }
     }
 
@@ -394,11 +394,11 @@ internal static class DebugBuildCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            var data = await context.Runtime.BuildService.SetConfigurationAsync(
+            var buildConfigResult = await context.Runtime.BuildService.SetConfigurationAsync(
                 context.Dte,
                 args.GetRequiredString("configuration"),
                 args.GetString("platform")).ConfigureAwait(true);
-            return new CommandExecutionResult("Build configuration activated.", data);
+            return new CommandExecutionResult("Build configuration activated.", buildConfigResult);
         }
     }
 
@@ -411,7 +411,7 @@ internal static class DebugBuildCommands
             var timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
             await EnsureCleanDiagnosticsAsync(context, args, timeout).ConfigureAwait(true);
 
-            var data = await context.Runtime.BuildService.BuildSolutionAsync(
+            var buildResult = await context.Runtime.BuildService.BuildSolutionAsync(
                 context,
                 timeout,
                 args.GetString("configuration"),
@@ -420,17 +420,16 @@ internal static class DebugBuildCommands
             if (args.GetBoolean(RequireCleanDiagnosticsArgument, true))
             {
                 var diagnostics = await GetDiagnosticsSnapshotAsync(context, args, timeout, waitForIntellisense: false).ConfigureAwait(true);
-                ThrowIfDiagnosticsPresent(
-                    diagnostics,
-                    "Build completed but diagnostics remain",
-                    args,
-                    new JObject
-                    {
-                        ["build"] = data,
-                    });
+                ThrowIfBuildDiagnosticsPresent(diagnostics, args, buildResult);
             }
 
-            return new CommandExecutionResult($"Build completed with LastBuildInfo={data["lastBuildInfo"]}.", data);
+            return new CommandExecutionResult($"Build completed with LastBuildInfo={buildResult["lastBuildInfo"]}.", buildResult);
+        }
+
+        private static void ThrowIfBuildDiagnosticsPresent(JObject diagnostics, CommandArguments args, JObject buildResult)
+        {
+            var buildContext = new JObject { ["build"] = buildResult };
+            ThrowIfDiagnosticsPresent(diagnostics, "Build completed but diagnostics remain", args, buildContext);
         }
     }
 
@@ -441,14 +440,14 @@ internal static class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             var quick = args.GetBoolean("quick", false);
-            var data = await context.Runtime.ErrorListService.GetErrorListAsync(
+            var errorListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
                 CreateErrorListQuery(args)).ConfigureAwait(true);
 
-            return new CommandExecutionResult($"Captured {data["count"]} Error List row(s).", data);
+            return new CommandExecutionResult($"Captured {errorListResult["count"]} Error List row(s).", errorListResult);
         }
     }
 
@@ -459,14 +458,14 @@ internal static class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             var quick = args.GetBoolean("quick", false);
-            var data = await context.Runtime.ErrorListService.GetErrorListAsync(
+            var warningListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
                 CreateErrorListQuery(args, "warning")).ConfigureAwait(true);
 
-            return new CommandExecutionResult($"Captured {data["count"]} warning row(s).", data);
+            return new CommandExecutionResult($"Captured {warningListResult["count"]} warning row(s).", warningListResult);
         }
     }
 
@@ -489,7 +488,7 @@ internal static class DebugBuildCommands
                 query: CreateErrorListQuery(args),
                 includeBuildOutputFallback: true).ConfigureAwait(true);
 
-            var data = new JObject
+            var buildAndErrorsResult = new JObject
             {
                 ["build"] = build,
                 ["errors"] = errors,
@@ -497,10 +496,10 @@ internal static class DebugBuildCommands
 
             if (args.GetBoolean(RequireCleanDiagnosticsArgument, true))
             {
-                ThrowIfDiagnosticsPresent(errors, "Build completed but diagnostics remain", args, data);
+                ThrowIfDiagnosticsPresent(errors, "Build completed but diagnostics remain", args, buildAndErrorsResult);
             }
 
-            return new CommandExecutionResult($"Build finished and captured {errors["count"]} Error List row(s).", data);
+            return new CommandExecutionResult($"Build finished and captured {errors["count"]} Error List row(s).", buildAndErrorsResult);
         }
     }
 }

@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using VsIdeBridgeCli.Git;
 using VsIdeBridge.Shared;
 
 namespace VsIdeBridgeCli;
@@ -103,6 +104,7 @@ internal static partial class CliApp
         private static readonly byte[] HeaderTerminator = "\r\n\r\n"u8.ToArray();
         private const string AddFileToProjectToolName = "add_file_to_project";
         private const string AddProjectToolName = "add_project";
+        private const string CreateProjectToolName = "create_project";
         private const string CondaInstallToolName = "conda_install";
         private const string CondaRemoveToolName = "conda_remove";
         private const string CountReferencesToolName = "count_references";
@@ -638,16 +640,16 @@ internal static partial class CliApp
             try
             {
                 var req = ctx.Request;
-                var res = ctx.Response;
+                var httpResponse = ctx.Response;
 
-                res.Headers["Access-Control-Allow-Origin"] = "*";
-                res.Headers["Access-Control-Allow-Methods"] = "POST, DELETE, OPTIONS";
-                res.Headers["Access-Control-Allow-Headers"] = "Content-Type, Mcp-Session-Id";
+                httpResponse.Headers["Access-Control-Allow-Origin"] = "*";
+                httpResponse.Headers["Access-Control-Allow-Methods"] = "POST, DELETE, OPTIONS";
+                httpResponse.Headers["Access-Control-Allow-Headers"] = "Content-Type, Mcp-Session-Id";
 
                 if (req.HttpMethod == "OPTIONS")
                 {
-                    res.StatusCode = 204;
-                    res.Close();
+                    httpResponse.StatusCode = 204;
+                    httpResponse.Close();
                     return;
                 }
 
@@ -661,15 +663,15 @@ internal static partial class CliApp
                         sessions.TryRemove(sessionId, out _);
                     }
 
-                    res.StatusCode = 204;
-                    res.Close();
+                    httpResponse.StatusCode = 204;
+                    httpResponse.Close();
                     return;
                 }
 
                 if (req.HttpMethod != "POST" || path != "/mcp")
                 {
-                    res.StatusCode = 404;
-                    res.Close();
+                    httpResponse.StatusCode = 404;
+                    httpResponse.Close();
                     return;
                 }
 
@@ -723,18 +725,18 @@ internal static partial class CliApp
                     }
                 }
 
-                res.StatusCode = 200;
-                res.ContentType = "application/json";
-                res.Headers["Mcp-Session-Id"] = sid;
+                httpResponse.StatusCode = 200;
+                httpResponse.ContentType = "application/json";
+                httpResponse.Headers["Mcp-Session-Id"] = sid;
 
                 if (response is not null)
                 {
                     var responseBytes = Encoding.UTF8.GetBytes(response.ToJsonString());
-                    res.ContentLength64 = responseBytes.Length;
-                    await res.OutputStream.WriteAsync(responseBytes).ConfigureAwait(false);
+                    httpResponse.ContentLength64 = responseBytes.Length;
+                    await httpResponse.OutputStream.WriteAsync(responseBytes).ConfigureAwait(false);
                 }
 
-                res.Close();
+                httpResponse.Close();
             }
             catch (Exception ex)
             {
@@ -923,723 +925,7 @@ internal static partial class CliApp
             return clientProtocolVersion;
         }
 
-        private static JsonArray ListTools() =>
-        [
-            Tool(BridgeStateToolName, "Capture current Visual Studio bridge state: VS version, solution path, build mode, active document, and debug mode.", EmptySchema()),
-            Tool(UiSettingsToolName, "Read current IDE Bridge UI/security settings. This is read-only and does not change them.", EmptySchema()),
-            Tool(WaitForReadyArgumentName, "Block until Visual Studio and IntelliSense are fully loaded. Call this after open_solution or vs_open before running any semantic tools (errors, symbol_info, find_references).", EmptySchema()),
-            Tool(
-                ToolHelpToolName,
-                "Return MCP tool help. Pass name for one tool, category for a group (core/search/diagnostics/documents/debug/git/python/project/system), or omit both for the category index.",
-                ObjectSchema(
-                    OptionalStringProperty("name", "Optional tool name for focused help."),
-                    OptionalStringProperty("category", "Optional category: core, search, diagnostics, documents, debug, git, python, project, or system."))),
-            Tool(
-                HelpToolName,
-                $"Alias for {ToolHelpToolName}. Return MCP tool help by category or individual tool.",
-                ObjectSchema(
-                    OptionalStringProperty("name", "Optional tool name for focused help."),
-                    OptionalStringProperty("category", "Optional category: core, search, diagnostics, documents, debug, git, python, project, or system."))),
-            Tool("bridge_health", "Get binding health, discovery source, and last round-trip metrics.", EmptySchema()),
-            Tool("list_instances", "List live VS IDE Bridge instances visible to this MCP server.", EmptySchema()),
-            Tool(
-                "bind_instance",
-                "Bind this MCP session to one specific Visual Studio bridge instance by exact instance id, process id, or pipe name. Advanced recovery tool: use this only when normal solution-based selection is ambiguous or incorrect; do not use it after open_solution for routine solution switching.",
-                ObjectSchema(
-                    OptionalStringProperty("instance_id", "Optional exact bridge instance id."),
-                    OptionalIntegerProperty("pid", "Optional Visual Studio process id."),
-                    OptionalStringProperty("pipe_name", "Optional exact bridge pipe name."),
-                    OptionalStringProperty("solution_hint", "Optional solution path or name substring."))),
-            Tool(
-                "bind_solution",
-                "Bind this MCP session to an already-open Visual Studio bridge instance whose solution matches a name or path hint. Use this when the solution is already open in Visual Studio; do not use it to open a solution file from disk.",
-                ObjectSchema(RequiredStringProperty(SolutionArgumentName, "Solution name or path substring to match."))),
-            Tool(
-                "errors",
-                "Read current Error List diagnostics without triggering a build. Use build_errors to trigger a fresh build and capture results in one call.",
-                ObjectSchema(
-                    OptionalStringProperty(SeverityArgumentName, "Optional severity filter."),
-                    OptionalBooleanProperty(WaitForIntellisenseArgumentName, "Wait for IntelliSense readiness first (default true)."),
-                    OptionalBooleanProperty("quick", "Read current snapshot immediately without stability polling (default false)."),
-                    OptionalIntegerProperty("max", "Optional max rows."),
-                    OptionalStringProperty("code", "Optional diagnostic code prefix filter."),
-                    OptionalStringProperty("project", OptionalProjectFilterDescription),
-                    OptionalStringProperty("path", "Optional path filter."),
-                    OptionalStringProperty("text", "Optional message text filter."),
-                    OptionalStringProperty("group_by", "Optional grouping mode."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, "Optional wait timeout in milliseconds.")),
-                title: "Error List Diagnostics",
-                annotations: ReadOnlyToolAnnotations()),
-            Tool(
-                WarningsToolName,
-                "Read current Warning List rows. Same as errors but pre-filtered to warnings. Use errors with severity filter for mixed results.",
-                ObjectSchema(
-                    OptionalStringProperty(SeverityArgumentName, "Optional severity filter."),
-                    OptionalBooleanProperty(WaitForIntellisenseArgumentName, "Wait for IntelliSense readiness first (default true)."),
-                    OptionalBooleanProperty("quick", "Read current snapshot immediately without stability polling (default false)."),
-                    OptionalIntegerProperty("max", "Optional max rows."),
-                    OptionalStringProperty("code", "Optional diagnostic code prefix filter."),
-                    OptionalStringProperty("project", OptionalProjectFilterDescription),
-                    OptionalStringProperty("path", "Optional path filter."),
-                    OptionalStringProperty("text", "Optional message text filter."),
-                    OptionalStringProperty("group_by", "Optional grouping mode."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, "Optional wait timeout in milliseconds.")),
-                title: "Warning List Diagnostics",
-                annotations: ReadOnlyToolAnnotations()),
-            Tool(ListTabsToolName, "List visible editor tabs. The tab bar scrolls when more than ~7 tabs are open, which is disruptive for the user. If tab count exceeds 7, close tabs you are done with using close_document or close_others. Use list_documents for all loaded documents including background ones.", EmptySchema()),
-            Tool(
-                OpenFileToolName,
-                "Open an absolute path, solution-relative path, or solution item name and optional line/column. Each call opens a new editor tab — close it with close_document when you are done reading or editing to keep the tab bar tidy.",
-                ObjectSchema(
-                    RequiredStringProperty("file", "Absolute path, solution-relative path, or solution item name."),
-                    OptionalIntegerProperty("line", "Optional 1-based line number."),
-                    OptionalIntegerProperty("column", "Optional 1-based column number."),
-                    OptionalBooleanProperty("allow_disk_fallback", "Allow disk fallback under solution root when solution items do not match (default true)."))),
-            Tool(
-                FindFilesToolName,
-                "Search solution explorer files by name or path fragment.",
-                ObjectSchema(
-                    RequiredStringProperty("query", "File name or path fragment."),
-                    OptionalStringProperty("path", "Optional path fragment filter."),
-                    OptionalStringArrayProperty("extensions", "Optional extension filters like ['.cmake','.txt']."),
-                    OptionalIntegerProperty("max_results", $"Optional max result count (default {DefaultLargeMaxCount})."),
-                    OptionalBooleanProperty("include_non_project", "Include disk files under solution root that are not in projects (default true)."))),
-            Tool(
-                FindTextBatchToolName,
-                "Find text for multiple queries in one bridge round-trip. Prefer this over repeated find_text calls whenever you have more than one query to run.",
-                ObjectSchema(
-                    RequiredStringArrayProperty("queries", "Queries to search for in order."),
-                    OptionalStringProperty("scope", "Optional scope: solution, project, document, or open."),
-                    OptionalStringProperty("project", OptionalProjectFilterDescription),
-                    OptionalStringProperty("path", "Optional path or directory filter."),
-                    OptionalIntegerProperty("results_window", "Optional Find Results window number."),
-                    OptionalIntegerProperty("max_queries_per_chunk", $"Optional max query count per internal chunk (default {DefaultMaxQueriesPerChunk})."),
-                    OptionalBooleanProperty(MatchCaseArgumentName, "Case-sensitive match (default false)."),
-                    OptionalBooleanProperty("whole_word", "Match whole word only (default false)."),
-                    OptionalBooleanProperty("regex", "Treat queries as regular expressions (default false).")),
-                title: "Batched Text Search",
-                annotations: ReadOnlyToolAnnotations()),
-            Tool(
-                SearchSymbolsToolName,
-                "Search symbol definitions by name across solution scope.",
-                ObjectSchema(
-                    RequiredStringProperty("query", "Symbol search text."),
-                    OptionalStringProperty("kind", "Optional symbol kind filter."),
-                    OptionalStringProperty("scope", "Optional scope: solution, project, document, or open."),
-                    OptionalStringProperty("project", OptionalProjectFilterDescription),
-                    OptionalStringProperty("path", "Optional path or directory filter."),
-                    OptionalIntegerProperty("max", "Optional max result count."),
-                    OptionalBooleanProperty(MatchCaseArgumentName, "Case-sensitive match (default false)."))),
-            Tool(
-                CountReferencesToolName,
-                "Count how many references exist for the symbol at file/line/column. Faster than find_references when you only need the count, not the locations.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    RequiredIntegerProperty("line", OneBasedLineNumberDescription),
-                    RequiredIntegerProperty("column", "1-based column number."),
-                    OptionalBooleanProperty(ActivateWindowArgumentName, "Activate references window while counting (default true)."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, "Optional window wait timeout in milliseconds."))),
-            Tool(
-                SymbolInfoToolName,
-                "Get the type signature, documentation, and inferred type for the symbol at file/line/column. Use peek_definition to retrieve the full source of the definition.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    RequiredIntegerProperty("line", OneBasedLineNumberDescription),
-                    RequiredIntegerProperty("column", "1-based column number."))),
-            Tool(
-                ApplyDiffToolName,
-                "Apply a patch to a file through the live Visual Studio editor. " +
-                "PREFERRED FORMAT: editor patch (*** Begin Patch / *** Update File / *** End Patch) — uses content matching, immune to line-number drift. " +
-                "ALSO ACCEPTED: unified diff (--- / +++ / @@ headers) — positions by line number with ±10 line fuzzy search. " +
-                "RULES: (1) Always call read_file first to see exact content and indentation. " +
-                "(2) Each block must include at least one context line (' ' prefix) to anchor the change — pure-addition blocks are appended at end of file. " +
-                "(3) Combine adjacent changes (within a few lines) into one block to avoid overlap errors. " +
-                "(4) For large new code (>30 lines, no deletions), use write_file instead. " + CodeQualityRules,
-                ObjectSchema(
-                    RequiredStringProperty("patch", "Patch text. Preferred: editor patch format (*** Begin Patch\\n*** Update File: path\\n@@\\n context\\n-old\\n+new\\n*** End Patch). Also accepted: unified diff with @@ -line,count +line,count @@ headers."),
-                    OptionalBooleanProperty("post_check", "Run wait_for_ready and errors after applying diff (default true). Set to false only if you plan to apply several diffs in a row and will check errors manually afterward.")),
-                title: "Apply Editor Patch",
-                annotations: DestructiveToolAnnotations()),
-            Tool(
-                WriteFileToolName,
-                "Write or overwrite a file with the given content through the live editor. Use this when apply_diff is impractical — for example when creating a new file or replacing a large section. The file opens in Visual Studio and is saved automatically. " + CodeQualityRules,
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    RequiredStringProperty("content", "Full UTF-8 text content to write to the file."),
-                    OptionalBooleanProperty("post_check", "Run wait_for_ready and errors after writing (default true). Set to false only if you plan to write several files in a row and will check errors manually afterward.")),
-                title: "Write File",
-                annotations: DestructiveToolAnnotations()),
-            Tool("list_documents", "List all documents currently loaded in the IDE document table (may include background-loaded files). Use list_tabs to list only visible editor tabs.", EmptySchema()),
-            Tool(
-                "activate_document",
-                "Activate one open document by path or name.",
-                ObjectSchema(RequiredStringProperty("query", "Document path or name fragment."))),
-            Tool(
-                "close_document",
-                "Close one matching document, or all open documents. Use { all: true, save: true } to save and close all tabs before a build or install. Close files you are done with to keep the tab bar under ~7 tabs — the tab bar scrolls past that and is disruptive for the user. Prefer this over close_file when you need to close multiple documents.",
-                ObjectSchema(
-                    OptionalStringProperty("query", "Document path or name fragment."),
-                    OptionalBooleanProperty("all", "Close all open documents (default false)."),
-                    OptionalBooleanProperty("save", "Save before closing (default false)."))),
-            Tool(
-                SaveDocumentToolName,
-                "Save one document or all open documents.",
-                ObjectSchema(
-                    OptionalStringProperty("file", "File path to save, or omit for active document."),
-                    OptionalBooleanProperty("all", "Save all open documents (default false)."))),
-            Tool(
-                "reload_document",
-                "Reload a document from disk inside Visual Studio, forcing IntelliSense to re-analyse it. " +
-                "Use this after an external tool or shell command modifies a file outside the editor, or to clear stale diagnostics.",
-                ObjectSchema(
-                    RequiredStringProperty("file", "Absolute or solution-relative file path to reload."))),
-            Tool(
-                "close_file",
-                "Close one open file tab by path or name. Prefer close_document which supports closing all documents at once.",
-                ObjectSchema(
-                    OptionalStringProperty("file", "File path."),
-                    OptionalStringProperty("query", "Name fragment."),
-                    OptionalBooleanProperty("save", "Save before closing (default false)."))),
-            Tool(
-                "close_others",
-                "Close all editor tabs except the currently active one — use this to quickly tidy the tab bar when too many tabs are open. Use close_document { all: true } to close all tabs including the active one.",
-                ObjectSchema(OptionalBooleanProperty("save", "Save before closing (default false)."))),
-            Tool(
-                "list_windows",
-                "List open Visual Studio tool windows and document windows (e.g. Solution Explorer, Error List, Output). Not OS windows.",
-                ObjectSchema(OptionalStringProperty("query", "Optional caption filter."))),
-            Tool(
-                ActivateWindowArgumentName,
-                "Bring a Visual Studio tool window or document window to the foreground by caption fragment (e.g. 'Solution Explorer', 'Output').",
-                ObjectSchema(RequiredStringProperty("window", "Window caption fragment."))),
-            Tool(
-                "execute_command",
-                "Execute a Visual Studio command, optionally after positioning the caret in a file or document.",
-                ObjectSchema(
-                    RequiredStringProperty("command", "Visual Studio command name, for example 'Edit.FormatDocument'."),
-                    OptionalStringProperty("args", "Optional command arguments string passed to Visual Studio."),
-                    OptionalStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    OptionalStringProperty("document", "Optional open-document query to position before running the command."),
-                    OptionalIntegerProperty(LineArgumentName, "Optional 1-based line number."),
-                    OptionalIntegerProperty(ColumnArgumentName, "Optional 1-based column number."),
-                    OptionalBooleanProperty("select_word", "If true, select the word at the caret before executing the command."))),
-            Tool(
-                "format_document",
-                "Format the current document, or a specific file after opening/positioning it in Visual Studio.",
-                ObjectSchema(
-                    OptionalStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    OptionalIntegerProperty(LineArgumentName, "Optional 1-based line number."),
-                    OptionalIntegerProperty(ColumnArgumentName, "Optional 1-based column number."))),
-            Tool(
-                "goto_definition",
-                "Navigate the editor cursor to the definition of the symbol at file/line/column. Use peek_definition or symbol_info to read the definition source without navigating.",
-                FileLineColumnSchema()),
-            Tool(
-                "goto_implementation",
-                "Navigate the editor cursor to one implementation of the interface/abstract member at file/line/column. Use find_references for all implementations.",
-                FileLineColumnSchema()),
-            Tool(
-                "call_hierarchy",
-                "Open the Call Hierarchy view for the symbol at file/line/column, showing callers and callees.",
-                FileLineColumnSchema()),
-            Tool(
-                "build_errors",
-                "Trigger a build and return only the errors list after completion. Use build when you need the full build result with configuration control; use build_errors when you only care about the resulting error list. Refuses to build if any diagnostics already exist in the Error List.",
-                ObjectSchema(
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, "Optional build timeout in milliseconds."),
-                    OptionalIntegerProperty(MaxArgumentName, "Optional max error rows."),
-                    OptionalBooleanProperty(WaitForIntellisenseArgumentName, "Wait for IntelliSense readiness before checking for blocking diagnostics (default true)."))),
-            Tool("debug_threads", "Get debugger thread snapshot.", EmptySchema()),
-            Tool(
-                "debug_stack",
-                "Get debugger stack frames for current or selected thread.",
-                ObjectSchema(
-                    OptionalIntegerProperty("thread_id", "Optional debugger thread id."),
-                    OptionalIntegerProperty("max_frames", "Optional max frames (default 100)."))),
-            Tool(
-                "debug_locals",
-                "Get local variables for the current stack frame.",
-                ObjectSchema(OptionalIntegerProperty(MaxArgumentName, $"Optional max locals (default {DefaultLargeMaxCount})."))),
-            Tool("debug_modules", "Get debugger modules snapshot (best effort).", EmptySchema()),
-            Tool(
-                DebugWatchToolName,
-                "Evaluate one watch expression in break mode.",
-                ObjectSchema(
-                    RequiredStringProperty("expression", "Debugger watch expression."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, "Optional evaluation timeout milliseconds (default 1000)."))),
-            Tool("debug_exceptions", "Get debugger exception settings snapshot (best effort).", EmptySchema()),
-            Tool(
-                "diagnostics_snapshot",
-                "Capture a comprehensive IDE snapshot: build state, active document, errors, warnings, and debug status — all in one call. Use this for a quick health check instead of calling errors + bridge_state separately.",
-                ObjectSchema(
-                    OptionalBooleanProperty(WaitForIntellisenseArgumentName, "Wait for IntelliSense before diagnostics (default true)."),
-                    OptionalBooleanProperty(QuickArgumentName, "Use quick diagnostics snapshot mode (default false)."),
-                    OptionalIntegerProperty(MaxArgumentName, "Optional max diagnostics rows for errors/warnings."))),
-            Tool("build_configurations", "List solution build configurations/platforms.", EmptySchema()),
-            Tool(
-                SetBuildConfigurationToolName,
-                "Activate one build configuration/platform pair.",
-                ObjectSchema(
-                    RequiredStringProperty(ConfigurationArgumentName, "Build configuration name (e.g. Debug)."),
-                    OptionalStringProperty(PlatformArgumentName, "Optional platform (e.g. x64)."))),
-            Tool("git_status", "Get repository status in porcelain mode.", EmptySchema()),
-            Tool("git_current_branch", "Get current branch name (short).", EmptySchema()),
-            Tool("git_remote_list", "List configured remotes with URLs.", EmptySchema()),
-            Tool("git_tag_list", "List tags sorted by version-aware refname.", EmptySchema()),
-            Tool("git_stash_list", "List stash entries.", EmptySchema()),
-            Tool(
-                "git_diff_unstaged",
-                "Show unstaged diff with optional context lines.",
-                ObjectSchema(OptionalIntegerProperty("context", DefaultContextLineCountDescription))),
-            Tool(
-                "git_diff_staged",
-                "Show staged diff with optional context lines.",
-                ObjectSchema(OptionalIntegerProperty("context", DefaultContextLineCountDescription))),
-            Tool(
-                "git_log",
-                "Show recent commits in a compact machine-friendly format.",
-                ObjectSchema(OptionalIntegerProperty("max_count", $"Optional max commit count (default {DefaultGitLogMaxCount})."))),
-            Tool(
-                "git_show",
-                "Show metadata and patch for a specific commit.",
-                ObjectSchema(RequiredStringProperty("revision", "Commit-ish (hash, HEAD~1, tag)."))),
-            Tool("git_branch_list", "List local and remote branches.", EmptySchema()),
-            Tool(
-                "git_checkout",
-                "Checkout an existing branch or revision.",
-                ObjectSchema(RequiredStringProperty("target", "Branch name or revision to checkout."))),
-            Tool(
-                "git_create_branch",
-                "Create and switch to a new branch.",
-                ObjectSchema(
-                    RequiredStringProperty("name", "New branch name."),
-                    OptionalStringProperty("start_point", "Optional start point (default HEAD)."))),
-            Tool(
-                GitMergeToolName,
-                "Merge a branch or revision into the current branch.",
-                ObjectSchema(
-                    RequiredStringProperty("source", "Branch name or revision to merge into the current branch."),
-                    OptionalBooleanProperty("ff_only", "If true, require a fast-forward merge."),
-                    OptionalBooleanProperty("no_ff", "If true, create a merge commit even when a fast-forward is possible."),
-                    OptionalBooleanProperty("squash", "If true, squash changes into the working tree without creating a merge commit."),
-                    OptionalStringProperty("message", "Optional merge commit message."))),
-            Tool(
-                "git_add",
-                "Stage files. Use ['.'] to stage all changes.",
-                ObjectSchema(RequiredStringArrayProperty("paths", "File paths, globs, or '.' to stage all."))),
-            Tool(
-                "git_restore",
-                "Restore paths from HEAD in the working tree.",
-                ObjectSchema(RequiredStringArrayProperty("paths", "File paths or globs to restore."))),
-            Tool(
-                "git_commit",
-                "Create a commit from staged changes.",
-                ObjectSchema(RequiredStringProperty("message", "Commit message."))),
-            Tool(
-                "git_commit_amend",
-                "Amend the previous commit. Optionally replace the message.",
-                ObjectSchema(
-                    OptionalStringProperty("message", "Optional replacement commit message."),
-                    OptionalBooleanProperty("no_edit", "If true, keep the current commit message."))),
-            Tool(
-                "git_reset",
-                "Unstage paths while keeping working tree changes.",
-                ObjectSchema(OptionalStringArrayProperty("paths", "File paths or globs to unstage."))),
-            Tool(
-                "git_fetch",
-                "Fetch updates from remotes.",
-                ObjectSchema(
-                    OptionalStringProperty("remote", "Optional remote name."),
-                    OptionalBooleanProperty("all", "If true, fetch all remotes."),
-                    OptionalBooleanProperty("prune", "If true, prune deleted remote refs (default true)."))),
-            Tool(
-                "git_stash_push",
-                "Stash local changes. Optionally include untracked files and a message.",
-                ObjectSchema(
-                    OptionalStringProperty("message", "Optional stash message."),
-                    OptionalBooleanProperty("include_untracked", "If true, include untracked files."))),
-            Tool("git_stash_pop", "Apply and drop the latest stash entry.", EmptySchema()),
-            Tool(
-                "git_pull",
-                "Pull updates from a remote branch.",
-                ObjectSchema(
-                    OptionalStringProperty("remote", "Optional remote name (default current tracking remote)."),
-                    OptionalStringProperty("branch", "Optional branch name."))),
-            Tool(
-                "git_push",
-                "Push current branch to remote.",
-                ObjectSchema(
-                    OptionalStringProperty("remote", "Optional remote name (default current tracking remote)."),
-                    OptionalStringProperty("branch", "Optional branch name."),
-                    OptionalBooleanProperty("set_upstream", "If true, pass --set-upstream."))),
-            Tool(
-                "github_issue_search",
-                "Search open or closed GitHub issues.",
-                ObjectSchema(
-                    OptionalStringProperty(QueryArgumentName, "Free-text search query."),
-                    OptionalStringProperty("state", "open, closed, or all."),
-                    OptionalStringProperty("repo", "Optional owner/repo. Defaults to git origin repo."),
-                    OptionalIntegerProperty("limit", $"Max results (default {DefaultGitHubIssueSearchLimit})."))),
-            Tool(
-                "github_issue_close",
-                "Close a GitHub issue by number and optionally add a comment.",
-                ObjectSchema(
-                    RequiredIntegerProperty("issue_number", "Issue number to close."),
-                    OptionalStringProperty("repo", "Optional owner/repo. Defaults to git origin repo."),
-                    OptionalStringProperty("comment", "Optional closing comment."))),
-            Tool(
-                "nuget_restore",
-                "Restore NuGet packages with dotnet restore for the active solution or a specific path.",
-                ObjectSchema(OptionalStringProperty(PathArgumentName, "Optional solution/project path. Defaults to the active bridge solution."))),
-            Tool(
-                "nuget_add_package",
-                "Add a NuGet package reference to a project via dotnet add package.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, "Project path (.csproj/.fsproj/.vbproj), absolute or solution-relative."),
-                    RequiredStringProperty("package", "NuGet package id to add."),
-                    OptionalStringProperty("version", "Optional package version."),
-                    OptionalStringProperty("source", "Optional package source (name or URL)."),
-                    OptionalBooleanProperty("prerelease", "If true, include prerelease versions."),
-                    OptionalBooleanProperty("no_restore", "If true, skip restore after adding the package."))),
-            Tool(
-                "nuget_remove_package",
-                "Remove a NuGet package reference from a project via dotnet remove package.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, "Project path (.csproj/.fsproj/.vbproj), absolute or solution-relative."),
-                    RequiredStringProperty("package", "NuGet package id to remove."))),
-            Tool(
-                "conda_install",
-                "Install one or more packages into a conda environment.",
-                ObjectSchema(
-                    RequiredStringArrayProperty(PackagesArgumentName, "One or more conda package specs (for example ['numpy','cmake>=3.29'])."),
-                    OptionalStringProperty("name", "Optional environment name (-n/--name)."),
-                    OptionalStringProperty("prefix", "Optional environment prefix path (--prefix)."),
-                    OptionalStringArrayProperty("channels", "Optional channels to add with --channel."),
-                    OptionalBooleanProperty("dry_run", "If true, run with --dry-run."),
-                    OptionalBooleanProperty("yes", "Auto-confirm install (default true)."))),
-            Tool(
-                CondaRemoveToolName,
-                "Remove one or more packages from a conda environment.",
-                ObjectSchema(
-                    RequiredStringArrayProperty(PackagesArgumentName, "One or more package names to remove."),
-                    OptionalStringProperty("name", "Optional environment name (-n/--name)."),
-                    OptionalStringProperty("prefix", "Optional environment prefix path (--prefix)."),
-                    OptionalBooleanProperty("dry_run", "If true, run with --dry-run."),
-                    OptionalBooleanProperty("yes", "Auto-confirm remove (default true)."))),
-            Tool(
-                PythonListEnvsToolName,
-                "Discover bridge-managed CPython, system Python installs, virtual environments, and conda environments that the bridge can attach to.",
-                EmptySchema()),
-            Tool(
-                PythonEnvInfoToolName,
-                "Inspect one Python interpreter or environment. Defaults to the selected interpreter, then the managed runtime, then the first discovered interpreter.",
-                ObjectSchema(OptionalStringProperty(PathArgumentName, "Optional interpreter path to inspect."))),
-            Tool(
-                "python_set_active_env",
-                "Select the Python interpreter that bridge Python tools (python_repl, python_run_file, python_list_packages, etc.) will target. Provide either 'path' (full interpreter path) or 'name' (environment name, e.g. a conda env name or venv directory name). Does not install or modify the environment — use python_install_package for that.",
-                ObjectSchema(
-                    OptionalStringProperty(PathArgumentName, "Full interpreter path to select (e.g. C:\\Python313\\python.exe or C:\\envs\\myenv\\Scripts\\python.exe)."),
-                    OptionalStringProperty("name", "Environment name to select (e.g. 'superslicer' for a conda env, '.venv' for a virtual env). Matched case-insensitively against the last directory component of each environment's prefix."))),
-            Tool(
-                PythonSetProjectEnvToolName,
-                "Set the active Python interpreter for the open Visual Studio Python project or open-folder workspace. Affects IntelliSense and debugging inside VS. If 'path' is omitted, auto-detects a conda environment whose name matches the project or solution name. Use python_set_active_env to set the interpreter for bridge Python tools instead.",
-                ObjectSchema(
-                    OptionalStringProperty(PathArgumentName, "Full interpreter path to set as the project interpreter. Omit to auto-detect a conda env matching the project name."),
-                    OptionalStringProperty(ProjectArgumentName, "Python project name or path to target. Defaults to the active project when omitted."))),
-            Tool(
-                "python_set_startup_file",
-                "Set the startup file for the active Python project. The startup file is what runs when you press F5. Accepts an absolute path or a path relative to the project directory.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, "Path to the Python file to set as startup. Accepts absolute or project-relative paths."),
-                    OptionalStringProperty(ProjectArgumentName, "Python project name to target. Defaults to the active project when omitted."))),
-            Tool(
-                "python_get_startup_file",
-                "Get the startup file currently configured for the active Python project. The startup file is what runs when you press F5.",
-                ObjectSchema(
-                    OptionalStringProperty(ProjectArgumentName, "Python project name to target. Defaults to the active project when omitted."))),
-            Tool(
-                PythonListPackagesToolName,
-                "List installed packages from the selected interpreter, or an explicitly provided interpreter path.",
-                ObjectSchema(OptionalStringProperty(PathArgumentName, "Optional interpreter path to query instead of the selected interpreter."))),
-            Tool(
-                "python_repl",
-                "Execute a Python snippet using the selected interpreter. By default the bridge runs Python in restricted scratch mode that blocks file writes, process launch, network access, temp file creation, and unsafe native imports. Unrestricted execution requires IDE Bridge > Allow Bridge Python Unrestricted Execution. Python execution still requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Python Execution is enabled.",
-                ObjectSchema(
-                    RequiredStringProperty("code", "Python code to execute."),
-                    OptionalStringProperty(PathArgumentName, OptionalInterpreterPathDescription),
-                    OptionalStringProperty("cwd", "Working directory for execution. Defaults to the open solution directory when available."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, DefaultPythonToolTimeoutDescription))),
-            Tool(
-                "python_run_file",
-                "Execute an existing Python file using the selected interpreter. By default the bridge runs Python in restricted scratch mode that blocks file writes, process launch, network access, temp file creation, and unsafe native imports. Unrestricted execution requires IDE Bridge > Allow Bridge Python Unrestricted Execution. Python execution still requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Python Execution is enabled.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, "Existing Python file to execute."),
-                    OptionalStringArrayProperty("args", "Optional arguments to pass to the script."),
-                    OptionalStringProperty(PathArgumentName, OptionalInterpreterPathDescription),
-                    OptionalStringProperty("cwd", "Working directory for execution. Defaults to the open solution directory when available."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, DefaultPythonToolTimeoutDescription))),
-            Tool(
-                PythonInstallPackageToolName,
-                "Install one or more Python packages into the selected interpreter environment. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Python Environment Mutation is enabled. Never mutates an existing user environment silently.",
-                ObjectSchema(
-                    RequiredStringArrayProperty(PackagesArgumentName, "One or more Python package specs to install."),
-                    OptionalStringProperty(PathArgumentName, OptionalInterpreterPathDescription),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, DefaultPythonToolTimeoutDescription))),
-            Tool(
-                "python_install_requirements",
-                "Install Python packages from a requirements.txt file into the selected interpreter environment. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Python Environment Mutation is enabled.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, "Path to the requirements.txt file. Accepts absolute or working-directory-relative paths."),
-                    OptionalStringProperty(PathArgumentName, OptionalInterpreterPathDescription),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, DefaultPythonToolTimeoutDescription))),
-            Tool(
-                PythonRemovePackageToolName,
-                "Remove one or more Python packages from the selected interpreter environment. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Python Environment Mutation is enabled. Never mutates an existing user environment silently.",
-                ObjectSchema(
-                    RequiredStringArrayProperty(PackagesArgumentName, "One or more Python package names to remove."),
-                    OptionalStringProperty(PathArgumentName, OptionalInterpreterPathDescription),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, DefaultPythonToolTimeoutDescription))),
-            Tool(
-                PythonCreateEnvToolName,
-                "Create a new virtual environment using the selected interpreter or an explicitly provided base interpreter. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Python Environment Mutation is enabled.",
-                ObjectSchema(
-                    RequiredStringProperty(PathArgumentName, "Directory where the new environment should be created."),
-                    OptionalStringProperty(BasePathArgumentName, "Optional base interpreter path to use instead of the selected interpreter."),
-                    OptionalStringProperty("cwd", "Working directory used to resolve a relative path. Defaults to the open solution directory when available."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, DefaultPythonToolTimeoutDescription))),
-            Tool(
-                "python_sync_env",
-                "Sync the active bridge Python interpreter (set via python_set_active_env) to the open Visual Studio Python project. Equivalent to calling python_set_project_env with the currently selected bridge interpreter. Useful after switching environments to keep VS IntelliSense and debugging in sync.",
-                ObjectSchema(
-                    OptionalStringProperty(ProjectArgumentName, "Python project name to target. Defaults to the active project when omitted."))),
-            Tool(
-                ShellExecToolName,
-                "Execute a process and capture its stdout, stderr, and exit code. Requires Visual Studio to be running — do not use after vs_close. Working directory defaults to the solution directory. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Shell Exec is enabled.",
-                ObjectSchema(
-                    RequiredStringProperty("exe", "Executable path or name (e.g. 'powershell', 'cmd', 'ISCC.exe')."),
-                    OptionalStringProperty("args", "Arguments string to pass to the executable."),
-                    OptionalStringProperty("cwd", "Working directory. Defaults to the solution directory."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, "Timeout in milliseconds (default 60000)."),
-                    OptionalIntegerProperty("tail_lines", "If set, truncate stdout and stderr to the last N lines each. Use this for large build outputs where only the summary matters."))),
-            Tool(
-                "set_version",
-                "Update the version string across all version files (Directory.Build.props, source.extension.vsixmanifest, and installer/inno/vs-ide-bridge.iss). Keeps every version location in sync. Requires a Visual Studio approval popup unless IDE Bridge > Allow Bridge Edits is enabled.",
-                ObjectSchema(
-                    RequiredStringProperty("version", "New version string, e.g. '2.1.0'."))),
-            Tool(
-                "vs_close",
-                "Close a Visual Studio instance. WARNING: all bridge tools (including shell_exec) route through VS and stop working immediately after this call. Plan any post-close work (running installers, file moves) using native OS tools outside the bridge. Use vs_open + wait_for_instance to reconnect. Targets the currently bound instance unless 'process_id' is supplied.",
-                ObjectSchema(
-                    OptionalIntegerProperty("process_id", "VS process ID to close. Defaults to the bound instance."),
-                    OptionalBooleanProperty("force", "If true, forcibly kill the process instead of requesting a graceful close (default false)."))),
-            Tool(
-                "vs_open",
-                "Launch a new Visual Studio instance, optionally opening a solution file. Returns immediately — you MUST call wait_for_instance next to block until the bridge is ready before using any other tools.",
-                ObjectSchema(
-                    OptionalStringProperty(SolutionArgumentName, "Absolute path to a .sln or .slnx file to open."),
-                    OptionalStringProperty("devenv_path", $"Explicit path to {DevenvExeFileName}. Auto-detected via vswhere if omitted."))),
-            Tool(
-                "wait_for_instance",
-                "Wait for a newly launched Visual Studio bridge instance to appear and become ready. Always call this immediately after vs_open — no other bridge tool will work until this completes successfully.",
-                ObjectSchema(
-                    OptionalStringProperty(SolutionArgumentName, "Optional absolute path to the .sln or .slnx file you expect the new instance to open."),
-                    OptionalIntegerProperty(TimeoutMillisecondsArgumentName, $"How long to wait in milliseconds (default {VsOpenDiscoveryTimeoutMilliseconds})."))),
-            Tool(
-                FindTextToolName,
-                "Full-text search for a single query. Returns file paths, line numbers and preview text. When you have multiple queries to run, use find_text_batch instead — it runs all queries in one round-trip.",
-                ObjectSchema(
-                    RequiredStringProperty(QueryArgumentName, "Search text or regex pattern."),
-                    OptionalStringProperty(PathArgumentName, "Optional path or directory filter (solution-relative or absolute)."),
-                    OptionalStringProperty("scope", "Scope: solution (default), project, or document."),
-                    OptionalStringProperty(ProjectArgumentName, OptionalProjectFilterDescription),
-                    OptionalIntegerProperty("results_window", "Optional Find Results window number."),
-                    OptionalBooleanProperty(MatchCaseArgumentName, "Case-sensitive match (default false)."),
-                    OptionalBooleanProperty("whole_word", "Match whole word only (default false)."),
-                    OptionalBooleanProperty("regex", "Treat query as a regular expression (default false).")),
-                title: "Text Search",
-                annotations: ReadOnlyToolAnnotations()),
-            Tool(
-                ReadFileToolName,
-                "Take one code slice from a file. Use start_line/end_line for a range, or line with context_before/context_after for an anchor. When you need multiple slices (even from different files), use read_file_batch instead — it fetches all slices in one round-trip.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    OptionalIntegerProperty(StartLineArgumentName, "First 1-based line to read. Use with end_line for a range."),
-                    OptionalIntegerProperty(EndLineArgumentName, "Last 1-based line to read (inclusive). Use with start_line."),
-                    OptionalIntegerProperty(LineArgumentName, "Anchor 1-based line. Use with context_before/context_after."),
-                    OptionalIntegerProperty(ContextBeforeArgumentName, "Lines before anchor (default 10)."),
-                    OptionalIntegerProperty(ContextAfterArgumentName, "Lines after anchor (default 30)."),
-                    OptionalBooleanProperty("reveal_in_editor", "Whether to reveal the slice in the editor (default true).")),
-                title: "Read File Slice",
-                annotations: ReadOnlyToolAnnotations()),
-            Tool(
-                ReadFileBatchToolName,
-                "Take multiple code slices in one bridge request. Use this instead of repeated read_file calls when a human asks for several slices.",
-                ObjectSchema(
-                    ("ranges", ArraySchema(
-                        "Ranges to read in order.",
-                        ObjectSchema(
-                            RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                            OptionalIntegerProperty(StartLineArgumentName, "First 1-based line to read. Use with end_line for a range."),
-                            OptionalIntegerProperty(EndLineArgumentName, "Last 1-based line to read (inclusive). Use with start_line."),
-                            OptionalIntegerProperty(LineArgumentName, "Anchor 1-based line. Use with context_before/context_after."),
-                            OptionalIntegerProperty(ContextBeforeArgumentName, "Lines before anchor when line is used."),
-                            OptionalIntegerProperty(ContextAfterArgumentName, "Lines after anchor when line is used.")),
-                        minItems: 1),
-                     true)),
-                title: "Read File Slices",
-                annotations: ReadOnlyToolAnnotations()),
-            Tool(
-                "find_references",
-                "Find all references to the symbol at file/line/column using VS IntelliSense.",
-                FileLineColumnSchema()),
-            Tool(
-                PeekDefinitionToolName,
-                "Return the full definition source and surrounding context of the symbol at file/line/column without navigating the editor. Use this instead of goto_definition when you want to read the source, not jump to it.",
-                FileLineColumnSchema()),
-            Tool(
-                "file_outline",
-                "Get the symbol outline (namespaces, classes, methods, fields, etc.) of a file.",
-                ObjectSchema(RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription))),
-            Tool(
-                "build",
-                "Trigger a solution build with optional configuration/platform and return full errors/warnings. Refuses to build if any diagnostics already exist in the Error List — fix them first. Use build_errors for a lightweight errors-only variant.",
-                ObjectSchema(
-                    OptionalStringProperty(ConfigurationArgumentName, "Optional build configuration (e.g. Debug, Release)."),
-                    OptionalStringProperty(PlatformArgumentName, "Optional build platform (e.g. x64)."),
-                    OptionalBooleanProperty(WaitForIntellisenseArgumentName, "Wait for IntelliSense readiness before checking for blocking diagnostics (default true)."))),
-            Tool(
-                OpenSolutionToolName,
-                "Open a specific existing .sln or .slnx file in the current Visual Studio instance without opening a new window. Use this when the user already gave you the exact solution path; do not call bind_solution afterward unless you need to switch this MCP session to a different already-open instance.",
-                ObjectSchema(
-                    RequiredStringProperty(SolutionArgumentName, "Absolute path to the .sln or .slnx file to open."),
-                    OptionalBooleanProperty(WaitForReadyArgumentName, "Wait for readiness after opening the solution (default true)."))),
-            Tool(
-                CreateSolutionToolName,
-                "Create and open a new solution in the current Visual Studio instance.",
-                ObjectSchema(
-                    RequiredStringProperty(DirectoryArgumentName, "Absolute directory where the new solution should be created."),
-                    RequiredStringProperty(NameArgumentName, "Solution name. '.sln' is optional."),
-                    OptionalBooleanProperty(WaitForReadyArgumentName, "Wait for readiness after opening the solution (default true)."))),
-            Tool(
-                SearchSolutionsToolName,
-                "Search for solution files (.sln/.slnx) on disk under a given root directory. Defaults to %USERPROFILE%\\source\\repos.",
-                ObjectSchema(
-                    OptionalStringProperty(PathArgumentName, "Root directory to search (default: %USERPROFILE%\\source\\repos)."),
-                    OptionalStringProperty(QueryArgumentName, "Filter by solution name (case-insensitive substring)."),
-                    OptionalIntegerProperty("max_depth", "Max directory depth to recurse (default 6)."),
-                    OptionalIntegerProperty("max", $"Max results to return (default {DefaultLargeMaxCount})."))),
-            Tool(
-                ListProjectsToolName,
-                "List all projects in the current solution, including startup-project flags.",
-                EmptySchema()),
-            Tool(
-                QueryProjectItemsToolName,
-                "List items in one project with paths, item types, and VS item metadata.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, ProjectArgumentDescription),
-                    OptionalStringProperty(PathArgumentName, "Optional file or directory filter within the project."),
-                    OptionalIntegerProperty("max", "Optional max item count (default 500)."))),
-            Tool(
-                QueryProjectPropertiesToolName,
-                "Read project properties such as TargetFramework, AssemblyName, OutputType, or RootNamespace.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, ProjectArgumentDescription),
-                    OptionalStringArrayProperty("names", "Optional property names to read. Omit to return every accessible property."))),
-            Tool(
-                QueryProjectConfigurationsToolName,
-                "List available project configurations and platforms, including the active one.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, ProjectArgumentDescription))),
-            Tool(
-                QueryProjectReferencesToolName,
-                "List project references for one project. By default this returns resolved references with framework reference assemblies omitted; pass declared_only for a cleaner project-file view.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, ProjectArgumentDescription),
-                    OptionalBooleanProperty("include_framework", "Include framework/reference-assembly items in the results (default false)."),
-                    OptionalBooleanProperty("declared_only", "Return only references declared in the project file instead of the fully resolved reference closure (default false)."))),
-            Tool(
-                QueryProjectOutputsToolName,
-                "Resolve the primary output artifact and output directory for one project using the active or requested build shape.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, ProjectArgumentDescription),
-                    OptionalStringProperty(ConfigurationArgumentName, "Optional build configuration to evaluate (for example Release)."),
-                    OptionalStringProperty(PlatformArgumentName, "Optional build platform to evaluate (for example x64)."),
-                    OptionalStringProperty("target_framework", "Optional target framework moniker to evaluate when a project targets multiple frameworks."))),
-            Tool(
-                AddProjectToolName,
-                "Add an existing project file to the current solution.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, "Absolute project path (.csproj/.vcxproj/.fsproj)."),
-                    OptionalStringProperty("solution_folder", "Optional solution folder name to add the project under."))),
-            Tool(
-                RemoveProjectToolName,
-                "Remove a project from the current solution by name or path.",
-                ObjectSchema(RequiredStringProperty(ProjectArgumentName, ProjectArgumentDescription))),
-            Tool(
-                SetStartupProjectToolName,
-                "Set the current solution startup project.",
-                ObjectSchema(RequiredStringProperty(ProjectArgumentName, "Project name, unique name, or full path."))),
-            Tool(
-                AddFileToProjectToolName,
-                "Add an existing file to a project without creating it on disk.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, "Project name, unique name, or full path."),
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription))),
-            Tool(
-                RemoveFileFromProjectToolName,
-                "Remove a file from a project without deleting the file from disk.",
-                ObjectSchema(
-                    RequiredStringProperty(ProjectArgumentName, "Project name, unique name, or full path."),
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription))),
-            Tool(
-                "set_breakpoint",
-                "Set a breakpoint at file/line with optional condition, hit count, tracepoint message, and reveal in editor.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    RequiredIntegerProperty(LineArgumentName, OneBasedLineNumberDescription),
-                    OptionalIntegerProperty(ColumnArgumentName, "1-based column number (default 1)."),
-                    OptionalStringProperty("condition", "Breakpoint condition expression."),
-                    OptionalStringProperty("condition_type", "Condition type: 'when-true' (default) or 'changed'."),
-                    OptionalIntegerProperty("hit_count", "Hit count value (default 0 = ignore)."),
-                    OptionalStringProperty("hit_type", "Hit count type: 'none' (default), 'equal', 'multiple', 'greater-or-equal'."),
-                    OptionalStringProperty("trace_message", "Optional tracepoint message to log when the breakpoint is hit."),
-                    OptionalBooleanProperty("continue_execution", "If true, do not break when the breakpoint is hit."),
-                    OptionalBooleanProperty("reveal", "Reveal breakpoint location in editor (default true)."))),
-            Tool(
-                "list_breakpoints",
-                "List all breakpoints in the current debug session.",
-                EmptySchema()),
-            Tool(
-                "remove_breakpoint",
-                "Remove a breakpoint by file and line number.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    RequiredIntegerProperty(LineArgumentName, OneBasedLineNumberDescription))),
-            Tool(
-                "clear_breakpoints",
-                "Remove all breakpoints.",
-                EmptySchema()),
-            Tool(
-                "enable_breakpoint",
-                "Enable a disabled breakpoint at file/line.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    RequiredIntegerProperty(LineArgumentName, OneBasedLineNumberDescription))),
-            Tool(
-                "disable_breakpoint",
-                "Disable a breakpoint at file/line without removing it.",
-                ObjectSchema(
-                    RequiredStringProperty(FileArgumentName, AbsoluteOrSolutionRelativeFilePathDescription),
-                    RequiredIntegerProperty(LineArgumentName, OneBasedLineNumberDescription))),
-            Tool(
-                "enable_all_breakpoints",
-                "Enable all breakpoints.",
-                EmptySchema()),
-            Tool(
-                "disable_all_breakpoints",
-                "Disable all breakpoints without removing them.",
-                EmptySchema())
-        ];
+        private static JsonArray ListTools() => Registry.BuildToolsList();
 
         private static JsonObject Tool(
             string name,
@@ -1710,435 +996,105 @@ internal static partial class CliApp
                 : fallback;
         }
 
-        private static async Task<JsonNode> CallToolAsync(JsonNode? id, JsonObject? p, BridgeBinding bridgeBinding)
+        private static Task<JsonNode> CallToolAsync(JsonNode? id, JsonObject? p, BridgeBinding bridgeBinding)
         {
-            var toolName = GetOptionalStringArgument(p, "name") ?? throw new McpRequestException(id, JsonRpcInvalidParamsCode, "tools/call missing name.");
-            var args = p?["arguments"] as JsonObject;
-
-            if (string.Equals(toolName, ToolHelpToolName, StringComparison.Ordinal) ||
-                string.Equals(toolName, HelpToolName, StringComparison.Ordinal))
-            {
-                return ToolHelp(id, GetOptionalStringArgument(args, "name"), GetOptionalStringArgument(args, "category"));
-            }
-
-            if (string.Equals(toolName, "bridge_health", StringComparison.Ordinal))
-            {
-                return await BridgeHealthAsync(id, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (toolName.StartsWith("git_", StringComparison.Ordinal))
-            {
-                return await CallGitToolAsync(id, toolName, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (toolName.StartsWith("github_", StringComparison.Ordinal))
-            {
-                return await CallGitHubToolAsync(id, toolName, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (toolName.StartsWith("nuget_", StringComparison.Ordinal))
-            {
-                return await CallNuGetToolAsync(id, toolName, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (toolName.StartsWith("conda_", StringComparison.Ordinal))
-            {
-                return await CallCondaToolAsync(id, toolName, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (toolName.StartsWith("python_", StringComparison.Ordinal) &&
-                !string.Equals(toolName, PythonSetProjectEnvToolName, StringComparison.Ordinal) &&
-                !string.Equals(toolName, "python_set_startup_file", StringComparison.Ordinal) &&
-                !string.Equals(toolName, "python_get_startup_file", StringComparison.Ordinal) &&
-                !string.Equals(toolName, "python_sync_env", StringComparison.Ordinal))
-            {
-                return await CallPythonToolAsync(id, toolName, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (string.Equals(toolName, ShellExecToolName, StringComparison.Ordinal))
-            {
-                return await CallShellExecToolAsync(id, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (string.Equals(toolName, "set_version", StringComparison.Ordinal))
-            {
-                return await CallSetVersionToolAsync(id, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (string.Equals(toolName, "vs_close", StringComparison.Ordinal))
-            {
-                return CallVsCloseTool(id, args, bridgeBinding);
-            }
-
-            if (string.Equals(toolName, "vs_open", StringComparison.Ordinal))
-            {
-                return await CallVsOpenToolAsync(id, args).ConfigureAwait(false);
-            }
-
-            if (string.Equals(toolName, "wait_for_instance", StringComparison.Ordinal))
-            {
-                return await CallWaitForInstanceToolAsync(id, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (string.Equals(toolName, "list_instances", StringComparison.Ordinal))
-            {
-                return await ListInstancesAsync(bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (string.Equals(toolName, "bind_instance", StringComparison.Ordinal))
-            {
-                var result = await bridgeBinding.BindAsync(id, args).ConfigureAwait(false);
-                return ToolResult(result);
-            }
-
-            if (string.Equals(toolName, "bind_solution", StringComparison.Ordinal))
-            {
-                var bindArgs = new JsonObject
-                {
-                    ["solution_hint"] = args?[SolutionArgumentName]?.DeepClone() ?? args?["solution_hint"]?.DeepClone(),
-                };
-
-                var result = await bridgeBinding.BindAsync(id, bindArgs).ConfigureAwait(false);
-                return ToolResult(result);
-            }
-
-            if (string.Equals(toolName, OpenSolutionToolName, StringComparison.Ordinal))
-            {
-                return await OpenSolutionAsync(id, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            if (string.Equals(toolName, CreateSolutionToolName, StringComparison.Ordinal))
-            {
-                return await CreateSolutionAsync(id, args, bridgeBinding).ConfigureAwait(false);
-            }
-
-            var (command, commandArgs) = toolName switch
-            {
-                BridgeStateToolName => ("state", string.Empty),
-                UiSettingsToolName => ("ui-settings", string.Empty),
-                WaitForReadyArgumentName => ("ready", string.Empty),
-                "errors" => ("errors", BuildDiagnosticsArgs(args)),
-                WarningsToolName => (WarningsToolName, BuildDiagnosticsArgs(args)),
-                ListTabsToolName => ("list-tabs", string.Empty),
-                OpenFileToolName => ("open-document", BuildOpenFileArgs(args)),
-                FindFilesToolName => ("find-files", BuildFindFilesArgs(args)),
-                FindTextBatchToolName => ("find-text-batch", BuildFindTextBatchArgs(args)),
-                SearchSymbolsToolName => ("search-symbols", BuildSearchSymbolsArgs(args)),
-                CountReferencesToolName => ("count-references", BuildCountReferencesArgs(args)),
-                SymbolInfoToolName => ("quick-info", BuildFileLineColumnArgs(args)),
-                ApplyDiffToolName => ("apply-diff", BuildApplyDiffArgs(args)),
-                WriteFileToolName => ("write-file", BuildWriteFileArgs(args)),
-                ListDocumentsToolName => ("list-documents", string.Empty),
-                "activate_document" => ("activate-document", BuildSingleStringSwitchArg(args, QueryArgumentName, QueryArgumentName)),
-                "close_document" => ("close-document", BuildCloseDocumentArgs(args)),
-                SaveDocumentToolName => ("save-document", BuildSaveDocumentArgs(args)),
-                "reload_document" => ("reload-document", BuildArgs((FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)))),
-                "close_file" => ("close-file", BuildCloseFileArgs(args)),
-                "close_others" => ("close-others", BuildSaveOnlyArgs(args)),
-                ListWindowsToolName => ("list-windows", BuildSingleStringSwitchArg(args, QueryArgumentName, QueryArgumentName)),
-                ActivateWindowArgumentName => ("activate-window", BuildSingleStringSwitchArg(args, "window", "window")),
-                "execute_command" => ("execute-command", BuildExecuteCommandArgs(args)),
-                "format_document" => ("execute-command", BuildFormatDocumentArgs(args)),
-                GotoDefinitionToolName => ("goto-definition", BuildFileLineColumnArgs(args)),
-                GotoImplementationToolName => ("goto-implementation", BuildFileLineColumnArgs(args)),
-                CallHierarchyToolName => ("call-hierarchy", BuildFileLineColumnArgs(args)),
-                "build_errors" => ("build-errors", BuildBuildErrorsArgs(id, args)),
-                DebugThreadsToolName => ("debug-threads", string.Empty),
-                DebugStackToolName => ("debug-stack", BuildDebugStackArgs(args)),
-                DebugLocalsToolName => ("debug-locals", BuildDebugLocalsArgs(args)),
-                DebugModulesToolName => ("debug-modules", string.Empty),
-                DebugWatchToolName => ("debug-watch", BuildDebugWatchArgs(args)),
-                DebugExceptionsToolName => ("debug-exceptions", string.Empty),
-                DiagnosticsSnapshotToolName => ("diagnostics-snapshot", BuildDiagnosticsSnapshotToolArgs(args)),
-                BuildConfigurationsToolName => ("build-configurations", string.Empty),
-                SetBuildConfigurationToolName => ("set-build-configuration", BuildConfigurationPlatformArgs(args)),
-                FindTextToolName => ("find-text", BuildFindTextArgs(args)),
-                ReadFileToolName => ("document-slice", BuildReadFileArgs(args)),
-                ReadFileBatchToolName => ("document-slices", BuildReadFileBatchArgs(args)),
-                FindReferencesToolName => ("find-references", BuildFileLineColumnArgs(args)),
-                PeekDefinitionToolName => ("peek-definition", BuildFileLineColumnArgs(args)),
-                FileOutlineToolName => ("file-outline", BuildSingleStringSwitchArg(args, FileArgumentName, FileArgumentName)),
-                "build" => ("build", BuildBuildArgs(args)),
-                SearchSolutionsToolName => ("search-solutions", BuildSearchSolutionsToolArgs(args)),
-                ListProjectsToolName => ("list-projects", string.Empty),
-                QueryProjectItemsToolName => ("query-project-items", BuildQueryProjectItemsToolArgs(args)),
-                QueryProjectPropertiesToolName => ("query-project-properties", BuildQueryProjectPropertiesToolArgs(args)),
-                QueryProjectConfigurationsToolName => ("query-project-configurations", BuildQueryProjectConfigurationsToolArgs(args)),
-                QueryProjectReferencesToolName => ("query-project-references", BuildQueryProjectReferencesToolArgs(args)),
-                QueryProjectOutputsToolName => ("query-project-outputs", BuildQueryProjectOutputsToolArgs(args)),
-                AddProjectToolName => ("add-project", BuildArgs(
-                    (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)),
-                    ("solution-folder", GetOptionalStringArgument(args, "solution_folder")))),
-                RemoveProjectToolName => ("remove-project", BuildArgs((ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)))),
-                SetStartupProjectToolName => ("set-startup-project", BuildArgs((ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)))),
-                PythonSetProjectEnvToolName => ("set-python-project-env", BuildArgs((PathArgumentName, GetOptionalStringArgument(args, PathArgumentName)), (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)))),
-                "python_set_startup_file" => ("set-python-startup-file", BuildArgs((FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)), (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)))),
-                "python_get_startup_file" => ("get-python-startup-file", BuildArgs((ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)))),
-                "python_sync_env" => ("set-python-project-env", BuildArgs((PathArgumentName, PythonRuntimeService.LoadActiveInterpreterPath()), (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)))),
-                AddFileToProjectToolName => ("add-file-to-project", BuildArgs(
-                    (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)),
-                    (FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)))),
-                RemoveFileFromProjectToolName => ("remove-file-from-project", BuildArgs(
-                    (ProjectArgumentName, GetOptionalStringArgument(args, ProjectArgumentName)),
-                    (FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)))),
-                "set_breakpoint" => ("set-breakpoint", BuildArgs(
-                [
-                    (FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)),
-                    (LineArgumentName, GetOptionalArgumentText(args, LineArgumentName)),
-                    (ColumnArgumentName, GetOptionalArgumentText(args, ColumnArgumentName)),
-                    ("condition", GetOptionalStringArgument(args, "condition")),
-                    ("condition-type", GetOptionalStringArgument(args, "condition_type")),
-                    ("hit-count", GetOptionalArgumentText(args, "hit_count")),
-                    ("hit-type", GetOptionalStringArgument(args, "hit_type")),
-                    ("trace-message", GetOptionalStringArgument(args, "trace_message")),
-                    .. BuildBooleanArgs(args, ("continue-execution", "continue_execution", false, true)),
-                    .. BuildBooleanArgs(args, ("reveal", "reveal", true, true)),
-                ])),
-                "list_breakpoints" => ("list-breakpoints", string.Empty),
-                "remove_breakpoint" => ("remove-breakpoint", BuildArgs(
-                    (FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)),
-                    (LineArgumentName, GetOptionalArgumentText(args, LineArgumentName)))),
-                "clear_breakpoints" => ("clear-breakpoints", string.Empty),
-                "enable_breakpoint" => ("enable-breakpoint", BuildArgs(
-                    (FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)),
-                    (LineArgumentName, GetOptionalArgumentText(args, LineArgumentName)))),
-                "disable_breakpoint" => ("disable-breakpoint", BuildArgs(
-                    (FileArgumentName, GetOptionalStringArgument(args, FileArgumentName)),
-                    (LineArgumentName, GetOptionalArgumentText(args, LineArgumentName)))),
-                "enable_all_breakpoints" => ("enable-all-breakpoints", string.Empty),
-                "disable_all_breakpoints" => ("disable-all-breakpoints", string.Empty),
-                _ => throw new McpRequestException(id, JsonRpcInvalidParamsCode, FormatUnknownMcpToolMessage(toolName)),
-            };
-
-            // Pre-build diagnostics: capture existing errors/warnings before building
-            // so the LLM knows what was already broken.
-            JsonNode? preBuildDiagnostics = null;
-            if (string.Equals(toolName, "build", StringComparison.Ordinal))
-            {
-                try
-                {
-                    var preErrors = await SendBridgeAsync(id, bridgeBinding, "errors", "--quick").ConfigureAwait(false);
-                    if (ResponseFormatter.IsSuccess(preErrors))
-                    {
-                        var errorCount = preErrors["Data"]?["errorCount"]?.GetValue<int>() ?? 0;
-                        var warningCount = preErrors["Data"]?["warningCount"]?.GetValue<int>() ?? 0;
-                        var messageCount = preErrors["Data"]?["messageCount"]?.GetValue<int>() ?? 0;
-                        if (errorCount > 0 || warningCount > 0 || messageCount > 0)
-                        {
-                            preBuildDiagnostics = preErrors;
-                        }
-                    }
-                }
-                catch
-                {
-                    // Non-fatal: proceed with build even if pre-check fails.
-                }
-            }
-
-            var response = await SendBridgeAsync(id, bridgeBinding, command, commandArgs).ConfigureAwait(false);
-
-            if (preBuildDiagnostics is not null)
-            {
-                response["preBuildDiagnostics"] = preBuildDiagnostics;
-            }
-
-            var isEditTool = string.Equals(toolName, ApplyDiffToolName, StringComparison.Ordinal) ||
-                             string.Equals(toolName, WriteFileToolName, StringComparison.Ordinal);
-            if (isEditTool && GetBoolean(args, "post_check", true))
-            {
-                var ready = await SendBridgeAsync(id, bridgeBinding, "ready", string.Empty).ConfigureAwait(false);
-                var errors = await SendBridgeAsync(id, bridgeBinding, "errors", "--wait-for-intellisense true").ConfigureAwait(false);
-                response["postCheck"] = new JsonObject
-                {
-                    ["ready"] = ready,
-                    ["errors"] = errors,
-                };
-            }
-
-            return new JsonObject
-            {
-                ["content"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["type"] = "text",
-                        ["text"] = response.ToJsonString(JsonOptions),
-                    },
-                },
-                ["isError"] = !ResponseFormatter.IsSuccess(response),
-                [StructuredContentPropertyName] = response.DeepClone(),
-            };
+            string toolName = GetOptionalStringArgument(p, "name")
+                ?? throw new McpRequestException(id, JsonRpcInvalidParamsCode, "tools/call missing name.");
+            JsonObject? args = p?["arguments"] as JsonObject;
+            return Registry.DispatchAsync(id, toolName, args, bridgeBinding);
         }
-
-        private static readonly (string Name, string Description, string[] Tools)[] ToolCategories =
-        [
-            ("core", "Connection + core read/edit/build/errors — load every session",
-                ["bridge_health", "list_instances", "bind_instance", "bind_solution", BridgeStateToolName,
-                 "wait_for_ready", "read_file", "read_file_batch", "apply_diff", "write_file",
-                 "find_text", FileOutlineToolName, "errors", "build"]),
-            ("search", "Find text/symbols/files, navigate references and definitions",
-                ["find_files", "find_text_batch", SearchSymbolsToolName, FindReferencesToolName, "count_references",
-                 GotoDefinitionToolName, GotoImplementationToolName, PeekDefinitionToolName, CallHierarchyToolName,
-                 SymbolInfoToolName, "quick_info"]),
-            ("diagnostics", "Build errors, warnings, and build configuration",
-                ["build_errors", BuildConfigurationsToolName, SetBuildConfigurationToolName,
-                 WarningsToolName, DiagnosticsSnapshotToolName]),
-            ("documents", "Open, close, and manage files, tabs, and windows",
-                [OpenFileToolName, "close_file", "close_document", "close_others", ListDocumentsToolName,
-                 ListTabsToolName, "activate_document", "reload_document", SaveDocumentToolName,
-                 ListWindowsToolName, "activate_window", "format_document",
-                 OpenSolutionToolName, SearchSolutionsToolName, CreateSolutionToolName]),
-            ("debug", "Breakpoints and live debugger inspection",
-                ["set_breakpoint", "remove_breakpoint", ClearBreakpointsToolName, ListBreakpointsToolName,
-                 "enable_breakpoint", "disable_breakpoint", "enable_all_breakpoints", "disable_all_breakpoints",
-                 DebugStackToolName, DebugLocalsToolName, "debug_watch", DebugThreadsToolName, DebugModulesToolName, DebugExceptionsToolName]),
-            ("git", "Version control — status, diff, commit, branch, push/pull, stash",
-                ["git_status", "git_add", "git_commit", "git_commit_amend", "git_diff_staged", "git_diff_unstaged",
-                 "git_log", "git_current_branch", "git_branch_list", "git_checkout", "git_create_branch",
-                 "git_fetch", GitPullToolName, GitPushToolName, "git_remote_list", "git_reset", "git_restore",
-                 "git_show", "git_stash_push", "git_stash_pop", "git_stash_list", "git_tag_list",
-                 "github_issue_search", "github_issue_close"]),
-            ("python", "Python envs and packages, NuGet, and conda",
-                ["python_repl", "python_run_file", PythonListEnvsToolName, "python_set_active_env",
-                 "python_set_project_env", PythonListPackagesToolName, PythonInstallPackageToolName,
-                 PythonRemovePackageToolName, "python_install_requirements", "python_sync_env",
-                 PythonCreateEnvToolName, PythonEnvInfoToolName, "python_get_startup_file", "python_set_startup_file",
-                 NugetAddPackageToolName, NugetRemovePackageToolName, "nuget_restore", "conda_install", "conda_remove"]),
-            ("project", "Project and solution structure — items, properties, references",
-                ["list_projects", "add_project", "remove_project", "add_file_to_project", "remove_file_from_project",
-                 "query_project_items", "query_project_properties", "query_project_configurations",
-                 "query_project_outputs", "query_project_references", SetStartupProjectToolName, "set_version"]),
-            ("system", "VS IDE control, shell commands, and UI settings",
-                ["execute_command", ShellExecToolName, "ui_settings", "vs_open", "vs_close",
-                 "wait_for_instance", "help", "tool_help"]),
-        ];
 
         private static JsonObject ToolHelp(JsonNode? id, string? toolName, string? category = null)
         {
-            var tools = ListTools()
-                .OfType<JsonObject>()
-                .ToArray();
+            IReadOnlyList<VsIdeBridge.Shared.ToolDefinition> tools = Registry.Definitions.All;
 
             if (!string.IsNullOrWhiteSpace(toolName))
             {
-                var match = tools.FirstOrDefault(tool =>
-                    string.Equals(tool["name"]?.GetValue<string>(), toolName, StringComparison.Ordinal))
+                VsIdeBridge.Shared.ToolDefinition? match = tools.FirstOrDefault(tool =>
+                    string.Equals(tool.Name, toolName, StringComparison.Ordinal))
                     ?? throw new McpRequestException(id, JsonRpcInvalidParamsCode, FormatUnknownMcpToolMessage(toolName));
 
-                var item = BuildToolHelpEntry(match);
-                var result = new JsonObject
+                var toolHelpEntry = BuildToolHelpEntry(match);
+                JsonObject helpResult = new JsonObject
                 {
                     ["count"] = 1,
-                    ["items"] = new JsonArray { item },
+                    ["items"] = new JsonArray { toolHelpEntry },
                 };
-                return WrapToolResult(result, isError: false);
+                return WrapToolResult(helpResult, isError: false);
             }
 
             if (!string.IsNullOrWhiteSpace(category))
             {
-                var catIdx = System.Array.FindIndex(ToolCategories, c => string.Equals(c.Name, category, StringComparison.OrdinalIgnoreCase));
-                if (catIdx < 0)
+                VsIdeBridge.Shared.ToolCategoryDefinition? categoryDefinition = Registry.Definitions.Categories
+                    .FirstOrDefault(item => string.Equals(item.Name, category, StringComparison.OrdinalIgnoreCase));
+                if (categoryDefinition is null)
                 {
-                    var validNames = string.Join(", ", ToolCategories.Select(c => c.Name));
+                    string validNames = string.Join(", ", Registry.Definitions.Categories.Select(item => item.Name));
                     throw new McpRequestException(id, JsonRpcInvalidParamsCode, $"Unknown category '{category}'. Valid: {validNames}");
                 }
 
-                var (catName, catDesc, catToolNames) = ToolCategories[catIdx];
-                var toolSet = new System.Collections.Generic.HashSet<string>(catToolNames, StringComparer.Ordinal);
-                var catEntries = new JsonArray();
-                foreach (var tool in tools.Where(t => toolSet.Contains(t["name"]?.GetValue<string>() ?? string.Empty))
-                                          .OrderBy(t => t["name"]?.GetValue<string>(), StringComparer.Ordinal))
+                IReadOnlyList<VsIdeBridge.Shared.ToolDefinition> categoryTools =
+                    Registry.Definitions.GetByCategory(categoryDefinition.Name);
+                JsonArray categoryEntries = new JsonArray();
+                foreach (VsIdeBridge.Shared.ToolDefinition tool in categoryTools)
                 {
-                    catEntries.Add(BuildToolHelpEntry(tool));
+                    categoryEntries.Add(BuildToolHelpEntry(tool));
                 }
 
                 return WrapToolResult(new JsonObject
                 {
-                    ["category"] = catName,
-                    [DescriptionPropertyName] = catDesc,
-                    ["count"] = catEntries.Count,
-                    ["items"] = catEntries,
+                    ["category"] = categoryDefinition.Name,
+                    ["summary"] = categoryDefinition.Summary,
+                    [DescriptionPropertyName] = categoryDefinition.Description,
+                    ["count"] = categoryEntries.Count,
+                    ["items"] = categoryEntries,
                 }, isError: false);
             }
 
-            // No args — return category index (compact, not full schemas)
-            var index = new JsonArray();
-            foreach (var (catName, catDesc, catToolNames) in ToolCategories)
+            JsonArray index = new JsonArray();
+            foreach (VsIdeBridge.Shared.ToolCategoryDefinition categoryDefinition in Registry.Definitions.Categories)
             {
-                var toolList = new JsonArray();
-                foreach (var t in catToolNames)
+                JsonArray toolList = new JsonArray();
+                IReadOnlyList<VsIdeBridge.Shared.ToolDefinition> categoryTools =
+                    Registry.Definitions.GetByCategory(categoryDefinition.Name);
+                foreach (VsIdeBridge.Shared.ToolDefinition tool in categoryTools)
                 {
-                    toolList.Add(JsonValue.Create(t));
+                    toolList.Add(JsonValue.Create(tool.Name));
                 }
 
                 index.Add(new JsonObject
                 {
-                    ["category"] = catName,
-                    [DescriptionPropertyName] = catDesc,
-                    ["count"] = catToolNames.Length,
+                    ["category"] = categoryDefinition.Name,
+                    ["summary"] = categoryDefinition.Summary,
+                    [DescriptionPropertyName] = categoryDefinition.Description,
+                    ["count"] = categoryTools.Count,
                     ["tools"] = toolList,
                 });
             }
 
             return WrapToolResult(new JsonObject
             {
-                ["categoryCount"] = ToolCategories.Length,
-                ["totalTools"] = ToolCategories.Sum(c => c.Tools.Length),
+                ["categoryCount"] = Registry.Definitions.Categories.Count,
+                ["totalTools"] = Registry.Definitions.All.Count,
                 ["usage"] = "Pass category: 'core' (or search/diagnostics/documents/debug/git/python/project/system) to get full tool schemas for that group.",
                 ["categories"] = index,
             }, isError: false);
         }
 
-        private static JsonObject BuildToolHelpEntry(JsonObject tool)
+        private static JsonObject BuildToolHelpEntry(VsIdeBridge.Shared.ToolDefinition tool)
         {
-            var name = tool["name"]?.GetValue<string>() ?? string.Empty;
-            var inputSchema = tool[InputSchemaPropertyName] as JsonObject ?? EmptySchema();
-            var bridgeCommand = ResolveBridgeCommandForTool(name);
             BridgeCommandMetadata? bridgeMetadata = null;
-            if (!string.IsNullOrWhiteSpace(bridgeCommand))
+            if (!string.IsNullOrWhiteSpace(tool.BridgeCommand))
             {
-                if (BridgeCommandCatalog.TryGetByPipeName(bridgeCommand, out var commandMetadata))
+                if (BridgeCommandCatalog.TryGetByPipeName(tool.BridgeCommand, out BridgeCommandMetadata? commandMetadata))
                 {
                     bridgeMetadata = commandMetadata;
                 }
             }
 
-            var hasBridgeMetadata = bridgeMetadata is not null;
-            var description = hasBridgeMetadata
-                ? bridgeMetadata!.Description
-                : tool["description"]?.GetValue<string>() ?? string.Empty;
-            var title = tool[TitlePropertyName]?.GetValue<string>() ?? BuildDefaultToolTitle(name);
-            var annotations = tool[AnnotationsPropertyName] as JsonObject ?? InferStandardToolAnnotations(name);
-            var outputSchema = tool[OutputSchemaPropertyName] as JsonObject;
-
-            string? bridgeCommandValue = hasBridgeMetadata ? bridgeMetadata!.PipeName : null;
-            string? bridgeExampleValue = hasBridgeMetadata ? bridgeMetadata!.Example : null;
-            var entry = new JsonObject
-            {
-                ["name"] = name,
-                ["description"] = description,
-                [InputSchemaPropertyName] = inputSchema.DeepClone(),
-                ["example"] = GetToolExample(name, inputSchema),
-                ["bridgeCommand"] = bridgeCommandValue,
-                ["bridgeExample"] = bridgeExampleValue,
-            };
-
-            if (!string.IsNullOrWhiteSpace(title))
-            {
-                entry[TitlePropertyName] = title;
-            }
-
-            if (annotations is not null && annotations.Count > 0)
-            {
-                entry[AnnotationsPropertyName] = annotations.DeepClone();
-            }
-
-            if (outputSchema is not null)
-            {
-                entry[OutputSchemaPropertyName] = outputSchema.DeepClone();
-            }
-
-            return entry;
+            return tool.BuildHelpEntry(
+                GetToolExample(tool.Name, tool.ParameterSchema),
+                bridgeMetadata?.Example);
         }
 
         private static JsonObject WrapToolResult(JsonObject payload, bool isError)
@@ -2400,6 +1356,7 @@ internal static partial class CliApp
                 QueryProjectReferencesToolName => ProjectToolExample(SampleCliTestProjectName, "\"declared_only\": true"),
                 QueryProjectOutputsToolName => ProjectToolExample(SampleCliProjectName, "\"configuration\": \"Release\"", "\"target_framework\": \"net8.0\""),
                 AddProjectToolName => ProjectToolExample("C:\\\\repo\\\\MyLib\\\\MyLib.csproj", "\"solution_folder\": \"Libraries\""),
+                CreateProjectToolName => "{ \"name\": \"MyLib\", \"template\": \"classlib\", \"solution_folder\": \"Libraries\" }",
                 RemoveProjectToolName => ProjectToolExample("MyLib"),
                 SetStartupProjectToolName => ProjectToolExample("VsIdeBridge"),
                 AddFileToProjectToolName => ProjectToolExample(SampleCliProjectName, "\"file\": \"src\\\\VsIdeBridgeCli\\\\Program.cs\""),
@@ -2498,78 +1455,10 @@ internal static partial class CliApp
 
         private static string? ResolveBridgeCommandForTool(string toolName)
         {
-            return toolName switch
-            {
-                "help" => "help",
-                BridgeStateToolName => "state",
-                UiSettingsToolName => "ui-settings",
-                WaitForReadyArgumentName => "ready",
-                "errors" => "errors",
-                WarningsToolName => "warnings",
-                ListTabsToolName => "list-tabs",
-                OpenFileToolName => "open-document",
-                FindFilesToolName => "find-files",
-                SearchSymbolsToolName => "search-symbols",
-                CountReferencesToolName => "count-references",
-                SymbolInfoToolName => "quick-info",
-                "apply_diff" => "apply-diff",
-                WriteFileToolName => "write-file",
-                DebugThreadsToolName => "debug-threads",
-                DebugStackToolName => "debug-stack",
-                DebugLocalsToolName => "debug-locals",
-                DebugModulesToolName => "debug-modules",
-                DebugWatchToolName => "debug-watch",
-                DebugExceptionsToolName => "debug-exceptions",
-                DiagnosticsSnapshotToolName => "diagnostics-snapshot",
-                BuildConfigurationsToolName => "build-configurations",
-                SetBuildConfigurationToolName => "set-build-configuration",
-                FindTextToolName => "find-text",
-                FindTextBatchToolName => "find-text-batch",
-                ReadFileToolName => "document-slice",
-                ReadFileBatchToolName => "document-slices",
-                FindReferencesToolName => "find-references",
-                PeekDefinitionToolName => "quick-info",
-                FileOutlineToolName => "file-outline",
-                "build" => "build",
-                "build_errors" => "build-errors",
-                OpenSolutionToolName => "open-solution",
-                CreateSolutionToolName => "create-solution",
-                ListDocumentsToolName => "list-documents",
-                "activate_document" => "activate-document",
-                "close_document" => "close-document",
-                SaveDocumentToolName => "save-document",
-                "reload_document" => "reload-document",
-                "close_file" => "close-file",
-                "close_others" => "close-others",
-                ListWindowsToolName => "list-windows",
-                "activate_window" => "activate-window",
-                "execute_command" => "execute-command",
-                GotoDefinitionToolName => "goto-definition",
-                GotoImplementationToolName => "goto-implementation",
-                CallHierarchyToolName => "call-hierarchy",
-                SearchSolutionsToolName => "search-solutions",
-                ListProjectsToolName => "list-projects",
-                QueryProjectItemsToolName => "query-project-items",
-                QueryProjectPropertiesToolName => "query-project-properties",
-                QueryProjectConfigurationsToolName => "query-project-configurations",
-                QueryProjectReferencesToolName => "query-project-references",
-                QueryProjectOutputsToolName => "query-project-outputs",
-                AddProjectToolName => "add-project",
-                RemoveProjectToolName => "remove-project",
-                SetStartupProjectToolName => "set-startup-project",
-                PythonSetProjectEnvToolName => "set-python-project-env",
-                AddFileToProjectToolName => "add-file-to-project",
-                RemoveFileFromProjectToolName => "remove-file-from-project",
-                "set_breakpoint" => "set-breakpoint",
-                ListBreakpointsToolName => "list-breakpoints",
-                "remove_breakpoint" => "remove-breakpoint",
-                ClearBreakpointsToolName => "clear-breakpoints",
-                "enable_breakpoint" => "enable-breakpoint",
-                "disable_breakpoint" => "disable-breakpoint",
-                "enable_all_breakpoints" => "enable-all-breakpoints",
-                "disable_all_breakpoints" => "disable-all-breakpoints",
-                _ => null,
-            };
+            if (Registry.TryGetDefinition(toolName, out VsIdeBridge.Shared.ToolDefinition? definition))
+                return definition.BridgeCommand;
+
+            return null;
         }
 
         private static async Task<JsonNode> BridgeHealthAsync(JsonNode? id, BridgeBinding bridgeBinding)
@@ -2585,7 +1474,7 @@ internal static partial class CliApp
             var isDegraded = GetBoolean(watchdog, "isDegraded", false);
             var readySuccess = ResponseFormatter.IsSuccess(ready);
             var stateSuccess = ResponseFormatter.IsSuccess(state);
-            var result = new JsonObject
+            var healthResult = new JsonObject
             {
                 ["success"] = stateSuccess && readySuccess && !isDegraded,
                 ["status"] = stateSuccess && readySuccess && !isDegraded ? "healthy" : "degraded",
@@ -2597,7 +1486,7 @@ internal static partial class CliApp
                 ["watchdog"] = watchdog?.DeepClone(),
             };
 
-            return WrapToolResult(result, isError: false);
+            return WrapToolResult(healthResult, isError: false);
         }
 
         private static async Task<JsonNode> OpenSolutionAsync(JsonNode? id, JsonObject? args, BridgeBinding bridgeBinding)
@@ -2625,14 +1514,14 @@ internal static partial class CliApp
                 state = await SendBridgeAsync(id, bridgeBinding, "state", string.Empty).ConfigureAwait(false);
             }
 
-            var result = new JsonObject
+            var openSolutionResult = new JsonObject
             {
                 ["open"] = open,
                 ["ready"] = ready,
                 ["state"] = state,
             };
 
-            return WrapToolResult(result, isError: !ResponseFormatter.IsSuccess(open));
+            return WrapToolResult(openSolutionResult, isError: !ResponseFormatter.IsSuccess(open));
         }
 
         private static async Task<JsonNode> CreateSolutionAsync(JsonNode? id, JsonObject? args, BridgeBinding bridgeBinding)
@@ -2674,14 +1563,14 @@ internal static partial class CliApp
                 state = await SendBridgeAsync(id, bridgeBinding, "state", string.Empty).ConfigureAwait(false);
             }
 
-            var result = new JsonObject
+            var createSolutionResult = new JsonObject
             {
                 ["create"] = create,
                 ["ready"] = ready,
                 ["state"] = state,
             };
 
-            return WrapToolResult(result, isError: !ResponseFormatter.IsSuccess(create));
+            return WrapToolResult(createSolutionResult, isError: !ResponseFormatter.IsSuccess(create));
         }
 
         private static async Task<JsonNode> ListInstancesAsync(BridgeBinding bridgeBinding)
@@ -2696,7 +1585,7 @@ internal static partial class CliApp
                 items.Add(json);
             }
 
-            var result = new JsonObject
+            var instanceListResult = new JsonObject
             {
                 ["success"] = true,
                 ["count"] = instances.Count,
@@ -2710,11 +1599,11 @@ internal static partial class CliApp
                     new JsonObject
                     {
                         ["type"] = "text",
-                        ["text"] = result.ToJsonString(JsonOptions),
+                        ["text"] = instanceListResult.ToJsonString(JsonOptions),
                     },
                 },
                 ["isError"] = false,
-                [StructuredContentPropertyName] = result,
+                [StructuredContentPropertyName] = instanceListResult,
             };
         }
 
@@ -2957,6 +1846,16 @@ internal static partial class CliApp
             var maxDepth = GetOptionalArgumentText(args, "max_depth");
             var max = GetOptionalArgumentText(args, "max");
             return BuildArgs((PathArgumentName, path), (QueryArgumentName, query), ("max-depth", maxDepth), ("max", max));
+        }
+
+        private static string BuildCreateProjectToolArgs(JsonObject? args)
+        {
+            var name = GetOptionalStringArgument(args, "name");
+            var template = GetOptionalStringArgument(args, "template");
+            var language = GetOptionalStringArgument(args, "language");
+            var directory = GetOptionalStringArgument(args, "directory");
+            var solutionFolder = GetOptionalStringArgument(args, "solution_folder");
+            return BuildArgs(("name", name), ("template", template), ("language", language), ("directory", directory), ("solution-folder", solutionFolder));
         }
 
         private static string BuildQueryProjectItemsToolArgs(JsonObject? args)
@@ -3561,9 +2460,16 @@ internal static partial class CliApp
 
         private static async Task<JsonNode> CallGitToolAsync(JsonNode? id, string toolName, JsonObject? args, BridgeBinding bridgeBinding)
         {
-            var workingDirectory = await ResolveSolutionWorkingDirectoryAsync(id, bridgeBinding).ConfigureAwait(false);
+            string workingDirectory = await ResolveSolutionWorkingDirectoryAsync(id, bridgeBinding).ConfigureAwait(false);
 
-            var gitArgs = toolName switch
+            JsonObject? managedGitResult = ManagedGitToolProvider.TryExecute(workingDirectory, toolName, args);
+            if (managedGitResult is not null)
+            {
+                bool isError = !(managedGitResult["success"]?.GetValue<bool>() ?? false);
+                return WrapToolResult(managedGitResult, isError);
+            }
+
+            string gitArgs = toolName switch
             {
                 "git_status" => "status --porcelain=v1 --branch",
                 "git_current_branch" => "branch --show-current",
@@ -3591,8 +2497,8 @@ internal static partial class CliApp
                 _ => throw new McpRequestException(id, JsonRpcInvalidParamsCode, FormatUnknownMcpToolMessage(toolName)),
             };
 
-            var timeoutMs = toolName is "git_push" or "git_pull" or "git_fetch" or GitMergeToolName or "git_clone" ? 120_000 : 30_000;
-            var gitResult = await RunGitAsync(workingDirectory, gitArgs, timeoutMs).ConfigureAwait(false);
+            int timeoutMs = toolName is "git_push" or "git_pull" or "git_fetch" or GitMergeToolName or "git_clone" ? 120_000 : 30_000;
+            JsonObject gitResult = await RunGitAsync(workingDirectory, gitArgs, timeoutMs).ConfigureAwait(false);
             return WrapToolResult(gitResult, !(gitResult["success"]?.GetValue<bool>() ?? false));
         }
 
@@ -3629,21 +2535,21 @@ internal static partial class CliApp
         private static async Task<JsonNode> CallPythonToolAsync(JsonNode? id, string toolName, JsonObject? args, BridgeBinding bridgeBinding)
         {
             var timeoutMs = GetIntOrDefault(args, TimeoutMillisecondsArgumentName, DefaultPythonToolTimeoutMilliseconds);
-            JsonObject result;
+            JsonObject pythonResult;
 
             switch (toolName)
             {
                 case PythonListEnvsToolName:
-                    result = await PythonRuntimeService.ListEnvironmentsAsync().ConfigureAwait(false);
+                    pythonResult = await PythonRuntimeService.ListEnvironmentsAsync().ConfigureAwait(false);
                     break;
                 case PythonEnvInfoToolName:
-                    result = await PythonRuntimeService.GetEnvironmentInfoAsync(GetOptionalStringArgument(args, PathArgumentName)).ConfigureAwait(false);
+                    pythonResult = await PythonRuntimeService.GetEnvironmentInfoAsync(GetOptionalStringArgument(args, PathArgumentName)).ConfigureAwait(false);
                     break;
                 case "python_set_active_env":
-                    result = await PythonRuntimeService.SetActiveEnvironmentAsync(GetOptionalStringArgument(args, PathArgumentName), GetOptionalStringArgument(args, "name")).ConfigureAwait(false);
+                    pythonResult = await PythonRuntimeService.SetActiveEnvironmentAsync(GetOptionalStringArgument(args, PathArgumentName), GetOptionalStringArgument(args, "name")).ConfigureAwait(false);
                     break;
                 case PythonListPackagesToolName:
-                    result = await PythonRuntimeService.ListPackagesAsync(GetOptionalStringArgument(args, PathArgumentName)).ConfigureAwait(false);
+                    pythonResult = await PythonRuntimeService.ListPackagesAsync(GetOptionalStringArgument(args, PathArgumentName)).ConfigureAwait(false);
                     break;
                 case "python_repl":
                 {
@@ -3663,14 +2569,14 @@ internal static partial class CliApp
                         return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
                     }
 
-                    result = await PythonRuntimeService.ExecuteSnippetAsync(
+                    pythonResult = await PythonRuntimeService.ExecuteSnippetAsync(
                         GetRequiredString(args, id, CodeArgumentName),
                         interpreterPath,
                         workingDirectory,
                         timeoutMs,
                         approved: true,
                         allowUnrestrictedExecution).ConfigureAwait(false);
-                    AttachApprovalMetadata(result, approvalResponse);
+                    AttachApprovalMetadata(pythonResult, approvalResponse);
                     break;
                 }
                 case "python_run_file":
@@ -3692,7 +2598,7 @@ internal static partial class CliApp
                         return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
                     }
 
-                    result = await PythonRuntimeService.RunFileAsync(
+                    pythonResult = await PythonRuntimeService.RunFileAsync(
                         filePath,
                         GetOptionalStringArray(args, "args"),
                         interpreterPath,
@@ -3700,7 +2606,7 @@ internal static partial class CliApp
                         timeoutMs,
                         approved: true,
                         allowUnrestrictedExecution).ConfigureAwait(false);
-                    AttachApprovalMetadata(result, approvalResponse);
+                    AttachApprovalMetadata(pythonResult, approvalResponse);
                     break;
                 }
                 case PythonInstallPackageToolName:
@@ -3720,12 +2626,12 @@ internal static partial class CliApp
                         return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
                     }
 
-                    result = await PythonRuntimeService.InstallPackagesAsync(
+                    pythonResult = await PythonRuntimeService.InstallPackagesAsync(
                         packages,
                         interpreterPath,
                         timeoutMs,
                         approved: true).ConfigureAwait(false);
-                    AttachApprovalMetadata(result, approvalResponse);
+                    AttachApprovalMetadata(pythonResult, approvalResponse);
                     break;
                 }
                 case "python_install_requirements":
@@ -3745,12 +2651,12 @@ internal static partial class CliApp
                         return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
                     }
 
-                    result = await PythonRuntimeService.InstallRequirementsAsync(
+                    pythonResult = await PythonRuntimeService.InstallRequirementsAsync(
                         requirementsFile,
                         interpreterPath,
                         timeoutMs,
                         approved: true).ConfigureAwait(false);
-                    AttachApprovalMetadata(result, approvalResponse);
+                    AttachApprovalMetadata(pythonResult, approvalResponse);
                     break;
                 }
                 case PythonRemovePackageToolName:
@@ -3770,12 +2676,12 @@ internal static partial class CliApp
                         return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
                     }
 
-                    result = await PythonRuntimeService.RemovePackagesAsync(
+                    pythonResult = await PythonRuntimeService.RemovePackagesAsync(
                         packages,
                         interpreterPath,
                         timeoutMs,
                         approved: true).ConfigureAwait(false);
-                    AttachApprovalMetadata(result, approvalResponse);
+                    AttachApprovalMetadata(pythonResult, approvalResponse);
                     break;
                 }
                 case PythonCreateEnvToolName:
@@ -3796,20 +2702,20 @@ internal static partial class CliApp
                         return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
                     }
 
-                    result = await PythonRuntimeService.CreateEnvironmentAsync(
+                    pythonResult = await PythonRuntimeService.CreateEnvironmentAsync(
                         targetPath,
                         baseInterpreterPath,
                         workingDirectory,
                         timeoutMs,
                         approved: true).ConfigureAwait(false);
-                    AttachApprovalMetadata(result, approvalResponse);
+                    AttachApprovalMetadata(pythonResult, approvalResponse);
                     break;
                 }
                 default:
                     throw new McpRequestException(id, JsonRpcInvalidParamsCode, FormatUnknownMcpToolMessage(toolName));
             }
 
-            return WrapToolResult(result, !(result["success"]?.GetValue<bool>() ?? false));
+            return WrapToolResult(pythonResult, !(pythonResult["success"]?.GetValue<bool>() ?? false));
         }
 
         private static async Task<string> ResolvePythonWorkingDirectoryAsync(JsonNode? id, JsonObject? args, BridgeBinding bridgeBinding)
@@ -3851,23 +2757,23 @@ internal static partial class CliApp
                 return WrapToolResult(BuildApprovalFailurePayload(approvalResponse), isError: true);
             }
 
-            var result = await RunProcessAsync(exe, arguments, workingDirectory, timeoutMs).ConfigureAwait(false);
+            var processResult = await RunProcessAsync(exe, arguments, workingDirectory, timeoutMs).ConfigureAwait(false);
             var tailLines = GetIntOrDefault(args, "tail_lines", 0);
             if (tailLines > 0)
             {
                 foreach (var key in new[] { "stdout", "stderr" })
                 {
-                    var text = result[key]?.GetValue<string>();
+                    var text = processResult[key]?.GetValue<string>();
                     if (!string.IsNullOrEmpty(text))
                     {
                         var lines = text.Split('\n');
                         if (lines.Length > tailLines)
-                            result[key] = JsonValue.Create(string.Join('\n', lines[^tailLines..]));
+                            processResult[key] = JsonValue.Create(string.Join('\n', lines[^tailLines..]));
                     }
                 }
             }
-            AttachApprovalMetadata(result, approvalResponse);
-            return WrapToolResult(result, !(result["success"]?.GetValue<bool>() ?? false));
+            AttachApprovalMetadata(processResult, approvalResponse);
+            return WrapToolResult(processResult, !(processResult["success"]?.GetValue<bool>() ?? false));
         }
 
         private static async Task<JsonNode> CallSetVersionToolAsync(JsonNode? id, JsonObject? args, BridgeBinding bridgeBinding)
@@ -3921,15 +2827,15 @@ internal static partial class CliApp
                 updatedFiles.Add(JsonValue.Create("installer/inno/vs-ide-bridge.iss"));
             }
 
-            var result = new JsonObject
+            var versionResult = new JsonObject
             {
                 ["success"] = true,
                 ["version"] = version,
                 ["updated_files"] = updatedFiles,
                 ["file_count"] = updatedFiles.Count,
             };
-            AttachApprovalMetadata(result, approvalResponse);
-            return WrapToolResult(result, isError: false);
+            AttachApprovalMetadata(versionResult, approvalResponse);
+            return WrapToolResult(versionResult, isError: false);
         }
 
         private static JsonObject CallVsCloseTool(JsonNode? id, JsonObject? args, BridgeBinding bridgeBinding)
@@ -3970,14 +2876,14 @@ internal static partial class CliApp
                 signalSent = process.CloseMainWindow();
             }
 
-            var result = new JsonObject
+            var killProcessResult = new JsonObject
             {
                 ["success"] = true,
                 ["pid"] = pid,
                 ["force"] = force,
                 ["signal_sent"] = signalSent,
             };
-            return WrapToolResult(result, isError: false);
+            return WrapToolResult(killProcessResult, isError: false);
         }
 
         private static async Task<JsonObject> CallVsOpenToolAsync(JsonNode? id, JsonObject? args)
@@ -3997,7 +2903,7 @@ internal static partial class CliApp
                 throw new McpRequestException(id, BridgeErrorCode, $"Visual Studio launch request failed via {launched.Launcher}.{stderr}");
             }
 
-            var result = new JsonObject
+            var vsOpenResult = new JsonObject
             {
                 ["success"] = true,
                 ["pid"] = launched.ProcessId,
@@ -4006,7 +2912,7 @@ internal static partial class CliApp
                 ["devenv_path"] = devenvPath,
                 [SolutionArgumentName] = solution ?? string.Empty,
             };
-            return WrapToolResult(result, isError: false);
+            return WrapToolResult(vsOpenResult, isError: false);
         }
 
         private static async Task<JsonObject> CallWaitForInstanceToolAsync(JsonNode? id, JsonObject? args, BridgeBinding bridgeBinding)
@@ -4026,9 +2932,9 @@ internal static partial class CliApp
                     timeoutMilliseconds).ConfigureAwait(false)
                 ?? throw new McpRequestException(id, BridgeErrorCode, $"No live VS IDE Bridge instance appeared within {timeoutMilliseconds} ms.");
 
-            var result = DiscoveryToJson(discovered);
-            result["success"] = true;
-            return WrapToolResult(result, isError: false);
+            var discoveryResult = DiscoveryToJson(discovered);
+            discoveryResult["success"] = true;
+            return WrapToolResult(discoveryResult, isError: false);
         }
 
         private static async Task<PipeDiscovery?> WaitForVisualStudioInstanceAsync(
@@ -4504,8 +3410,8 @@ internal static partial class CliApp
             if (string.IsNullOrWhiteSpace(solutionPath))
             {
                 var state = await SendBridgeAsync(id, bridgeBinding, "state", string.Empty).ConfigureAwait(false);
-                var data = state["Data"] as JsonObject;
-                solutionPath = data?["solutionPath"]?.GetValue<string>() ?? string.Empty;
+                var stateData = state["Data"] as JsonObject;
+                solutionPath = stateData?["solutionPath"]?.GetValue<string>() ?? string.Empty;
             }
 
             var directory = Path.GetDirectoryName(solutionPath);
@@ -4737,14 +3643,14 @@ internal static partial class CliApp
                 throw new McpRequestException(id, -32006, "Missing GITHUB_TOKEN (or GH_TOKEN) for GitHub issue operations.");
             }
 
-            var result = toolName switch
+            var githubResult = toolName switch
             {
                 "github_issue_search" => await GitHubIssueSearchAsync(repo, args, token).ConfigureAwait(false),
                 "github_issue_close" => await GitHubIssueCloseAsync(repo, args, token, id).ConfigureAwait(false),
                 _ => throw new McpRequestException(id, JsonRpcInvalidParamsCode, FormatUnknownMcpToolMessage(toolName)),
             };
 
-            return WrapToolResult(result, !(result["success"]?.GetValue<bool>() ?? false));
+            return WrapToolResult(githubResult, !(githubResult["success"]?.GetValue<bool>() ?? false));
         }
 
         private static async Task<JsonObject> GitHubIssueSearchAsync(string repo, JsonObject? args, string token)
@@ -4757,18 +3663,18 @@ internal static partial class CliApp
             }
 
             var limit = Math.Clamp(GetIntOrDefault(args, "limit", DefaultGitHubIssueSearchLimit), 1, 100);
-            var q = $"repo:{repo} is:issue";
+            var issueQuery = $"repo:{repo} is:issue";
             if (state != "all")
             {
-                q += $" is:{state}";
+                issueQuery += $" is:{state}";
             }
 
             if (!string.IsNullOrWhiteSpace(query))
             {
-                q += $" {query}";
+                issueQuery += $" {query}";
             }
 
-            var uri = $"https://api.github.com/search/issues?q={Uri.EscapeDataString(q)}&per_page={limit}";
+            var uri = $"https://api.github.com/search/issues?q={Uri.EscapeDataString(issueQuery)}&per_page={limit}";
             return await SendGitHubRequestAsync(HttpMethod.Get, uri, token).ConfigureAwait(false);
         }
 
@@ -4793,13 +3699,13 @@ internal static partial class CliApp
 
         private static async Task<string?> ResolveGitHubRepoFromOriginAsync(string workingDirectory)
         {
-            var result = await RunGitAsync(workingDirectory, "remote get-url origin").ConfigureAwait(false);
-            if (!(result["success"]?.GetValue<bool>() ?? false))
+            var gitOriginResult = await RunGitAsync(workingDirectory, "remote get-url origin").ConfigureAwait(false);
+            if (!(gitOriginResult["success"]?.GetValue<bool>() ?? false))
             {
                 return null;
             }
 
-            var url = (result["stdout"]?.GetValue<string>() ?? string.Empty).Trim();
+            var url = (gitOriginResult["stdout"]?.GetValue<string>() ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(url))
             {
                 return null;
@@ -5028,17 +3934,17 @@ internal static partial class CliApp
                     return Encoding.ASCII.GetString([.. bytes]);
                 }
 
-                var b = new byte[1];
-                var read = await input.ReadAsync(b).ConfigureAwait(false);
+                var singleByte = new byte[1];
+                var read = await input.ReadAsync(singleByte).ConfigureAwait(false);
                 if (read == 0)
                 {
                     McpTrace($"ReadHeaderAsync: EOF after {bytes.Count} bytes. First bytes: {BitConverter.ToString([.. firstBytes])}");
                     return string.Empty;
                 }
 
-                bytes.Add(b[0]);
-                if (firstBytes.Count < 64) firstBytes.Add(b[0]);
-                lastFour.Enqueue(b[0]);
+                bytes.Add(singleByte[0]);
+                if (firstBytes.Count < 64) firstBytes.Add(singleByte[0]);
+                lastFour.Enqueue(singleByte[0]);
                 if (lastFour.Count > HeaderTerminatorLength)
                 {
                     lastFour.Dequeue();

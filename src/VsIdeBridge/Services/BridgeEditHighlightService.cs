@@ -73,9 +73,9 @@ internal sealed class BridgeEditHighlightService
             return [];
         }
 
-        var result = new List<(SnapshotSpan, string)>();
-        result.AddRange(state.AddedOrModified.Select(span => (span.GetSpan(snapshot), "VsIdeBridgeChangedLine")));
-        result.AddRange(state.DeletedMarkers.Select(span => (span.GetSpan(snapshot), "VsIdeBridgeDeletedLine")));
-        return result;
+        var highlightSpans = new List<(SnapshotSpan, string)>();
+        highlightSpans.AddRange(state.AddedOrModified.Select(span => (span.GetSpan(snapshot), "VsIdeBridgeChangedLine")));
+        highlightSpans.AddRange(state.DeletedMarkers.Select(span => (span.GetSpan(snapshot), "VsIdeBridgeDeletedLine")));
+        return highlightSpans;
     }
 }

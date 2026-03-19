@@ -361,8 +361,8 @@ internal sealed class PipeServerService : IDisposable
         {
             try
             {
-                var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: PipeStreamBufferSize, leaveOpen: true);
-                var writer = new StreamWriter(pipe, new UTF8Encoding(false), bufferSize: PipeStreamBufferSize, leaveOpen: true)
+                using var reader = new StreamReader(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: PipeStreamBufferSize, leaveOpen: true);
+                using var writer = new StreamWriter(pipe, new UTF8Encoding(false), bufferSize: PipeStreamBufferSize, leaveOpen: true)
                 {
                     AutoFlush = true,
                     NewLine = "\n",
@@ -538,19 +538,19 @@ internal sealed class PipeServerService : IDisposable
                 throw new OperationCanceledException(commandToken);
             }
 
-            var result = await executionTask.ConfigureAwait(false);
+            var commandResult = await executionTask.ConfigureAwait(false);
 
             await _runtime.Logger.LogAsync(
-                $"IDE Bridge: {commandName} OK - {result.Summary}",
+                $"IDE Bridge: {commandName} OK - {commandResult.Summary}",
                 commandToken,
                 activatePane: ShouldRevealActivity(commandName)).ConfigureAwait(false);
             await _runtime.Logger.LogAsync($"IDE Bridge Trace: {commandName} end (duration={commandStopwatch.ElapsedMilliseconds}ms)", commandToken).ConfigureAwait(false);
             _runtime.BridgeWatchdogService.RecordCommandCompleted(commandName, requestId, success: true, durationMs: commandStopwatch.Elapsed.TotalMilliseconds, errorCode: null);
             completionRecorded = true;
-            var summary = BuildQueuedSummary(result.Summary, queuePositionAtEnqueue, queueWaitMs);
-            var data = WithQueueMetadata(result.Data, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
-            var warnings = WithQueueWarning(result.Warnings, queuePositionAtEnqueue, queueWaitMs);
-            var envelope = BuildEnvelope(commandName, requestId, true, summary, data, warnings, null, startedAtUtc);
+            var summary = BuildQueuedSummary(commandResult.Summary, queuePositionAtEnqueue, queueWaitMs);
+            var responseData = WithQueueMetadata(commandResult.Data, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
+            var warnings = WithQueueWarning(commandResult.Warnings, queuePositionAtEnqueue, queueWaitMs);
+            var envelope = BuildEnvelope(commandName, requestId, true, summary, responseData, warnings, null, startedAtUtc);
             return JsonConvert.SerializeObject(envelope);
         }
         catch (OperationCanceledException) when (commandCts.IsCancellationRequested && !serverCancellationToken.IsCancellationRequested)
@@ -579,9 +579,9 @@ internal sealed class PipeServerService : IDisposable
             _runtime.BridgeWatchdogService.RecordCommandCompleted(commandName, requestId, success: false, durationMs: commandStopwatch.Elapsed.TotalMilliseconds, errorCode);
             completionRecorded = true;
             var queuedSummary = BuildQueuedSummary(summary, queuePositionAtEnqueue, queueWaitMs);
-            var data = WithQueueMetadata(failureData, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
+            var responseData = WithQueueMetadata(failureData, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
             var warnings = WithQueueWarning([], queuePositionAtEnqueue, queueWaitMs);
-            var envelope = BuildEnvelope(commandName, requestId, false, queuedSummary, data, warnings, errorObj, startedAtUtc);
+            var envelope = BuildEnvelope(commandName, requestId, false, queuedSummary, responseData, warnings, errorObj, startedAtUtc);
             return JsonConvert.SerializeObject(envelope);
         }
         catch (CommandErrorException ex)
@@ -593,9 +593,9 @@ internal sealed class PipeServerService : IDisposable
             _runtime.BridgeWatchdogService.RecordCommandCompleted(commandName, requestId, success: false, durationMs: commandStopwatch.Elapsed.TotalMilliseconds, ex.Code);
             completionRecorded = true;
             var summary = BuildQueuedSummary(ex.Message, queuePositionAtEnqueue, queueWaitMs);
-            var data = WithQueueMetadata(failureData, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
+            var responseData = WithQueueMetadata(failureData, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
             var warnings = WithQueueWarning([], queuePositionAtEnqueue, queueWaitMs);
-            var envelope = BuildEnvelope(commandName, requestId, false, summary, data, warnings, errorObj, startedAtUtc);
+            var envelope = BuildEnvelope(commandName, requestId, false, summary, responseData, warnings, errorObj, startedAtUtc);
             return JsonConvert.SerializeObject(envelope);
         }
         catch (Exception ex)
@@ -607,9 +607,9 @@ internal sealed class PipeServerService : IDisposable
             _runtime.BridgeWatchdogService.RecordCommandCompleted(commandName, requestId, success: false, durationMs: commandStopwatch.Elapsed.TotalMilliseconds, "internal_error");
             completionRecorded = true;
             var summary = BuildQueuedSummary(ex.Message, queuePositionAtEnqueue, queueWaitMs);
-            var data = WithQueueMetadata(failureData, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
+            var responseData = WithQueueMetadata(failureData, enqueuedAtUtc, startedAtUtc, queuePositionAtEnqueue, queueWaitMs);
             var warnings = WithQueueWarning([], queuePositionAtEnqueue, queueWaitMs);
-            var envelope = BuildEnvelope(commandName, requestId, false, summary, data, warnings, errorObj, startedAtUtc);
+            var envelope = BuildEnvelope(commandName, requestId, false, summary, responseData, warnings, errorObj, startedAtUtc);
             return JsonConvert.SerializeObject(envelope);
         }
         finally
