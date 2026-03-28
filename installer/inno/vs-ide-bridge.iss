@@ -1,6 +1,7 @@
 #define MyAppName "VS IDE Bridge"
+#define MyAppFolderName "VsIdeBridge"
 #define MyAppPublisher "RenegadeRiff86"
-#define MyAppURL "https://github.com/RenegadeRiff86/visual-studio-mcp"
+#define MyAppURL "https://github.com/RenegadeRiff86/Visual-Studio-MCP"
 #define MyAppVersion "2.2.6"
 #define ServiceName "VsIdeBridgeService"
 #define VsixId "RenegadeRiff86.VsIdeBridge"
@@ -15,7 +16,7 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\VsIdeBridge
+DefaultDirName={autopf}\{#MyAppFolderName}
 DisableProgramGroupPage=yes
 LicenseFile=..\..\LICENSE
 PrivilegesRequired=admin

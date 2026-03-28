@@ -1,6 +1,6 @@
 # VS IDE Bridge
 
-VS IDE Bridge connects LLM tools to a live Visual Studio instance so they can read code, navigate symbols, apply diffs, inspect diagnostics, build projects, and run service-native helper tools.
+VS IDE Bridge lets an LLM work against your actual live Visual Studio instance in real time so it can read code, navigate symbols, apply diffs, inspect diagnostics, build projects, and run service-native helper tools.
 
 This file is the main product and operator guide.
 
