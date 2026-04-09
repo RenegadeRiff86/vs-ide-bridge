@@ -57,6 +57,18 @@ internal sealed partial class PatchService
             return PathNormalization.NormalizeFilePath(relativeOrAbsolutePath);
         }
 
+        if (TryResolveUniqueSolutionFileByName(dte, relativeOrAbsolutePath, out string? uniqueSolutionPath, out int ambiguousMatchCount))
+        {
+            return uniqueSolutionPath!;
+        }
+
+        if (ambiguousMatchCount > 1)
+        {
+            throw new CommandErrorException(
+                InvalidArgumentsCode,
+                $"Patch path '{relativeOrAbsolutePath}' is ambiguous in the active solution. Use a longer relative path to disambiguate it.");
+        }
+
         string solutionDirectory = dte.Solution?.IsOpen == true
             ? Path.GetDirectoryName(dte.Solution.FullName) ?? baseDirectory
             : baseDirectory;
@@ -129,6 +141,99 @@ internal sealed partial class PatchService
         }
 
         return PathNormalization.NormalizeFilePath(Path.Combine(baseDirectory, relativeOrAbsolutePath));
+    }
+
+    private static bool TryResolveUniqueSolutionFileByName(DTE2 dte, string relativeOrAbsolutePath, out string? resolvedPath, out int matchCount)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        resolvedPath = null;
+        matchCount = 0;
+
+        if (string.IsNullOrWhiteSpace(relativeOrAbsolutePath) ||
+            relativeOrAbsolutePath.IndexOfAny(['\\', '/', ':']) >= 0 ||
+            dte.Solution?.IsOpen != true)
+        {
+            return false;
+        }
+
+        string targetFileName = Path.GetFileName(relativeOrAbsolutePath);
+        if (string.IsNullOrWhiteSpace(targetFileName))
+        {
+            return false;
+        }
+
+        HashSet<string> matches = CreatePathMatchSet();
+        foreach (Project project in dte.Solution.Projects)
+        {
+            CollectMatchingProjectItemPaths(project, targetFileName, matches);
+        }
+
+        matchCount = matches.Count;
+        if (matchCount == 1)
+        {
+            resolvedPath = PathNormalization.NormalizeFilePath(matches.First());
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void CollectMatchingProjectItemPaths(Project project, string targetFileName, HashSet<string> matches)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            if (project.ProjectItems is not null)
+            {
+                CollectMatchingProjectItemPaths(project.ProjectItems, targetFileName, matches);
+            }
+
+        }
+        catch (COMException)
+        {
+            // Some project types throw while expanding items; ignore and keep searching.
+        }
+    }
+
+    private static HashSet<string> CreatePathMatchSet()
+    {
+        return new HashSet<string>([], StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void CollectMatchingProjectItemPaths(ProjectItems items, string targetFileName, HashSet<string> matches)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        foreach (ProjectItem item in items)
+        {
+            try
+            {
+                if (string.Equals(item.Name, targetFileName, StringComparison.OrdinalIgnoreCase) && item.FileCount > 0)
+                {
+                    string candidate = item.FileNames[1];
+                    if (!string.IsNullOrWhiteSpace(candidate))
+                    {
+                        matches.Add(candidate);
+                    }
+                }
+
+                if (item.ProjectItems is { Count: > 0 })
+                {
+                    CollectMatchingProjectItemPaths(item.ProjectItems, targetFileName, matches);
+                }
+
+                if (item.SubProject is not null)
+                {
+                    CollectMatchingProjectItemPaths(item.SubProject, targetFileName, matches);
+                }
+            }
+            catch (COMException)
+            {
+                // Ignore transient/unsupported project item states and continue.
+            }
+        }
     }
 
     private static void AddDistinctPath(List<string> paths, string? value)
@@ -227,7 +332,8 @@ internal sealed partial class PatchService
         ThreadHelper.ThrowIfNotOnUIThread();
 
         Document activeDocument = dte.ActiveDocument;
-        if (activeDocument is null || string.IsNullOrWhiteSpace(activeDocument.FullName))
+        string? activeDocumentPath = TryGetActiveDocumentFullName(activeDocument);
+        if (activeDocument is null || string.IsNullOrWhiteSpace(activeDocumentPath))
         {
             return null;
         }
@@ -242,12 +348,41 @@ internal sealed partial class PatchService
                 column = Math.Max(1, textDocument.Selection.ActivePoint.DisplayColumn);
             }
         }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
+        {
+            return (PathNormalization.NormalizeFilePath(activeDocumentPath), line, column);
+        }
         catch (COMException ex)
         {
             System.Diagnostics.Debug.WriteLine(ex);
         }
 
-        return (PathNormalization.NormalizeFilePath(activeDocument.FullName), line, column);
+        return (PathNormalization.NormalizeFilePath(activeDocumentPath), line, column);
+    }
+
+    private static string? TryGetActiveDocumentFullName(Document? document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (document is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return document.FullName;
+        }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
+        {
+            return null;
+        }
+    }
+
+    private static bool IsDeferredDocumentLoadFailure(Exception ex)
+    {
+        return string.Equals(ex.GetType().FullName, "Microsoft.Assumes+InternalErrorException", StringComparison.Ordinal)
+            || string.Equals(ex.GetType().Name, "InternalErrorException", StringComparison.Ordinal);
     }
 
     private static async Task RestoreActiveDocumentAsync(

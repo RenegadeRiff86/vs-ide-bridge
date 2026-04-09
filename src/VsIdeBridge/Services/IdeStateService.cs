@@ -2,6 +2,7 @@ using EnvDTE;
 using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -77,7 +78,7 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
         string solutionName = dte.Solution?.IsOpen == true ? Path.GetFileName(dte.Solution.FullName) : string.Empty;
         string solutionDirectory = dte.Solution?.IsOpen == true ? Path.GetDirectoryName(dte.Solution.FullName) ?? string.Empty : string.Empty;
         Document? activeDocument = dte.ActiveDocument;
-        string? activeDocumentPath = activeDocument?.FullName;
+        string? activeDocumentPath = TryGetDocumentFullName(activeDocument);
         TextSelection? selection = TryGetActiveTextSelection(activeDocument, out TextSelection activeSelection) ? activeSelection : null;
         SolutionConfiguration? activeConfig = dte.Solution?.SolutionBuild?.ActiveConfiguration;
 
@@ -167,7 +168,7 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
         List<string> items = [];
         foreach (Document document in dte.Documents)
         {
-            string fullName = document.FullName;
+            string? fullName = TryGetDocumentFullName(document);
             if (!string.IsNullOrWhiteSpace(fullName))
                 items.Add(PathNormalization.NormalizeFilePath(fullName));
         }
@@ -187,7 +188,31 @@ internal sealed class IdeStateService(BridgeInstanceService bridgeInstanceServic
             selection = textDocument.Selection;
             return selection is not null;
         }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex)) { return false; }
         catch (COMException) { return false; }
+    }
+
+    private static string? TryGetDocumentFullName(Document? document)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (document is null)
+            return null;
+
+        try
+        {
+            return document.FullName;
+        }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
+        {
+            return null;
+        }
+    }
+
+    private static bool IsDeferredDocumentLoadFailure(Exception ex)
+    {
+        return string.Equals(ex.GetType().FullName, "Microsoft.Assumes+InternalErrorException", StringComparison.Ordinal)
+            || string.Equals(ex.GetType().Name, "InternalErrorException", StringComparison.Ordinal);
     }
 
     private static string[] GetStartupProjects(DTE2 dte)

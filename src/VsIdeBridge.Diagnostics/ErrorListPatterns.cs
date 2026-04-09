@@ -73,6 +73,12 @@ internal static partial class ErrorListPatterns
     [GeneratedRegex(@"catch\s*\(\s*(?:System\.)?Exception(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\)(?!\s*when\b)")]
     public static partial Regex BroadCatchPattern();
 
+    [GeneratedRegex(@"^[ \t]*#pragma\s+warning\s+disable\b.*$", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+    public static partial Regex PragmaWarningDisablePattern();
+
+    [GeneratedRegex(@"(?im)^[ \t]*(?://+|#|'+|/\*+|\*+|\(\*)\s*TODO\b(?<text>.*)$")]
+    public static partial Regex TodoCommentPattern();
+
     [GeneratedRegex(@"\bSystem\.(?<type>String|Int16|Int32|Int64|UInt16|UInt32|UInt64|Boolean|Object|Decimal|Double|Single|Byte|SByte|Char)\b")]
     public static partial Regex FrameworkTypePattern();
 

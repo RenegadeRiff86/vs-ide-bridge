@@ -3,7 +3,13 @@ using EnvDTE80;
 using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
@@ -12,6 +18,13 @@ namespace VsIdeBridge.Services;
 internal sealed class WindowService
 {
     private const int WindowPollIntervalMilliseconds = 200;
+    private const int WindowActivationDelayMilliseconds = 150;
+    private const string User32Dll = "user32.dll";
+    private const uint SwpNoActivate = 0x0010;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoSize = 0x0001;
+    private static readonly IntPtr HwndTopMost = new(-1);
+    private static readonly IntPtr HwndNotTopMost = new(-2);
 
     public async Task<JObject> ListWindowsAsync(DTE2 dte, string? query)
     {
@@ -71,6 +84,45 @@ internal sealed class WindowService
         }
 
         return null;
+    }
+
+    public async Task<JObject> CaptureVsWindowAsync(DTE2 dte, string? outputPath)
+    {
+        var (windowHandle, caption, resolvedPath) =
+            await PrepareWindowCaptureAsync(dte, outputPath).ConfigureAwait(true);
+
+        WindowCaptureResult capture = await Task.Run(
+                () => CaptureWindowToFile(windowHandle, resolvedPath),
+                CancellationToken.None)
+            .ConfigureAwait(false);
+
+        return new JObject
+        {
+            ["path"] = capture.Path,
+            ["width"] = capture.Width,
+            ["height"] = capture.Height,
+            ["windowCaption"] = caption,
+            ["activated"] = true,
+            ["topMost"] = true,
+        };
+    }
+
+    private static async Task<(IntPtr WindowHandle, string Caption, string ResolvedPath)> PrepareWindowCaptureAsync(DTE2 dte, string? outputPath)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        IntPtr windowHandle = GetVsMainWindowHandle(dte);
+        if (windowHandle == IntPtr.Zero)
+        {
+            throw new CommandErrorException("window_not_found", "Could not resolve the Visual Studio main window handle.");
+        }
+
+        string caption = GetWindowCaptionSafe(dte.MainWindow);
+        string resolvedPath = ResolveCapturePath(outputPath);
+
+        ActivateAndPromoteWindow(windowHandle, dte.MainWindow);
+        await Task.Delay(WindowActivationDelayMilliseconds).ConfigureAwait(true);
+        return (windowHandle, caption, resolvedPath);
     }
 
     private static bool MatchesWindow(JObject window, string? query)
@@ -210,6 +262,90 @@ internal sealed class WindowService
         return token is not null && Contains(token.ToString(), query);
     }
 
+    private static IntPtr GetVsMainWindowHandle(DTE2 dte)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            IntPtr hWnd = dte.MainWindow.HWnd;
+            if (hWnd != IntPtr.Zero)
+            {
+                return hWnd;
+            }
+        }
+        catch (COMException ex)
+        {
+            Trace.TraceWarning($"Failed to read the Visual Studio main window handle from DTE: {ex.Message}");
+        }
+
+        return System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
+    }
+
+    private static string ResolveCapturePath(string? outputPath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        string baseDirectory = Path.Combine(Path.GetTempPath(), "vs-ide-bridge", "screenshots");
+
+        string resolvedPath = string.IsNullOrWhiteSpace(outputPath)
+            ? Path.Combine(baseDirectory, $"vs-window-{DateTime.Now:yyyyMMdd-HHmmss}.png")
+            : outputPath!;
+
+        if (!Path.IsPathRooted(resolvedPath))
+        {
+            resolvedPath = Path.Combine(baseDirectory, resolvedPath);
+        }
+
+        string normalizedPath = Path.GetFullPath(resolvedPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(normalizedPath) ?? baseDirectory);
+        return normalizedPath;
+    }
+
+    private static void ActivateAndPromoteWindow(IntPtr windowHandle, Window mainWindow)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            mainWindow.Activate();
+        }
+        catch (COMException ex)
+        {
+            Trace.TraceWarning($"Failed to activate Visual Studio before capture: {ex.Message}");
+        }
+
+        ShowWindow(windowHandle, 9);
+        SetWindowPos(windowHandle, HwndTopMost, 0, 0, 0, 0, SwpNoMove | SwpNoSize);
+        SetForegroundWindow(windowHandle);
+        BringWindowToTop(windowHandle);
+        SetWindowPos(windowHandle, HwndNotTopMost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpNoActivate);
+    }
+
+    private static WindowCaptureResult CaptureWindowToFile(IntPtr windowHandle, string outputPath)
+    {
+        if (!GetWindowRect(windowHandle, out RECT rect))
+        {
+            throw new CommandErrorException("window_capture_failed", "Failed to read the Visual Studio window bounds.");
+        }
+
+        int width = rect.Right - rect.Left;
+        int height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0)
+        {
+            throw new CommandErrorException("window_capture_failed", "The Visual Studio window bounds were empty.");
+        }
+
+        using Bitmap bitmap = new(width, height);
+        using (Graphics graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.CopyFromScreen(rect.Left, rect.Top, 0, 0, new Size(width, height));
+        }
+
+        bitmap.Save(outputPath, ImageFormat.Png);
+        return new WindowCaptureResult(outputPath, width, height);
+    }
+
     private static string GetWindowCaption(Window window)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -293,4 +429,35 @@ internal sealed class WindowService
             return false;
         }
     }
+
+    private readonly record struct WindowCaptureResult(string Path, int Width, int Height);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport(User32Dll)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport(User32Dll)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport(User32Dll)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport(User32Dll, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+    [DllImport(User32Dll, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 }

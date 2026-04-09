@@ -133,13 +133,13 @@ From there you can read code, navigate symbols, apply edits, inspect diagnostics
 
 ## Tool Overview
 
-The bridge currently exposes **145 tools** across 9 categories. Use `list_tool_categories`, `list_tools`, and `list_tools_by_category` for live discovery, and `recommend_tools` to ask the bridge which tools fit a given task.
+The bridge currently exposes **147 tools** across 9 categories. Use `list_tool_categories`, `list_tools`, and `list_tools_by_category` for live discovery, and `recommend_tools` to ask the bridge which tools fit a given task.
 
 ### core — Session and binding
 
 Connect to the right VS instance and manage the current session.
 
-`list_instances` · `bind_instance` · `bind_solution` · `bridge_health` · `vs_state` · `wait_for_ready` · `open_file` · `save_document` · `reload_document` · `http_enable` · `http_status`
+`list_instances` · `bind_instance` · `bind_solution` · `bridge_health` · `vs_state` · `wait_for_ready` · `open_file` · `save_document` · `reload_document` · `activate_document` · `activate_window` · `list_windows` · `http_enable` · `http_status`
 
 ### search — Code navigation
 
@@ -151,13 +151,13 @@ Find files, inspect symbols, read code, and trace definitions and references.
 
 Inspect the live Error List and drive builds.
 
-`errors` · `warnings` · `diagnostics_snapshot` · `build` · `build_solution` · `rebuild_solution` · `build_errors` · `set_build_configuration`
+`errors` · `warnings` · `messages` · `diagnostics_snapshot` · `build` · `build_solution` · `rebuild_solution` · `build_errors` · `build_configurations` · `set_build_configuration` · `run_code_analysis`
 
 ### documents — Editor and files
 
 Patch code through the live editor and manage open documents.
 
-`apply_diff` · `write_file` · `list_documents` · `list_tabs` · `copy_file` · `delete_file` · `format_document`
+`apply_diff` · `capture_vs_window` · `write_file` · `list_documents` · `list_tabs` · `copy_file` · `delete_file` · `format_document`
 
 `apply_diff` uses the bridge editor-patch format:
 
@@ -201,6 +201,8 @@ Note: this is a stateless scratchpad surface, not a persistent REPL.
 Tool-catalog discovery and host-level control.
 
 `list_tool_categories` · `list_tools` · `list_tools_by_category` · `recommend_tools` · `tool_help` · `wait_for_instance` · `vs_close` · `shell_exec` · `set_version`
+
+`capture_vs_window` activates the bound Visual Studio window, brings it to the foreground, and writes a PNG to `%TEMP%\vs-ide-bridge\screenshots` by default so one-off captures do not dirty the repo.
 
 ## Shell Safety
 

@@ -9,6 +9,7 @@
     <AssemblyName>VsIdeBridgeService</AssemblyName>
     <RootNamespace>VsIdeBridgeService</RootNamespace>
     <DisableMSBuildAssemblyCopyCheck>true</DisableMSBuildAssemblyCopyCheck>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
 

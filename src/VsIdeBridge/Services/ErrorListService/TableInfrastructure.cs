@@ -230,7 +230,7 @@ internal sealed partial class ErrorListService
         };
     }
 
-    private async Task<IReadOnlyList<JObject>> WaitForRowsAsync(IdeCommandContext context, int timeoutMilliseconds)
+    private async Task<IReadOnlyList<JObject>> WaitForRowsAsync(IdeCommandContext context, int timeoutMilliseconds, bool forceRefresh)
     {
         int timeout = timeoutMilliseconds > 0 ? timeoutMilliseconds : DefaultWaitTimeoutMilliseconds;
         DateTimeOffset deadline = DateTimeOffset.UtcNow.AddMilliseconds(timeout);
@@ -238,6 +238,12 @@ internal sealed partial class ErrorListService
         int? lastCount = null;
         int stableSamples = 0;
         int requiredStableSamples = StableSampleCount;
+
+        if (forceRefresh)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+            EnsureErrorListWindow(context.Dte);
+        }
 
         while (DateTimeOffset.UtcNow < deadline)
         {
@@ -251,7 +257,10 @@ internal sealed partial class ErrorListService
             }
             catch (InvalidOperationException)
             {
-                EnsureErrorListWindow(context.Dte);
+                if (forceRefresh)
+                {
+                    EnsureErrorListWindow(context.Dte);
+                }
             }
 
             if (rows is not null)

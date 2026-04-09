@@ -14,6 +14,7 @@ internal static partial class DebugBuildCommands
     private const string CountKey = "count";
     private const string TimeoutMillisecondsArgument = "timeout-ms";
     private const string WaitForIntellisenseArgument = "wait-for-intellisense";
+    private const string WaitForCompletionArgument = "wait-for-completion";
     private const string RequireCleanDiagnosticsArgument = "require-clean-diagnostics";
     private const int DefaultDebuggerTimeoutMilliseconds = 120000;
     private const int MinimumBuildErrorsTimeoutMilliseconds = 5000;
@@ -24,6 +25,13 @@ internal static partial class DebugBuildCommands
     private static CommandExecutionResult CreateCapturedResult(string itemLabel, JObject data)
     {
         return new CommandExecutionResult($"Captured {data[CountKey]} {itemLabel}.", data);
+    }
+
+    private static CommandExecutionResult CreateStartedResult(string operationLabel, JObject data)
+    {
+        return new CommandExecutionResult(
+            $"{operationLabel} started. Prompt the model again when it finishes, then read warnings, errors, messages, or diagnostics_snapshot.",
+            data);
     }
 
     private static int GetQuickDiagnosticsTimeout(bool quick)

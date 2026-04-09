@@ -107,7 +107,7 @@ internal static partial class ToolCatalog
     private static IEnumerable<ToolEntry> DocumentTabTools()
     {
         yield return BridgeTool("open_file",
-            "Open a document by absolute path, solution-relative path, or solution item name.",
+            "Open a document by unique filename, solution-relative path, absolute path, or solution item name.",
             ObjectSchema(
                 Req(FileArg, FileDesc),
                 OptInt(Line, "Optional 1-based line number to navigate to."),

@@ -57,16 +57,6 @@ public sealed class VsIdeBridgePackage : AsyncPackage, IAsyncDisposable
 
         try
         {
-            await CommandRegistrar.InitializeAsync(this, runtime).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not null) // top-level package init boundary
-        {
-            ActivityLog.LogError(nameof(VsIdeBridgePackage), $"Command registration failed: {ex}");
-            return;
-        }
-
-        try
-        {
             runtime.BridgeWatchdogService.Start();
         }
         catch (Exception ex) when (ex is not null) // best-effort watchdog startup
@@ -83,6 +73,16 @@ public sealed class VsIdeBridgePackage : AsyncPackage, IAsyncDisposable
         catch (Exception ex) when (ex is not null) // best-effort pipe server startup
         {
             ActivityLog.LogWarning(nameof(VsIdeBridgePackage), $"Pipe server failed to start: {ex.Message}");
+        }
+
+        try
+        {
+            await CommandRegistrar.InitializeAsync(this, runtime).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not null) // top-level package init boundary
+        {
+            ActivityLog.LogError(nameof(VsIdeBridgePackage), $"Command registration failed: {ex}");
+            return;
         }
 
         _ = JoinableTaskFactory.RunAsync(() => InitializeDteAsync(runtime));

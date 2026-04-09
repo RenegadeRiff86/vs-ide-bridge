@@ -108,6 +108,8 @@ internal static class ErrorListConstants
     public const string BP1041HelpUri = "https://peps.python.org/pep-0008/#programming-recommendations";
     public const string BP1042HelpUri = "https://learn.microsoft.com/en-us/powershell/utility-modules/psscriptanalyzer/rules/avoidusingcmdletaliases";
     public const string BP1043HelpUri = "https://learn.microsoft.com/en-us/visualstudio/extensibility/managing-multiple-threads-in-managed-code?view=vs-2022";
+    public const string BP1044HelpUri = "https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/suppress-warnings";
+    public const string BP1045HelpUri = "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions#commenting-conventions";
 
     public static readonly string[] BestPracticeCodeExtensionValues = [".cs", ".vb", ".fs", ".fsi", ".fsx", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".py", ".ps1", ".psm1", ".psd1"];
     public static readonly HashSet<string> BestPracticeCodeExtensions = new(BestPracticeCodeExtensionValues, StringComparer.OrdinalIgnoreCase);

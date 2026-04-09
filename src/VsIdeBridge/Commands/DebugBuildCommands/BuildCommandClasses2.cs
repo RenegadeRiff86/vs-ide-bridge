@@ -9,6 +9,9 @@ namespace VsIdeBridge.Commands;
 
 internal static partial class DebugBuildCommands
 {
+    private const string ConfigurationArgument = "configuration";
+    private const string PlatformArgument = "platform";
+
     internal sealed class IdeBuildSolutionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0212)
     {
         protected override string CanonicalName => "Tools.IdeBuildSolution";
@@ -17,11 +20,17 @@ internal static partial class DebugBuildCommands
         {
             int timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
             await EnsureCleanDiagnosticsAsync(context, args, timeout).ConfigureAwait(true);
+            bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, true);
 
             string? project = args.GetString("project");
             JObject buildResult;
             if (!string.IsNullOrWhiteSpace(project))
             {
+                if (!waitForCompletion)
+                {
+                    throw new CommandErrorException("invalid_arguments", $"--{WaitForCompletionArgument} false is supported only for solution-wide builds.");
+                }
+
                 await context.Runtime.BridgeApprovalService.RequestApprovalAsync(
                     context,
                     BridgeApprovalKind.Build,
@@ -32,8 +41,8 @@ internal static partial class DebugBuildCommands
                     context,
                     timeout,
                     project!,
-                    args.GetString("configuration"),
-                    args.GetString("platform")).ConfigureAwait(true);
+                    args.GetString(ConfigurationArgument),
+                    args.GetString(PlatformArgument)).ConfigureAwait(true);
             }
             else
             {
@@ -43,11 +52,22 @@ internal static partial class DebugBuildCommands
                     subject: "Build solution",
                     details: null).ConfigureAwait(true);
 
-                buildResult = await context.Runtime.BuildService.BuildSolutionAsync(
-                    context,
-                    timeout,
-                    args.GetString("configuration"),
-                    args.GetString("platform")).ConfigureAwait(true);
+                buildResult = waitForCompletion
+                    ? await context.Runtime.BuildService.BuildSolutionAsync(
+                        context,
+                        timeout,
+                        args.GetString(ConfigurationArgument),
+                        args.GetString(PlatformArgument)).ConfigureAwait(true)
+                    : await context.Runtime.BuildService.StartBuildSolutionAsync(
+                        context,
+                        timeout,
+                        args.GetString(ConfigurationArgument),
+                        args.GetString(PlatformArgument)).ConfigureAwait(true);
+            }
+
+            if (!waitForCompletion)
+            {
+                return CreateStartedResult("Build", buildResult);
             }
 
             if (args.GetBoolean(RequireCleanDiagnosticsArgument, true))
@@ -68,6 +88,7 @@ internal static partial class DebugBuildCommands
         {
             int timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
             await EnsureCleanDiagnosticsAsync(context, args, timeout).ConfigureAwait(true);
+            bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, false);
 
             await context.Runtime.BridgeApprovalService.RequestApprovalAsync(
                 context,
@@ -75,11 +96,22 @@ internal static partial class DebugBuildCommands
                 subject: "Rebuild solution",
                 details: null).ConfigureAwait(true);
 
-            JObject rebuildResult = await context.Runtime.BuildService.RebuildSolutionAsync(
-                context,
-                timeout,
-                args.GetString("configuration"),
-                args.GetString("platform")).ConfigureAwait(true);
+            JObject rebuildResult = waitForCompletion
+                ? await context.Runtime.BuildService.RebuildSolutionAsync(
+                    context,
+                    timeout,
+                    args.GetString(ConfigurationArgument),
+                    args.GetString(PlatformArgument)).ConfigureAwait(true)
+                : await context.Runtime.BuildService.StartRebuildSolutionAsync(
+                    context,
+                    timeout,
+                    args.GetString(ConfigurationArgument),
+                    args.GetString(PlatformArgument)).ConfigureAwait(true);
+
+            if (!waitForCompletion)
+            {
+                return CreateStartedResult("Rebuild", rebuildResult);
+            }
 
             if (args.GetBoolean(RequireCleanDiagnosticsArgument, true))
             {
@@ -98,12 +130,14 @@ internal static partial class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             bool quick = args.GetBoolean("quick", false);
+            bool forceRefresh = GetDiagnosticsForceRefresh(args);
             JObject errorListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
-                CreateErrorListQuery(args)).ConfigureAwait(true);
+                CreateErrorListQuery(args),
+                forceRefresh: forceRefresh).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Captured {errorListResult["count"]} Error List row(s).", errorListResult);
         }
@@ -116,12 +150,14 @@ internal static partial class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             bool quick = args.GetBoolean("quick", false);
+            bool forceRefresh = GetDiagnosticsForceRefresh(args);
             JObject warningListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
-                CreateErrorListQuery(args, "warning")).ConfigureAwait(true);
+                CreateErrorListQuery(args, "warning"),
+                forceRefresh: forceRefresh).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Captured {warningListResult["count"]} warning row(s).", warningListResult);
         }
@@ -134,12 +170,14 @@ internal static partial class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             bool quick = args.GetBoolean("quick", false);
+            bool forceRefresh = GetDiagnosticsForceRefresh(args);
             JObject messageListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
-                CreateErrorListQuery(args, "message")).ConfigureAwait(true);
+                CreateErrorListQuery(args, "message"),
+                forceRefresh: forceRefresh).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Captured {messageListResult["count"]} message row(s).", messageListResult);
         }
@@ -183,5 +221,42 @@ internal static partial class DebugBuildCommands
     {
         JObject buildContext = new() { ["build"] = buildResult };
         ThrowIfDiagnosticsPresent(diagnostics, summaryPrefix, args, buildContext);
+    }
+
+    internal sealed class IdeRunCodeAnalysisCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0264)
+    {
+        protected override string CanonicalName => "Tools.IdeRunCodeAnalysis";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            int timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
+            bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, false);
+            await context.Runtime.BridgeApprovalService.RequestApprovalAsync(
+                context,
+                BridgeApprovalKind.Build,
+                subject: "Run code analysis on solution",
+                details: null).ConfigureAwait(true);
+            JObject analysisResult = waitForCompletion
+                ? await context.Runtime.BuildService.RunCodeAnalysisAsync(context, timeout).ConfigureAwait(true)
+                : await context.Runtime.BuildService.StartCodeAnalysisAsync(context, timeout).ConfigureAwait(true);
+
+            if (!waitForCompletion)
+            {
+                return CreateStartedResult("Code analysis", analysisResult);
+            }
+
+            JObject errors = await context.Runtime.ErrorListService.GetErrorListAsync(
+                context,
+                false,
+                timeout,
+                query: CreateErrorListQuery(args),
+                includeBuildOutputFallback: false).ConfigureAwait(true);
+            JObject result = new()
+            {
+                ["analysis"] = analysisResult,
+                ["errors"] = errors,
+            };
+            return new CommandExecutionResult($"Code analysis finished and captured {errors["count"]} Error List row(s).", result);
+        }
     }
 }

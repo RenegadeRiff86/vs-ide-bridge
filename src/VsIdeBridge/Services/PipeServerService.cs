@@ -8,6 +8,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
@@ -25,14 +26,20 @@ namespace VsIdeBridge.Services;
 /// </summary>
 internal sealed class PipeServerService : IDisposable
 {
-    private const int PipeStreamBufferSize = 4096;
-    private const int DefaultCommandTimeoutMilliseconds = 120_000;
-    private const int DefaultDiagnosticsTimeoutMilliseconds = 10_000;
-
     private readonly VsIdeBridgePackage _package;
     private readonly IdeBridgeRuntime _runtime;
     private readonly string _discoveryFile;
-    private readonly MemoryDiscoveryStore _memoryDiscoveryStore = new();
+    private readonly MemoryDiscoveryStore[] _memoryDiscoveryStores =
+    [
+        new(),
+        new(
+            MemoryDiscoveryStore.GlobalMapName,
+            MemoryDiscoveryStore.GlobalMutexName,
+            MemoryDiscoveryStore.DefaultCapacityBytes,
+            TimeSpan.FromMilliseconds(100),
+            static name => new Mutex(false, name),
+            static (name, capacity) => MemoryMappedFile.CreateOrOpen(name, capacity, MemoryMappedFileAccess.ReadWrite)),
+    ];
     private readonly bool _emitDiscoveryJson;
     private readonly bool _emitMemoryDiscovery;
     private readonly CancellationTokenSource _cts = new();
@@ -40,6 +47,8 @@ internal sealed class PipeServerService : IDisposable
     private readonly PipeServerMutableState _state = new();
     private readonly SemaphoreSlim _commandQueue = new(1, 1);
     private Task? _listenTask;
+    private DTE2? _dte; // cached after first use; stable for the lifetime of the VS instance
+    private string? _cachedSolutionPath; // updated by UpdateDiscovery and on first command; avoids main-thread switch per command
 
     public PipeServerService(VsIdeBridgePackage package, IdeBridgeRuntime runtime)
     {
@@ -66,6 +75,7 @@ internal sealed class PipeServerService : IDisposable
 
     public void UpdateDiscovery(string? solutionPath)
     {
+        _cachedSolutionPath = solutionPath;
         QueueDiscoveryUpdate(solutionPath);
     }
 
@@ -180,13 +190,16 @@ internal sealed class PipeServerService : IDisposable
 
         if (_emitMemoryDiscovery)
         {
-            try
+            foreach (MemoryDiscoveryStore store in _memoryDiscoveryStores)
             {
-                _memoryDiscoveryStore.Upsert(record);
-            }
-            catch (Exception ex) when (ex is not null)
-            {
-                ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update memory discovery store: {ex.Message}");
+                try
+                {
+                    store.Upsert(record);
+                }
+                catch (Exception ex) when (ex is not null)
+                {
+                    ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update memory discovery store: {ex.Message}");
+                }
             }
         }
     }
@@ -219,7 +232,7 @@ internal sealed class PipeServerService : IDisposable
             {
                 ["id"] = (JToken?)batchRequest.Id ?? JValue.CreateNull(),
                 ["command"] = batchRequest.Command ?? string.Empty,
-                ["args"] = batchRequest.Args ?? string.Empty,
+                ["args"] = batchRequest.Args?.DeepClone() ?? JValue.CreateNull(),
             });
         }
 
@@ -249,8 +262,8 @@ internal sealed class PipeServerService : IDisposable
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous,
-                    PipeStreamBufferSize,
-                    PipeStreamBufferSize,
+                     PipeServerConstants.PipeStreamBufferSize,
+                     PipeServerConstants.PipeStreamBufferSize,
                     PipeServerSupport.CreatePipeSecurity());
             }
             catch (Exception ex) when (ex is not null) // pipe creation can throw Win32Exception, UnauthorizedAccessException, or IOException
@@ -295,8 +308,8 @@ internal sealed class PipeServerService : IDisposable
         {
             try
             {
-                using StreamReader reader = new(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: PipeStreamBufferSize, leaveOpen: true);
-                using StreamWriter writer = new(pipe, new UTF8Encoding(false), bufferSize: PipeStreamBufferSize, leaveOpen: true)
+                using StreamReader reader = new(pipe, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: PipeServerConstants.PipeStreamBufferSize, leaveOpen: true);
+                using StreamWriter writer = new(pipe, new UTF8Encoding(false), bufferSize: PipeServerConstants.PipeStreamBufferSize, leaveOpen: true)
                 {
                     AutoFlush = true,
                     NewLine = "\n",
@@ -617,34 +630,31 @@ internal sealed class PipeServerService : IDisposable
             queueWaitMs);
     }
 
-    private Task<CommandExecutionResult> ExecuteCommandAsync(PipeRequest request, string commandName, bool hasBatch, CancellationToken commandToken, Action<IdeCommandContext> captureFailureContext)
+    private async Task<CommandExecutionResult> ExecuteCommandAsync(PipeRequest request, string commandName, bool hasBatch, CancellationToken commandToken, Action<IdeCommandContext> captureFailureContext)
     {
-        return Task.Run(async () =>
+        DTE2? dte = await GetDteAsync(commandToken).ConfigureAwait(false);
+        Assumes.Present(dte);
+
+        string? solutionPath = await CaptureSolutionPathAsync(dte!, commandToken).ConfigureAwait(false);
+        QueueDiscoveryUpdate(solutionPath);
+
+        IdeCommandContext ctx = new(_package, dte!, _runtime.Logger, _runtime, commandToken);
+        captureFailureContext(ctx);
+        await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} requested", commandToken).ConfigureAwait(false);
+
+        if (hasBatch)
         {
-            DTE2? dte = await GetDteAsync(commandToken).ConfigureAwait(false);
-            Assumes.Present(dte);
+            JArray steps = BuildBatchSteps(request);
+            return await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(false);
+        }
 
-            string? solutionPath = await CaptureSolutionPathAsync(dte!, commandToken).ConfigureAwait(false);
-            QueueDiscoveryUpdate(solutionPath);
+        if (!_runtime.TryGetCommand(commandName, out IdeCommandBase cmd))
+        {
+            throw new CommandErrorException("command_not_found", $"Unknown command: '{commandName}'.");
+        }
 
-            IdeCommandContext ctx = new(_package, dte!, _runtime.Logger, _runtime, commandToken);
-            captureFailureContext(ctx);
-            await _runtime.Logger.LogAsync($"IDE Bridge: {commandName} requested", commandToken).ConfigureAwait(false);
-
-            if (hasBatch)
-            {
-                JArray steps = BuildBatchSteps(request);
-                return await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(false);
-            }
-
-            if (!_runtime.TryGetCommand(commandName, out IdeCommandBase cmd))
-            {
-                throw new CommandErrorException("command_not_found", $"Unknown command: '{commandName}'.");
-            }
-
-            CommandArguments args = CommandArgumentParser.Parse(request.Args);
-            return await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
-        }, commandToken);
+        CommandArguments args = CommandArgumentParser.Parse(request.Args);
+        return await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
     }
 
     private static async Task<CommandExecutionResult> AwaitCommandExecutionAsync(JoinableTask<CommandExecutionResult> executionTask, int timeoutMilliseconds, CancellationTokenSource commandCts, CancellationToken commandToken, CancellationToken serverCancellationToken)
@@ -674,14 +684,20 @@ internal sealed class PipeServerService : IDisposable
 
     private async Task<DTE2?> GetDteAsync(CancellationToken cancellationToken)
     {
+        if (_dte is not null) return _dte;
         await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-        return await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+        _dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+        return _dte;
     }
 
     private async Task<string?> CaptureSolutionPathAsync(DTE2 dte, CancellationToken cancellationToken)
     {
+        string? cached = _cachedSolutionPath;
+        if (cached is not null) return cached;
         await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-        return GetSolutionPath(dte);
+        string? path = GetSolutionPath(dte);
+        _cachedSolutionPath = path;
+        return path;
     }
 
     private static bool IsDiagnosticsCommand(string commandName)
@@ -699,18 +715,18 @@ internal sealed class PipeServerService : IDisposable
             || string.Equals(commandName, "build-errors", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static int ResolveTimeoutMilliseconds(string commandName, string? rawArgs, bool isBatch)
+    private static int ResolveTimeoutMilliseconds(string commandName, JToken? rawArgs, bool isBatch)
     {
         if (isBatch)
         {
-            return DefaultCommandTimeoutMilliseconds;
+             return PipeServerConstants.DefaultCommandTimeoutMilliseconds;
         }
 
         int defaultTimeout = IsDiagnosticsCommand(commandName)
-            ? DefaultDiagnosticsTimeoutMilliseconds
-            : DefaultCommandTimeoutMilliseconds;
+             ? PipeServerConstants.DefaultDiagnosticsTimeoutMilliseconds
+             : PipeServerConstants.DefaultCommandTimeoutMilliseconds;
 
-        if (string.IsNullOrWhiteSpace(rawArgs))
+        if (rawArgs is null || rawArgs.Type == JTokenType.Null)
         {
             return defaultTimeout;
         }
@@ -732,7 +748,10 @@ internal sealed class PipeServerService : IDisposable
         _cts.Cancel();
         _cts.Dispose();
         _commandQueue.Dispose();
-        _memoryDiscoveryStore.Dispose();
+        foreach (MemoryDiscoveryStore store in _memoryDiscoveryStores)
+        {
+            store.Dispose();
+        }
         try
         {
             if (_emitDiscoveryJson && File.Exists(_discoveryFile))
@@ -745,15 +764,25 @@ internal sealed class PipeServerService : IDisposable
 
         if (_emitMemoryDiscovery)
         {
-            try
+            foreach (MemoryDiscoveryStore store in _memoryDiscoveryStores)
             {
-                _memoryDiscoveryStore.Remove(_runtime.BridgeInstanceService.InstanceId);
-            }
-            catch (Exception ex) when (ex is not null) // best-effort memory discovery cleanup
-            {
-                ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to remove memory discovery entry: {ex.Message}");
+                try
+                {
+                    store.Remove(_runtime.BridgeInstanceService.InstanceId);
+                }
+                catch (Exception ex) when (ex is not null) // best-effort memory discovery cleanup
+                {
+                    ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to remove memory discovery entry: {ex.Message}");
+                }
             }
         }
     }
+}
+
+file static class PipeServerConstants
+{
+    internal const int PipeStreamBufferSize = 4096;
+    internal const int DefaultCommandTimeoutMilliseconds = 120_000;
+    internal const int DefaultDiagnosticsTimeoutMilliseconds = 10_000;
 }
 

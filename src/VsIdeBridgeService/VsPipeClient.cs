@@ -18,21 +18,32 @@ internal sealed class VsPipeClient : IAsyncDisposable
     private static readonly string LockDirectory =
         Path.Combine(Path.GetTempPath(), "vs-ide-bridge", "locks");
 
-    public VsPipeClient(string pipeName, int timeoutMs, int gateTimeoutMs)
+    private VsPipeClient(NamedPipeClientStream pipe, StreamReader reader, StreamWriter writer, int timeoutMs, FileStream gate)
     {
-        _timeoutMs = Math.Max(1_000, timeoutMs);
-        _gate = AcquireGate(pipeName, Math.Max(250, gateTimeoutMs));
+        _pipe = pipe;
+        _reader = reader;
+        _writer = writer;
+        _timeoutMs = timeoutMs;
+        _gate = gate;
+    }
 
-        _pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        using CancellationTokenSource cts = new(_timeoutMs);
-        _pipe.ConnectAsync(cts.Token).GetAwaiter().GetResult();
+    public static async Task<VsPipeClient> CreateAsync(string pipeName, int timeoutMs, int gateTimeoutMs)
+    {
+        int resolvedTimeoutMs = Math.Max(1_000, timeoutMs);
+        FileStream gate = await AcquireGateAsync(pipeName, Math.Max(250, gateTimeoutMs)).ConfigureAwait(false);
 
-        _reader = new StreamReader(_pipe, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, leaveOpen: true);
-        _writer = new StreamWriter(_pipe, new UTF8Encoding(false), leaveOpen: true)
+        NamedPipeClientStream pipe = new(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        using CancellationTokenSource cts = new(resolvedTimeoutMs);
+        await pipe.ConnectAsync(cts.Token).ConfigureAwait(false);
+
+        StreamReader reader = new(pipe, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, leaveOpen: true);
+        StreamWriter writer = new(pipe, new UTF8Encoding(false), leaveOpen: true)
         {
             AutoFlush = true,
             NewLine = "\n",
         };
+
+        return new VsPipeClient(pipe, reader, writer, resolvedTimeoutMs, gate);
     }
 
     public async Task<JsonObject> SendAsync(JsonObject payload)
@@ -63,7 +74,7 @@ internal sealed class VsPipeClient : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    private static FileStream AcquireGate(string pipeName, int gateTimeoutMs)
+    private static async Task<FileStream> AcquireGateAsync(string pipeName, int gateTimeoutMs)
     {
         Directory.CreateDirectory(LockDirectory);
         string hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(pipeName)));
@@ -78,7 +89,7 @@ internal sealed class VsPipeClient : IAsyncDisposable
             }
             catch (IOException)
             {
-                Thread.Sleep(25);
+                await Task.Delay(25).ConfigureAwait(false);
             }
         }
 

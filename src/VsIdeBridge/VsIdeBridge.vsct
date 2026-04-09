@@ -692,6 +692,17 @@
           <LocCanonicalName>.Tools.IdeBuildAndCaptureErrors</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeRunCodeAnalysis" priority="0x0264" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Run Code Analysis</ButtonText>
+          <CommandName>IdeRunCodeAnalysis</CommandName>
+          <CanonicalName>Tools.IdeRunCodeAnalysis</CanonicalName>
+          <LocCanonicalName>.Tools.IdeRunCodeAnalysis</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeOpenSolution" priority="0x0224" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -997,6 +1008,7 @@
       <IDSymbol name="cmdidIdeGetErrorList" value="0x0213" />
       <IDSymbol name="cmdidIdeGetWarnings" value="0x0230" />
       <IDSymbol name="cmdidIdeGetMessages" value="0x0263" />
+      <IDSymbol name="cmdidIdeRunCodeAnalysis" value="0x0264" />
       <IDSymbol name="cmdidIdeBuildAndCaptureErrors" value="0x0214" />
       <IDSymbol name="cmdidIdeOpenSolution" value="0x0224" />
       <IDSymbol name="cmdidIdeCreateSolution" value="0x023D" />

@@ -14,7 +14,7 @@ internal static class BestPracticeRuleMetadata
         public string LlmFixPrompt { get; } = llmFixPrompt;
     }
 
-    private static readonly IReadOnlyDictionary<string, RuleText> RuleTexts = CreateRuleTexts();
+    private static readonly Dictionary<string, RuleText> RuleTexts = CreateRuleTexts();
 
     public static RuleText? TryGetRuleText(string code)
     {
@@ -95,8 +95,8 @@ internal static class BestPracticeRuleMetadata
                 "Reformat this section so indentation is consistent with the surrounding file and project conventions. Do not change behavior while cleaning the layout."),
             [BestPracticeRuleCatalog.BP1018.Code] = new(
                 "This type has accumulated too many responsibilities, so changes in one area are likely to surprise other areas.",
-                "Split responsibilities into smaller classes before extending this type further.",
-                "Refactor this large type by extracting coherent responsibilities into smaller classes or services. Preserve public behavior, but reduce how much this single type owns."),
+                "Extract one concrete responsibility at a time into focused helpers, services, or state objects before extending this type further.",
+                "Refactor this large type by identifying one overloaded responsibility and extracting it into a focused helper, service, or state object. Preserve public behavior, keep the API stable where possible, and make the remaining type clearly narrower in scope."),
             [BestPracticeRuleCatalog.BP1019.Code] = new(
                 "Disposable resources that are not scoped explicitly are easy to leak across exceptions and early returns.",
                 "Wrap the disposable resource in using or await using so cleanup is guaranteed.",
@@ -197,6 +197,14 @@ internal static class BestPracticeRuleMetadata
                 "Switching to the Visual Studio UI thread too early and then doing substantial work there can freeze the IDE and make the bridge look hung.",
                 "Keep the command on a background thread by default and limit UI-thread work to the smallest block that truly requires DTE or shell services.",
                 "Refactor this method so it stays off the Visual Studio UI thread by default. Move SwitchToMainThreadAsync as close as possible to the specific DTE or shell call that needs it, and move back to background work for parsing, shaping, and serialization."),
+            [BestPracticeRuleCatalog.BP1044.Code] = new(
+                "In-source warning suppression hides diagnostics from both humans and models, which makes the codebase look healthier than it really is.",
+                "Remove '#pragma warning disable' and fix the underlying warning unless there is a rare, documented compatibility reason not to.",
+                "Delete this '#pragma warning disable' suppression and fix the underlying analyzer or compiler warning directly. Only keep a suppression when there is a documented, unavoidable compatibility reason, and then explain that reason next to the suppression."),
+            [BestPracticeRuleCatalog.BP1045.Code] = new(
+                "TODO comments are easy to forget in code review and leave uncertain work hidden in the codebase instead of tracked in a visible backlog.",
+                "Resolve the TODO or move it into a tracked issue, then remove the comment from the code.",
+                "Find the work described by this TODO comment and either implement it now or move it into a tracked issue/work item with enough context for follow-up. Remove the TODO comment from the code once the work is tracked or resolved."),
         };
     }
 }

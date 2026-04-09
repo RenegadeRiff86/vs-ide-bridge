@@ -17,8 +17,8 @@ internal sealed class BridgeConnection
 
     public BridgeConnection(string[] args)
     {
-        _discoveryMode = ResolveMode(args);
-        _timeoutOverrideMs = GetOptionalIntArg(args, "timeout-ms");
+        _discoveryMode = BridgeConnectionArgs.ResolveMode(args);
+        _timeoutOverrideMs = BridgeConnectionArgs.GetOptionalPositiveInt(args, "timeout-ms");
         _documentDiagnostics = new DocumentDiagnosticsCoordinator(this);
     }
 
@@ -40,10 +40,16 @@ internal sealed class BridgeConnection
     // ── Public API used by tool handlers ──────────────────────────────────────
 
     public Task<JsonObject> SendAsync(JsonNode? id, string command, string args)
-        => SendCoreAsync(id, command, args, ignoreSolutionHint: false);
+        => SendCoreAsync(id, command, JsonValue.Create(args), ignoreSolutionHint: false);
+
+    public Task<JsonObject> SendAsync(JsonNode? id, string command, JsonObject? args)
+        => SendCoreAsync(id, command, args?.DeepClone(), ignoreSolutionHint: false);
 
     public Task<JsonObject> SendIgnoringSolutionHintAsync(JsonNode? id, string command, string args)
-        => SendCoreAsync(id, command, args, ignoreSolutionHint: true);
+        => SendCoreAsync(id, command, JsonValue.Create(args), ignoreSolutionHint: true);
+
+    public Task<JsonObject> SendIgnoringSolutionHintAsync(JsonNode? id, string command, JsonObject? args)
+        => SendCoreAsync(id, command, args?.DeepClone(), ignoreSolutionHint: true);
 
     public string CurrentSolutionPath
     {
@@ -67,7 +73,7 @@ internal sealed class BridgeConnection
     // Bind to a specific instance and return binding info.
     public async Task<JsonObject> BindAsync(JsonNode? id, JsonObject? args)
     {
-        BridgeInstanceSelector newSelector = ParseSelector(args);
+        BridgeInstanceSelector newSelector = BridgeConnectionArgs.ParseSelector(args);
         lock (_gate)
         {
             _state.Selector = newSelector;
@@ -112,13 +118,13 @@ internal sealed class BridgeConnection
 
     // ── Internal send logic ────────────────────────────────────────────────────
 
-    private async Task<JsonObject> SendCoreAsync(JsonNode? id, string command, string args, bool ignoreSolutionHint)
-        => await SendCoreAsync(id, command, args, ignoreSolutionHint, SelectTimeoutProfile(command)).ConfigureAwait(false);
+    private async Task<JsonObject> SendCoreAsync(JsonNode? id, string command, JsonNode? args, bool ignoreSolutionHint)
+        => await SendCoreAsync(id, command, args, ignoreSolutionHint, BridgeConnectionArgs.SelectTimeoutProfile(command)).ConfigureAwait(false);
 
     private async Task<JsonObject> SendCoreAsync(
         JsonNode? id,
         string command,
-        string args,
+        JsonNode? args,
         bool ignoreSolutionHint,
         ToolTimeoutProfile timeoutProfile)
     {
@@ -126,6 +132,10 @@ internal sealed class BridgeConnection
         {
             JsonObject response = await SendPipeAsync(command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
             return await FinalizePipeResponseAsync(response, command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+        }
+        catch (McpRequestException)
+        {
+            throw;
         }
         catch (BridgeException ex) { throw new McpRequestException(id, BridgeError, ex.Message); }
         catch (TimeoutException ex) { throw new McpRequestException(id, TimeoutError, $"Timed out: {ex.Message}"); }
@@ -141,18 +151,18 @@ internal sealed class BridgeConnection
         catch (IOException ex) { throw new McpRequestException(id, CommError, $"VS bridge communication failed: {ex.Message}"); }
     }
 
-    private async Task<JsonObject> SendPipeAsync(string command, string args, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
+    private async Task<JsonObject> SendPipeAsync(string command, JsonNode? args, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
     {
         BridgeInstance instance = await GetInstanceAsync(ignoreSolutionHint).ConfigureAwait(false);
-        await using VsPipeClient client = new(
+        await using VsPipeClient client = await VsPipeClient.CreateAsync(
             instance.PipeName,
             GetCommandTimeoutMs(timeoutProfile),
-            GetPipeGateTimeoutMs(timeoutProfile));
+            GetPipeGateTimeoutMs(timeoutProfile)).ConfigureAwait(false);
         JsonObject request = new()
         {
             ["id"] = Guid.NewGuid().ToString("N")[..8],
             ["command"] = command,
-            ["args"] = args,
+            ["args"] = args?.DeepClone(),
         };
         return await client.SendAsync(request).ConfigureAwait(false);
     }
@@ -160,7 +170,7 @@ internal sealed class BridgeConnection
     private async Task<JsonObject> RetryAfterFailureAsync(
         JsonNode? id,
         string command,
-        string args,
+        JsonNode? args,
         Exception ex,
         bool ignoreSolutionHint,
         ToolTimeoutProfile timeoutProfile)
@@ -178,7 +188,7 @@ internal sealed class BridgeConnection
         catch (Exception retryEx) when (retryEx is not null) { throw new McpRequestException(id, CommError, $"VS bridge retry failed: {retryEx.Message}"); }
     }
 
-    private async Task<JsonObject> FinalizePipeResponseAsync(JsonObject response, string command, string args, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
+    private async Task<JsonObject> FinalizePipeResponseAsync(JsonObject response, string command, JsonNode? args, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
     {
         response = await RetryImplicitBindingCancellationAsync(response, command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
         AttachPendingBindingNotice(response);
@@ -259,7 +269,7 @@ internal sealed class BridgeConnection
     private async Task<JsonObject> RetryImplicitBindingCancellationAsync(
         JsonObject response,
         string command,
-        string args,
+        JsonNode? args,
         bool ignoreSolutionHint,
         ToolTimeoutProfile timeoutProfile)
     {
@@ -323,44 +333,6 @@ internal sealed class BridgeConnection
 
     // ── Arg parsing ────────────────────────────────────────────────────────────
 
-    private static BridgeInstanceSelector ParseSelector(JsonObject? args) => new()
-    {
-        InstanceId = GetStr(args, "instance_id") ?? GetStr(args, "instance"),
-        ProcessId = args?["pid"]?.GetValue<int?>(),
-        PipeName = GetStr(args, "pipe_name") ?? GetStr(args, "pipe"),
-        SolutionHint = GetStr(args, "solution") ?? GetStr(args, "solution_hint") ?? GetStr(args, "sln"),
-    };
-
-    private static string? GetStr(JsonObject? args, string name)
-    {
-        string? value = args?[name]?.GetValue<string>();
-        return string.IsNullOrWhiteSpace(value) ? null : value;
-    }
-
-    private static DiscoveryMode ResolveMode(string[] args)
-    {
-        string? raw = GetArgValue(args, "discovery-mode");
-        return raw?.ToLowerInvariant() switch
-        {
-            "memory-first" => DiscoveryMode.MemoryFirst,
-            "json-only" => DiscoveryMode.JsonOnly,
-            "hybrid" => DiscoveryMode.Hybrid,
-            _ => DiscoveryMode.MemoryFirst,
-        };
-    }
-
-    private static int GetIntArg(string[] args, string name, int defaultValue)
-    {
-        string? raw = GetArgValue(args, name);
-        return raw is not null && int.TryParse(raw, out int parsed) && parsed > 0 ? parsed : defaultValue;
-    }
-
-    private static int? GetOptionalIntArg(string[] args, string name)
-    {
-        string? raw = GetArgValue(args, name);
-        return raw is not null && int.TryParse(raw, out int parsed) && parsed > 0 ? parsed : null;
-    }
-
     private int GetCommandTimeoutMs(ToolTimeoutProfile timeoutProfile)
     {
         return _timeoutOverrideMs ?? timeoutProfile switch
@@ -390,59 +362,4 @@ internal sealed class BridgeConnection
     private static bool ShouldRetry(ToolTimeoutProfile timeoutProfile)
         => timeoutProfile != ToolTimeoutProfile.Fast;
 
-    private static ToolTimeoutProfile SelectTimeoutProfile(string command)
-    {
-        return command switch
-        {
-            "ready" or
-            "build" or
-            "rebuild" or
-            "build-solution" or
-            "rebuild-solution" or
-            "build-errors" or
-            "find-references" or
-            "count-references" or
-            "call-hierarchy" or
-            "smart-context" or
-            "open-solution" or
-            "create-solution" => ToolTimeoutProfile.Heavy,
-
-            "errors" or
-            "warnings" or
-            "diagnostics-snapshot" or
-            "apply-diff" or
-            "write-file" or
-            "open-document" or
-            "close-file" or
-            "close-document" or
-            "close-others" or
-            "save-document" or
-            "reload-document" or
-            "activate-document" or
-            "list-documents" or
-            "list-tabs" or
-            "list-windows" or
-            "activate-window" or
-            "execute-command" or
-            "format-document" or
-            "quick-info" or
-            "peek-definition" or
-            "goto-definition" or
-            "goto-implementation" or
-            "set-build-configuration" or
-            "build-configurations" => ToolTimeoutProfile.Interactive,
-
-            _ => ToolTimeoutProfile.Fast,
-        };
-    }
-
-    private static string? GetArgValue(string[] args, string name)
-    {
-        for (int i = 0; i < args.Length - 1; i++)
-        {
-            if (string.Equals(args[i], $"--{name}", StringComparison.OrdinalIgnoreCase))
-                return args[i + 1];
-        }
-        return null;
-    }
 }

@@ -55,12 +55,20 @@ internal sealed partial class DocumentService
             return BuildDiskWriteResult(normalizedPath, content, saveChanges, line, column, includeBestPracticeWarnings, dte);
         }
 
+        await ActivateDocumentForWriteAsync(dte, normalizedPath, line, column).ConfigureAwait(true);
+
         try
         {
-            Window window = dte.ItemOperations.OpenFile(normalizedPath);
-            window.Activate();
+            Document? targetDocument = TryFindOpenDocumentByPath(dte, normalizedPath);
+            Window window = targetDocument?.ActiveWindow ?? dte.ActiveWindow;
+            if (window?.Document is null || !PathNormalization.AreEquivalent(TryGetDocumentFullName(window.Document), normalizedPath))
+            {
+                window = dte.ItemOperations.OpenFile(normalizedPath);
+                window.Activate();
+                targetDocument = window.Document ?? TryFindOpenDocumentByPath(dte, normalizedPath);
+            }
 
-            Document document = window.Document ?? dte.ActiveDocument
+            Document document = targetDocument ?? window.Document ?? dte.ActiveDocument
                 ?? throw new CommandErrorException(DocumentNotFoundCode, $"Unable to activate: {normalizedPath}");
 
             (bool usedEditorBuffer, string originalContent, window) = ApplyDocumentContent(dte, window, document, normalizedPath, content, line, column);
@@ -85,6 +93,30 @@ internal sealed partial class DocumentService
         {
             return BuildDiskWriteResult(normalizedPath, content, saveChanges, line, column, includeBestPracticeWarnings, dte);
         }
+    }
+
+    private async Task ActivateDocumentForWriteAsync(DTE2 dte, string normalizedPath, int line, int column)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        if (RequiresDiskBackedWrite(normalizedPath))
+        {
+            return;
+        }
+
+        Document? openDocument = TryFindOpenDocumentByPath(dte, normalizedPath);
+        if (openDocument is not null)
+        {
+            openDocument.Activate();
+            if (openDocument.Object(TextDocumentKind) is TextDocument textDocument)
+            {
+                _ = TryNavigateToLine(textDocument, line, column);
+            }
+
+            return;
+        }
+
+        _ = await OpenDocumentAsync(dte, normalizedPath, line, column, allowDiskFallback: false).ConfigureAwait(true);
     }
 
     private JObject BuildDiskWriteResult(
@@ -260,6 +292,10 @@ internal sealed partial class DocumentService
             return start.GetText(textDocument.EndPoint);
         }
         catch (COMException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
         {
             return null;
         }
@@ -542,6 +578,10 @@ internal sealed partial class DocumentService
         {
             return null;
         }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
+        {
+            return null;
+        }
     }
 
     private static string? TryGetDocumentName(Document? document)
@@ -558,6 +598,10 @@ internal sealed partial class DocumentService
             return string.IsNullOrWhiteSpace(document.Name) ? null : document.Name;
         }
         catch (COMException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
         {
             return null;
         }
@@ -581,6 +625,10 @@ internal sealed partial class DocumentService
         {
             return null;
         }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
+        {
+            return null;
+        }
     }
 
     private static bool? TryGetDocumentSaved(Document? document)
@@ -600,5 +648,15 @@ internal sealed partial class DocumentService
         {
             return null;
         }
+        catch (Exception ex) when (IsDeferredDocumentLoadFailure(ex))
+        {
+            return null;
+        }
+    }
+
+    private static bool IsDeferredDocumentLoadFailure(Exception ex)
+    {
+        return string.Equals(ex.GetType().FullName, "Microsoft.Assumes+InternalErrorException", StringComparison.Ordinal)
+            || string.Equals(ex.GetType().Name, "InternalErrorException", StringComparison.Ordinal);
     }
 }

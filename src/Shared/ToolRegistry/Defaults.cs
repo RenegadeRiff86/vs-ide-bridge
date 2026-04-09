@@ -63,6 +63,7 @@ public sealed partial class ToolRegistry
         "call_hierarchy",
         "read_file",
         "apply_diff",
+        "capture_vs_window",
         "read_file_batch",
         "file_outline",
         "symbol_info",

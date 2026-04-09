@@ -39,6 +39,52 @@ internal static partial class BestPracticeAnalyzer
         }
     }
 
+    // ── BP1044: In-source warning suppression (C#) ────────────────────────────
+
+    public static IEnumerable<JObject> FindPragmaWarningDisable(string file, string content)
+    {
+        int findingCount = 0;
+        foreach (Match match in PragmaWarningDisablePattern().Matches(content))
+        {
+            string pragmaText = GetLineAt(content, match.Index).Trim();
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1044",
+                message: $"In-source warning suppression '{pragmaText}' hides diagnostics instead of fixing the root cause. Remove the pragma and address the underlying warning.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: "#pragma warning disable",
+                helpUri: BP1044HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
+    // ── BP1045: TODO comments left in code ─────────────────────────────────────
+
+    public static IEnumerable<JObject> FindTodoComments(string file, string content)
+    {
+        int findingCount = 0;
+        foreach (Match match in TodoCommentPattern().Matches(content))
+        {
+            string todoText = match.Groups["text"].Value.Trim();
+            string message = string.IsNullOrWhiteSpace(todoText)
+                ? "TODO comment found. Track the work in an issue or resolve it before shipping."
+                : $"TODO comment found: \"{Truncate(todoText, 72)}\". Track the work in an issue or resolve it before shipping.";
+
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1045",
+                message: message,
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: "TODO",
+                helpUri: BP1045HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
     // ── BP1020: DateTime.Now/UtcNow in loops (C#) ─────────────────────────────
 
     public static IEnumerable<JObject> FindDateTimeInLoop(string file, string content)

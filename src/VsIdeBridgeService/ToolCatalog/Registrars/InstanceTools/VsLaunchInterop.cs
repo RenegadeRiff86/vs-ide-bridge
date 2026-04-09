@@ -87,7 +87,6 @@ internal static partial class ToolCatalog
 
     private static IntPtr CreatePrimaryUserToken(uint sessionId, out IntPtr userToken)
     {
-        userToken = IntPtr.Zero;
         if (!WTSQueryUserToken(sessionId, out userToken))
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "WTSQueryUserToken failed.");
@@ -109,7 +108,7 @@ internal static partial class ToolCatalog
 
     private static IntPtr CreateEnvironmentBlockForToken(IntPtr primaryToken)
     {
-        if (!CreateEnvironmentBlock(out IntPtr environmentBlock, primaryToken, false))
+        if (!CreateEnvironmentBlock(out IntPtr environmentBlock, primaryToken, 0))
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateEnvironmentBlock failed.");
         }
@@ -117,59 +116,67 @@ internal static partial class ToolCatalog
         return environmentBlock;
     }
 
-    private static PROCESS_INFORMATION CreateInteractiveLauncherProcess(
+    private static unsafe PROCESS_INFORMATION CreateInteractiveLauncherProcess(
         IntPtr primaryToken,
         IntPtr launchEnvironmentBlock,
         string launcherPath,
         string commandLine)
     {
-        STARTUPINFO startupInfo = CreateLaunchStartupInfo();
-        PROCESS_INFORMATION processInformation;
-        string? workingDirectory = System.IO.Path.GetDirectoryName(launcherPath);
-
-        if (CreateProcessWithTokenW(
-                primaryToken,
-                LogonWithProfile,
-                null,
-                commandLine,
-                (int)CreateUnicodeEnvironment,
-                launchEnvironmentBlock,
-                workingDirectory,
-                ref startupInfo,
-                out processInformation))
+        IntPtr desktopName = Marshal.StringToHGlobalUni(@"winsta0\default");
+        try
         {
+            STARTUPINFO startupInfo = CreateLaunchStartupInfo(desktopName);
+            PROCESS_INFORMATION processInformation;
+            string? workingDirectory = System.IO.Path.GetDirectoryName(launcherPath);
+
+            if (CreateProcessWithTokenW(
+                    primaryToken,
+                    LogonWithProfile,
+                    null,
+                    commandLine,
+                    (int)CreateUnicodeEnvironment,
+                    launchEnvironmentBlock,
+                    workingDirectory,
+                    &startupInfo,
+                    &processInformation))
+            {
+                return processInformation;
+            }
+
+            int launchError = Marshal.GetLastWin32Error();
+            if (launchError != ErrorPrivilegeNotHeld ||
+                !CreateProcessAsUser(
+                    primaryToken,
+                    null,
+                    commandLine,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    0,
+                    CreateUnicodeEnvironment,
+                    launchEnvironmentBlock,
+                    workingDirectory,
+                    &startupInfo,
+                    &processInformation))
+            {
+                throw new Win32Exception(launchError, "Failed to launch the bridge helper in the interactive user session.");
+            }
+
             return processInformation;
         }
-
-        int launchError = Marshal.GetLastWin32Error();
-        if (launchError != ErrorPrivilegeNotHeld ||
-            !CreateProcessAsUser(
-                primaryToken,
-                null,
-                commandLine,
-                IntPtr.Zero,
-                IntPtr.Zero,
-                false,
-                CreateUnicodeEnvironment,
-                launchEnvironmentBlock,
-                workingDirectory,
-                ref startupInfo,
-                out processInformation))
+        finally
         {
-            throw new Win32Exception(launchError, "Failed to launch the bridge helper in the interactive user session.");
+            Marshal.FreeHGlobal(desktopName);
         }
-
-        return processInformation;
     }
 
-    private static STARTUPINFO CreateLaunchStartupInfo()
+    private static STARTUPINFO CreateLaunchStartupInfo(IntPtr desktopName)
     {
         return new STARTUPINFO
         {
-            cb = Marshal.SizeOf<STARTUPINFO>(),
-            lpDesktop = @"winsta0\default",
+            cb = (uint)Marshal.SizeOf<STARTUPINFO>(),
+            lpDesktop = desktopName,
             dwFlags = StartfUseShowWindow,
-            wShowWindow = SwShowNormal,
+            wShowWindow = (ushort)SwShowNormal,
         };
     }
 
@@ -392,11 +399,8 @@ internal static partial class ToolCatalog
 
     private static int ParseLauncherResult(string resultPath, string json)
     {
-        JsonNode? payload = JsonNode.Parse(json);
-        if (payload is null)
-        {
-            throw new InvalidOperationException($"Launcher result '{resultPath}' was empty.");
-        }
+        JsonNode payload = JsonNode.Parse(json)
+            ?? throw new InvalidOperationException($"Launcher result '{resultPath}' was empty.");
 
         string? error = payload["error"]?.GetValue<string>();
         if (!string.IsNullOrWhiteSpace(error))
@@ -549,14 +553,16 @@ internal static partial class ToolCatalog
             .Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     }
 
-    [DllImport("wtsapi32.dll", SetLastError = true)]
-    private static extern bool WTSQueryUserToken(uint sessionId, out IntPtr token);
+    [LibraryImport("wtsapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WTSQueryUserToken(uint sessionId, out IntPtr token);
 
-    [DllImport("kernel32.dll")]
-    private static extern uint WTSGetActiveConsoleSessionId();
+    [LibraryImport("kernel32.dll")]
+    private static partial uint WTSGetActiveConsoleSessionId();
 
-    [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern bool DuplicateTokenEx(
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DuplicateTokenEx(
         IntPtr existingToken,
         TokenAccessLevels desiredAccess,
         IntPtr tokenAttributes,
@@ -564,31 +570,35 @@ internal static partial class ToolCatalog
         TokenType tokenType,
         out IntPtr newToken);
 
-    [DllImport("userenv.dll", SetLastError = true)]
-    private static extern bool CreateEnvironmentBlock(
+    [LibraryImport("userenv.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CreateEnvironmentBlock(
         out IntPtr environment,
         IntPtr token,
-        bool inherit);
+        int inherit);
 
-    [DllImport("userenv.dll", SetLastError = true)]
-    private static extern bool DestroyEnvironmentBlock(IntPtr environment);
+    [LibraryImport("userenv.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DestroyEnvironmentBlock(IntPtr environment);
 
-    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool CreateProcessAsUser(
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool CreateProcessAsUser(
         IntPtr token,
         string? applicationName,
         string commandLine,
         IntPtr processAttributes,
         IntPtr threadAttributes,
-        bool inheritHandles,
+        int inheritHandles,
         uint creationFlags,
         IntPtr environment,
         string? currentDirectory,
-        ref STARTUPINFO startupInfo,
-        out PROCESS_INFORMATION processInformation);
+        STARTUPINFO* startupInfo,
+        PROCESS_INFORMATION* processInformation);
 
-    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool CreateProcessWithTokenW(
+    [LibraryImport("advapi32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool CreateProcessWithTokenW(
         IntPtr token,
         int logonFlags,
         string? applicationName,
@@ -596,11 +606,12 @@ internal static partial class ToolCatalog
         int creationFlags,
         IntPtr environment,
         string? currentDirectory,
-        ref STARTUPINFO startupInfo,
-        out PROCESS_INFORMATION processInformation);
+        STARTUPINFO* startupInfo,
+        PROCESS_INFORMATION* processInformation);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr handle);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CloseHandle(IntPtr handle);
 
     private enum TokenType
     {
@@ -611,20 +622,20 @@ internal static partial class ToolCatalog
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct STARTUPINFO
     {
-        public int cb;
-        public string? lpReserved;
-        public string? lpDesktop;
-        public string? lpTitle;
-        public int dwX;
-        public int dwY;
-        public int dwXSize;
-        public int dwYSize;
-        public int dwXCountChars;
-        public int dwYCountChars;
-        public int dwFillAttribute;
-        public int dwFlags;
-        public short wShowWindow;
-        public short cbReserved2;
+        public uint cb;
+        public IntPtr lpReserved;
+        public IntPtr lpDesktop;
+        public IntPtr lpTitle;
+        public uint dwX;
+        public uint dwY;
+        public uint dwXSize;
+        public uint dwYSize;
+        public uint dwXCountChars;
+        public uint dwYCountChars;
+        public uint dwFillAttribute;
+        public uint dwFlags;
+        public ushort wShowWindow;
+        public ushort cbReserved2;
         public IntPtr lpReserved2;
         public IntPtr hStdInput;
         public IntPtr hStdOutput;

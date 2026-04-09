@@ -23,6 +23,9 @@ internal static partial class DebugBuildCommands
         };
     }
 
+    private static bool GetDiagnosticsForceRefresh(CommandArguments args)
+        => args.GetBoolean("refresh", false);
+
     private static JObject FilterRowsBySeverity(JArray allRows, string severity, int? max)
     {
         IEnumerable<JToken> filtered = allRows

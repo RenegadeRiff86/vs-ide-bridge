@@ -17,25 +17,22 @@ namespace VsIdeBridge.Services;
 #endif
 internal sealed class MemoryDiscoveryStore : IDisposable
 {
-    private const string DefaultMapName = @"Local\VsIdeBridge.Discovery.v1";
-    private const string DefaultMutexName = @"Local\VsIdeBridge.Discovery.v1.mutex";
-    private const int DefaultCapacityBytes = 1024 * 1024;
+    internal const string LocalMapName = @"Local\VsIdeBridge.Discovery.v1";
+    internal const string LocalMutexName = @"Local\VsIdeBridge.Discovery.v1.mutex";
+    internal const string GlobalMapName = @"Global\VsIdeBridge.Discovery.v1";
+    internal const string GlobalMutexName = @"Global\VsIdeBridge.Discovery.v1.mutex";
+    internal const int DefaultCapacityBytes = 1024 * 1024;
     private const int LengthPrefixBytes = sizeof(int);
     private static readonly TimeSpan EntryTtl = TimeSpan.FromHours(6);
     private static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly UTF8Encoding Utf8NoBom = new(false);
-    private readonly string _mapName;
-    private readonly string _mutexName;
-    private readonly int _capacityBytes;
-    private readonly TimeSpan _lockTimeout;
-    private readonly Func<string, Mutex> _mutexFactory;
-    private readonly Func<string, int, MemoryMappedFile> _mapFactory;
+    private readonly StoreConfiguration _config;
     private readonly Lazy<MemoryMappedFile?> _sharedMap;
 
     public MemoryDiscoveryStore()
         : this(
-            DefaultMapName,
-            DefaultMutexName,
+            LocalMapName,
+            LocalMutexName,
             DefaultCapacityBytes,
             DefaultLockTimeout,
             static name => new Mutex(false, name),
@@ -51,12 +48,13 @@ internal sealed class MemoryDiscoveryStore : IDisposable
         Func<string, Mutex> mutexFactory,
         Func<string, int, MemoryMappedFile> mapFactory)
     {
-        _mapName = string.IsNullOrWhiteSpace(mapName) ? DefaultMapName : mapName;
-        _mutexName = string.IsNullOrWhiteSpace(mutexName) ? DefaultMutexName : mutexName;
-        _capacityBytes = capacityBytes > 0 ? capacityBytes : DefaultCapacityBytes;
-        _lockTimeout = lockTimeout > TimeSpan.Zero ? lockTimeout : DefaultLockTimeout;
-        _mutexFactory = mutexFactory ?? throw new ArgumentNullException(nameof(mutexFactory));
-        _mapFactory = mapFactory ?? throw new ArgumentNullException(nameof(mapFactory));
+        _config = new StoreConfiguration(
+            string.IsNullOrWhiteSpace(mapName) ? LocalMapName : mapName,
+            string.IsNullOrWhiteSpace(mutexName) ? LocalMutexName : mutexName,
+            capacityBytes > 0 ? capacityBytes : DefaultCapacityBytes,
+            lockTimeout > TimeSpan.Zero ? lockTimeout : DefaultLockTimeout,
+            mutexFactory ?? throw new ArgumentNullException(nameof(mutexFactory)),
+            mapFactory ?? throw new ArgumentNullException(nameof(mapFactory)));
         _sharedMap = new Lazy<MemoryMappedFile?>(CreateSharedMap, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
@@ -155,11 +153,11 @@ internal sealed class MemoryDiscoveryStore : IDisposable
         bool hasLock = false;
         try
         {
-            Trace($"ExecuteWithStore start map='{_mapName}' mutex='{_mutexName}'.");
-            mutex = _mutexFactory(_mutexName);
+            Trace($"ExecuteWithStore start map='{_config.MapName}' mutex='{_config.MutexName}'.");
+            mutex = _config.MutexFactory(_config.MutexName);
             try
             {
-                hasLock = mutex.WaitOne(_lockTimeout);
+                hasLock = mutex.WaitOne(_config.LockTimeout);
             }
             catch (AbandonedMutexException)
             {
@@ -179,10 +177,10 @@ internal sealed class MemoryDiscoveryStore : IDisposable
                 return;
             }
 
-            using MemoryMappedViewStream view = map.CreateViewStream(0, _capacityBytes, MemoryMappedFileAccess.ReadWrite);
-            JObject root = ReadRoot(view, _capacityBytes);
+            using MemoryMappedViewStream view = map.CreateViewStream(0, _config.CapacityBytes, MemoryMappedFileAccess.ReadWrite);
+            JObject root = ReadRoot(view, _config.CapacityBytes);
             mutate(root);
-            WriteRoot(view, root, _capacityBytes);
+            WriteRoot(view, root, _config.CapacityBytes);
             Trace("ExecuteWithStore write completed.");
         }
         catch (Exception ex) when (ex is not null) // best-effort store; discovery JSON is the compatibility fallback
@@ -216,9 +214,9 @@ internal sealed class MemoryDiscoveryStore : IDisposable
     {
         try
         {
-            return _mapFactory(_mapName, _capacityBytes);
+            return _config.MapFactory(_config.MapName, _config.CapacityBytes);
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Trace($"CreateSharedMap error: {ex}");
             return null;
@@ -342,4 +340,12 @@ internal sealed class MemoryDiscoveryStore : IDisposable
 
         view.Flush();
     }
+
+    private sealed record StoreConfiguration(
+        string MapName,
+        string MutexName,
+        int CapacityBytes,
+        TimeSpan LockTimeout,
+        Func<string, Mutex> MutexFactory,
+        Func<string, int, MemoryMappedFile> MapFactory);
 }

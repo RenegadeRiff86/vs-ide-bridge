@@ -12,6 +12,7 @@ internal static class PipeCommandNames
         ["Tools.IdeSmokeTest"] = ["smoke-test"],
         ["Tools.IdeGetState"] = ["state"],
         ["Tools.IdeGetUiSettings"] = ["ui-settings"],
+        ["Tools.IdeCaptureVsWindow"] = ["capture-vs-window"],
         ["Tools.IdeWaitForReady"] = ["ready"],
         ["Tools.IdeOpenSolution"] = ["open-solution"],
         ["Tools.IdeLaunchVisualStudio"] = ["launch-visual-studio"],
@@ -95,6 +96,7 @@ internal static class PipeCommandNames
         ["Tools.IdeSetPythonStartupFile"] = ["set-python-startup-file"],
         ["Tools.IdeGetPythonStartupFile"] = ["get-python-startup-file"],
         ["Tools.IdeSearchSolutions"] = ["search-solutions"],
+        ["Tools.IdeRunCodeAnalysis"] = ["run-code-analysis"],
     };
 
     public static string GetPrimaryName(string canonicalName)

@@ -18,9 +18,7 @@ internal sealed class BridgeUiSettingsService
     private const string HttpServerEnabledKey = "HttpServerEnabled";
 
     private readonly WritableSettingsStore? _store;
-#pragma warning disable IDE0028 // Preserving the comparer requires the explicit dictionary constructor.
-    private readonly Dictionary<string, bool> _fallback = new(StringComparer.OrdinalIgnoreCase);
-#pragma warning restore IDE0028
+    private readonly Dictionary<string, bool> _fallback = new(0, StringComparer.OrdinalIgnoreCase);
 
     public BridgeUiSettingsService(IServiceProvider serviceProvider)
     {

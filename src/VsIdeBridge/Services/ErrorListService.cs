@@ -38,7 +38,8 @@ internal sealed partial class ErrorListService(VsIdeBridgePackage package, Readi
         bool quickSnapshot = false,
         ErrorListQuery? query = null,
         bool includeBuildOutputFallback = false,
-        bool afterEdit = false)
+        bool afterEdit = false,
+        bool forceRefresh = false)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
@@ -56,7 +57,6 @@ internal sealed partial class ErrorListService(VsIdeBridgePackage package, Readi
         if (quickSnapshot)
         {
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
-            EnsureErrorListWindow(context.Dte);
             try
             {
                 rows = ReadRows(context.Dte);
@@ -73,7 +73,7 @@ internal sealed partial class ErrorListService(VsIdeBridgePackage package, Readi
         }
         else
         {
-            rows = await WaitForRowsAsync(context, timeoutMilliseconds).ConfigureAwait(true);
+            rows = await WaitForRowsAsync(context, timeoutMilliseconds, forceRefresh).ConfigureAwait(true);
             if (includeBuildOutputFallback && rows.Count == 0)
             {
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);

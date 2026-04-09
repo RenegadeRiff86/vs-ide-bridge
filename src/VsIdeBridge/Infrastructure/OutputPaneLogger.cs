@@ -17,22 +17,28 @@ internal sealed class OutputPaneLogger(AsyncPackage package)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-        DTE2? dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
-        if (dte is not null)
+        _dte ??= await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
+
+        if (_dte is not null)
         {
-            EnvDTE.OutputWindowPane pane = GetOrCreatePane(dte);
-            pane.OutputString($"{message}{Environment.NewLine}");
+            _pane ??= GetOrCreatePane(_dte);
+            _pane.OutputString($"{message}{Environment.NewLine}");
             if (activatePane)
             {
-                pane.Activate();
+                _pane.Activate();
             }
         }
 
-        if (await _package.GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) is IVsStatusbar statusbar)
-        {
-            statusbar.SetText(message);
-        }
+        _statusbar ??= await _package.GetServiceAsync(typeof(SVsStatusbar)).ConfigureAwait(true) as IVsStatusbar;
+
+        _statusbar?.SetText(message);
     }
+
+    // DTE, output pane, and status bar are cached after first use; all stable for the VS lifetime.
+    // All reads/writes occur on the UI thread (guarded by SwitchToMainThreadAsync above).
+    private DTE2? _dte;
+    private EnvDTE.OutputWindowPane? _pane;
+    private IVsStatusbar? _statusbar;
 
     private static EnvDTE.OutputWindowPane GetOrCreatePane(DTE2 dte)
     {

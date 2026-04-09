@@ -56,6 +56,11 @@ internal sealed class DocumentDiagnosticsSnapshot
             json["warnings"] = Results.Warnings.DeepClone();
         }
 
+        if (Results.Messages is not null)
+        {
+            json["messages"] = Results.Messages.DeepClone();
+        }
+
         return json;
     }
 }
@@ -74,4 +79,6 @@ internal sealed class DocumentDiagnosticsResultSnapshot
     public JsonObject? Errors { get; init; }
 
     public JsonObject? Warnings { get; init; }
+
+    public JsonObject? Messages { get; init; }
 }

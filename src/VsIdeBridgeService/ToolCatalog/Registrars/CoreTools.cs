@@ -218,6 +218,21 @@ internal static partial class ToolCatalog
             searchHints: BuildSearchHints(
                 related: [("vs_state", "Check IDE state"), ("bridge_health", "Check binding health")]));
 
+        yield return BridgeTool("capture_vs_window",
+            "Activate the bound Visual Studio main window, bring it to the foreground, and capture only that window to a PNG image.",
+            ObjectSchema(
+                Opt("out", "Optional output PNG path. If omitted, saves under %TEMP%\\vs-ide-bridge\\screenshots.")),
+            "capture-vs-window",
+            a => Build(("out", OptionalString(a, "out"))),
+            category: "documents",
+            summary: "Activate the bound Visual Studio window and capture only that window to a PNG.",
+            readOnly: true,
+            mutating: false,
+            destructive: false,
+            searchHints: BuildSearchHints(
+                workflow: [("vs_state", "Confirm the bound instance before capture")],
+                related: [("activate_window", "Bring a specific tool window forward first"), ("list_windows", "Inspect current VS windows")]));
+
         yield return new("http_enable",
             "Start the HTTP MCP server on localhost:8080. " +
             "Enables Ollama and other local LLM clients to connect directly to the bridge. " +

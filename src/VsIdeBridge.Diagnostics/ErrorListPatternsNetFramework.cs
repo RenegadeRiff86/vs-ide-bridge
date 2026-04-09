@@ -87,6 +87,12 @@ internal static partial class ErrorListPatterns
     private static readonly Regex _broadCatchPattern = new(@"catch\s*\(\s*(?:System\.)?Exception(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\)(?!\s*when\b)", RegexOptions.Compiled);
     public static Regex BroadCatchPattern() { return _broadCatchPattern; }
 
+    private static readonly Regex _pragmaWarningDisablePattern = new(@"^[ \t]*#pragma\s+warning\s+disable\b.*$", RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
+    public static Regex PragmaWarningDisablePattern() { return _pragmaWarningDisablePattern; }
+
+    private static readonly Regex _todoCommentPattern = new(@"(?im)^[ \t]*(?://+|#|'+|/\*+|\*+|\(\*)\s*TODO\b(?<text>.*)$", RegexOptions.Compiled);
+    public static Regex TodoCommentPattern() { return _todoCommentPattern; }
+
     private static readonly Regex _frameworkTypePattern = new(@"\bSystem\.(?<type>String|Int16|Int32|Int64|UInt16|UInt32|UInt64|Boolean|Object|Decimal|Double|Single|Byte|SByte|Char)\b", RegexOptions.Compiled);
     public static Regex FrameworkTypePattern() { return _frameworkTypePattern; }
 

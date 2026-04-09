@@ -45,7 +45,8 @@ internal static partial class BestPracticeAnalyzer
             .Concat(FindDeepNesting(file, content, language))
             .Concat(FindCommentedOutCode(file, content, language))
             .Concat(FindMixedIndentation(file, content))
-            .Concat(FindMojibake(file, content));
+            .Concat(FindMojibake(file, content))
+            .Concat(FindTodoComments(file, content));
 
         // Language-specific rules
         if (language == CodeLanguage.CSharp)
@@ -53,6 +54,7 @@ internal static partial class BestPracticeAnalyzer
             findings = findings
                 .Concat(FindImplicitVarUsage(file, content))
                 .Concat(FindBroadCatchException(file, content))
+                .Concat(FindPragmaWarningDisable(file, content))
                 .Concat(FindFrameworkTypeAliases(file, content))
                 .Concat(FindLongMainThreadScopes(file, content))
                 .Concat(FindSuspiciousRoundDown(file, content))
@@ -459,6 +461,11 @@ internal static partial class BestPracticeAnalyzer
         {
             string methodName = match.Groups[1].Value;
             int startLine = BestPracticeAnalyzerHelpers.GetLineNumber(content, match.Index);
+            if (language == CodeLanguage.CSharp && BestPracticeAnalyzerHelpers.IsGeneratedRegexDeclaration(lines, startLine))
+            {
+                continue;
+            }
+
             int methodLength;
             if (language == CodeLanguage.Python)
             {
@@ -891,7 +898,7 @@ internal static partial class BestPracticeAnalyzer
             {
                 yield return DiagnosticRowFactory.CreateBestPracticeRow(
                     code: "BP1018",
-                    message: $"Class '{className}' has {methodCount} methods (threshold: {GodClassMethodThreshold}). Split responsibilities into smaller classes — use create_project to create a class library.",
+                    message: $"Class '{className}' has {methodCount} methods (threshold: {GodClassMethodThreshold}). Split responsibilities by extracting focused collaborators or helper services so this type stops owning unrelated workflows.",
                     file: file,
                     line: classStartLine,
                     symbol: className,
@@ -912,7 +919,7 @@ internal static partial class BestPracticeAnalyzer
                 {
                     yield return DiagnosticRowFactory.CreateBestPracticeRow(
                         code: "BP1018",
-                        message: $"Class '{className}' has {fieldCount} fields (threshold: {GodClassFieldThreshold}). Consider splitting state into smaller classes — use create_project to create a class library.",
+                        message: $"Class '{className}' has {fieldCount} fields (threshold: {GodClassFieldThreshold}). Split state into smaller focused objects so this type stops carrying unrelated responsibilities.",
                         file: file,
                         line: classStartLine,
                         symbol: className,

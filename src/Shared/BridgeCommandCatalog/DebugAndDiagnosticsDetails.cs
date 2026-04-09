@@ -28,22 +28,22 @@ public static partial class BridgeCommandCatalog
         switch (commandName)
         {
             case "set-breakpoint":
-                detail = ("Set a breakpoint at file/line with optional condition, hit count, and tracepoint behavior.", ExampleCommand("set-breakpoint", @"{""file"":""C:\\repo\\src\\foo.cpp"",""line"":42}"));
+                detail = ("Set a breakpoint at file/line with optional condition, hit count, and tracepoint behavior. Prefer a unique bare filename like 'BuildService.cs'; use a longer path only when needed.", ExampleCommand("set-breakpoint", @"{""file"":""BuildService.cs"",""line"":42}"));
                 return true;
             case "list-breakpoints":
                 detail = ("List current breakpoints.", commandName);
                 return true;
             case "remove-breakpoint":
-                detail = ("Remove breakpoints by file/line, id, or all.", ExampleCommand("remove-breakpoint", @"{""file"":""C:\\repo\\src\\foo.cpp"",""line"":42}"));
+                detail = ("Remove breakpoints by file/line, id, or all. Prefer a unique bare filename like 'BuildService.cs'; use a longer path only when needed.", ExampleCommand("remove-breakpoint", @"{""file"":""BuildService.cs"",""line"":42}"));
                 return true;
             case "clear-breakpoints":
                 detail = ("Clear all breakpoints.", commandName);
                 return true;
             case "enable-breakpoint":
-                detail = ("Enable a breakpoint by id or file/line.", ExampleCommand("enable-breakpoint", @"{""file"":""C:\\repo\\src\\foo.cpp"",""line"":42}"));
+                detail = ("Enable a breakpoint by id or file/line. Prefer a unique bare filename like 'BuildService.cs'; use a longer path only when needed.", ExampleCommand("enable-breakpoint", @"{""file"":""BuildService.cs"",""line"":42}"));
                 return true;
             case "disable-breakpoint":
-                detail = ("Disable a breakpoint by id or file/line.", ExampleCommand("disable-breakpoint", @"{""file"":""C:\\repo\\src\\foo.cpp"",""line"":42}"));
+                detail = ("Disable a breakpoint by id or file/line. Prefer a unique bare filename like 'BuildService.cs'; use a longer path only when needed.", ExampleCommand("disable-breakpoint", @"{""file"":""BuildService.cs"",""line"":42}"));
                 return true;
             case "enable-all-breakpoints":
                 detail = ("Enable all breakpoints.", commandName);
@@ -123,22 +123,25 @@ public static partial class BridgeCommandCatalog
                 detail = ("Activate one build configuration/platform pair.", ExampleCommand("set-build-configuration", @"{""configuration"":""Debug"",""platform"":""x64""}"));
                 return true;
             case "build":
-                detail = ("Build the solution or a specific project. Provide project to build one project; omit it to build the whole solution.", ExampleCommand("build", @"{""project"":""VsIdeBridgeInstaller"",""configuration"":""Release""}"));
+                detail = ("Build the solution or a specific project. Provide project to build one project; omit it to build the whole solution. Set wait_for_completion=false only for solution-wide builds when you want to start the build and return immediately.", ExampleCommand("build", @"{""configuration"":""Release"",""wait_for_completion"":false}"));
                 return true;
             case "rebuild":
-                detail = ("Rebuild the active solution inside Visual Studio. This performs a clean step before building and is heavier than build.", ExampleCommand("rebuild", @"{""configuration"":""Release""}"));
+                detail = ("Rebuild the active solution inside Visual Studio. This performs a clean step before building and is heavier than build. By default it starts in the background and returns immediately.", ExampleCommand("rebuild", @"{""configuration"":""Release"",""wait_for_completion"":false}"));
                 return true;
             case "errors":
-                detail = ("Capture Error List rows with optional severity and text filters.", ExampleCommand("errors", @"{""severity"":""error"",""max"":50}"));
+                detail = ("Read current Error List rows with optional severity and text filters. Set refresh=true only when you want to force the Error List to repopulate first.", ExampleCommand("errors", @"{""severity"":""error"",""max"":50}"));
                 return true;
             case "warnings":
-                detail = ("Capture warning rows with optional code/path/project filters.", ExampleCommand("warnings", @"{""group_by"":""code""}"));
+                detail = ("Read current warning rows with optional code/path/project filters. Set refresh=true only when you want to force the Error List to repopulate first.", ExampleCommand("warnings", @"{""group_by"":""code""}"));
                 return true;
             case "messages":
-                detail = ("Capture message rows with optional code/path/project filters.", ExampleCommand("messages", @"{""group_by"":""code""}"));
+                detail = ("Read current message rows with optional code/path/project filters. Set refresh=true only when you want to force the Error List to repopulate first.", ExampleCommand("messages", @"{""group_by"":""code""}"));
                 return true;
             case "build-errors":
                 detail = ("Build then capture Error List rows in one call. By default this refuses to build when diagnostics already exist and fails if any errors, warnings, or messages remain after the build.", ExampleCommand("build-errors", @"{""max"":200,""require_clean_diagnostics"":true}"));
+                return true;
+            case "run-code-analysis":
+                detail = ("Run VS code analysis on the solution using the SDK build infrastructure. By default it starts in the background and returns immediately; set wait_for_completion=true to wait for completion and capture Error List results.", ExampleCommand("run-code-analysis", @"{""timeout_ms"":300000,""wait_for_completion"":false}"));
                 return true;
             default:
                 detail = default;

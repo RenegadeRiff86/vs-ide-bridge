@@ -269,6 +269,18 @@ internal static class BestPracticeRuleCatalog
         public static readonly int Threshold = ErrorListConstants.MainThreadScopeWarningThreshold;
     }
 
+    public static class BP1044
+    {
+        public const string Code = "BP1044";
+        public const string HelpUri = ErrorListConstants.BP1044HelpUri;
+    }
+
+    public static class BP1045
+    {
+        public const string Code = "BP1045";
+        public const string HelpUri = ErrorListConstants.BP1045HelpUri;
+    }
+
     public static string GetGuidance(string code)
     {
         return BestPracticeRuleMetadata.TryGetRuleText(code)?.Guidance ?? string.Empty;
@@ -331,6 +343,8 @@ internal static class BestPracticeRuleCatalog
             "BP1041" => ErrorListConstants.BP1041HelpUri,
             "BP1042" => ErrorListConstants.BP1042HelpUri,
             "BP1043" => ErrorListConstants.BP1043HelpUri,
+            "BP1044" => ErrorListConstants.BP1044HelpUri,
+            "BP1045" => ErrorListConstants.BP1045HelpUri,
             _ => string.Empty,
         };
     }

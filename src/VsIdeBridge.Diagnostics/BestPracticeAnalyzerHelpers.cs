@@ -70,6 +70,34 @@ internal static partial class BestPracticeAnalyzerHelpers
         return count;
     }
 
+    internal static bool IsGeneratedRegexDeclaration(string[] lines, int startLine)
+    {
+        int lineIndex = startLine - 1;
+        if (lineIndex < 0 || lineIndex >= lines.Length)
+        {
+            return false;
+        }
+
+        string declarationLine = lines[lineIndex];
+        if (declarationLine.IndexOf("partial Regex", StringComparison.Ordinal) < 0)
+        {
+            return false;
+        }
+
+        for (int i = lineIndex - 1; i >= 0; i--)
+        {
+            string candidateLine = lines[i].Trim();
+            if (string.IsNullOrEmpty(candidateLine))
+            {
+                continue;
+            }
+
+            return candidateLine.IndexOf("GeneratedRegex(", StringComparison.Ordinal) >= 0;
+        }
+
+        return false;
+    }
+
     internal static string ExtractBracedBlock(string[] lines, int startIndex)
     {
         int depth = 0;

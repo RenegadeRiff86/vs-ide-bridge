@@ -127,6 +127,12 @@ internal sealed partial class DocumentService
     public async Task<JObject> ActivateOpenDocumentAsync(DTE2 dte, string query)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        return ActivateOpenDocumentOnMainThread(dte, query);
+    }
+
+    private static JObject ActivateOpenDocumentOnMainThread(DTE2 dte, string query)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
 
         (List<Document> documents, string matchedBy) = ResolveDocumentMatches(dte, query, fallbackToActive: false, allowMultiple: false);
         documents[0].Activate();
@@ -135,20 +141,48 @@ internal sealed partial class DocumentService
         {
             ["query"] = query,
             ["matchedBy"] = matchedBy,
-            ["document"] = CreateDocumentInfo(documents[0], documents[0].FullName),
+            ["document"] = TryCreateDocumentInfo(documents[0], TryGetDocumentFullName(documents[0]))
+                ?? new JObject
+                {
+                    ["name"] = TryGetDocumentName(documents[0]) ?? string.Empty,
+                    ["path"] = TryGetDocumentFullName(documents[0]) ?? string.Empty,
+                    ["tabIndex"] = JValue.CreateNull(),
+                    ["isActive"] = true,
+                    ["project"] = TryGetDocumentProjectUniqueName(documents[0]) ?? string.Empty,
+                    ["isProjectBacked"] = IsProjectBackedDocument(documents[0]),
+                    ["isReviewArtifact"] = IsReviewArtifactDocument(documents[0]),
+                    ["saved"] = JValue.CreateNull(),
+                },
         };
     }
 
     public async Task<JObject> CloseOpenDocumentsAsync(DTE2 dte, string? query, bool closeAllMatches, bool saveChanges)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        return CloseOpenDocumentsOnMainThread(dte, query, closeAllMatches, saveChanges);
+    }
+
+    private static JObject CloseOpenDocumentsOnMainThread(DTE2 dte, string? query, bool closeAllMatches, bool saveChanges)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
 
         string? activePath = TryGetDocumentFullName(dte.ActiveDocument);
         (List<Document> documents, string matchedBy) = ResolveDocumentMatches(dte, query, fallbackToActive: true, allowMultiple: closeAllMatches);
         JArray closed = [];
         foreach (Document document in documents)
         {
-            JObject info = CreateDocumentInfo(document, activePath);
+            JObject info = TryCreateDocumentInfo(document, activePath)
+                ?? new JObject
+                {
+                    ["name"] = TryGetDocumentName(document) ?? string.Empty,
+                    ["path"] = TryGetDocumentFullName(document) ?? string.Empty,
+                    ["tabIndex"] = JValue.CreateNull(),
+                    ["isActive"] = false,
+                    ["project"] = TryGetDocumentProjectUniqueName(document) ?? string.Empty,
+                    ["isProjectBacked"] = IsProjectBackedDocument(document),
+                    ["isReviewArtifact"] = IsReviewArtifactDocument(document),
+                    ["saved"] = JValue.CreateNull(),
+                };
             document.Close(saveChanges ? vsSaveChanges.vsSaveChangesYes : vsSaveChanges.vsSaveChangesNo);
             closed.Add(info);
         }
@@ -252,7 +286,19 @@ internal sealed partial class DocumentService
         JArray closed = [];
         foreach (Document document in documentsToClose)
         {
-            closed.Add(CreateDocumentInfo(document, activePath));
+            closed.Add(
+                TryCreateDocumentInfo(document, activePath)
+                ?? new JObject
+                {
+                    ["name"] = TryGetDocumentName(document) ?? string.Empty,
+                    ["path"] = TryGetDocumentFullName(document) ?? string.Empty,
+                    ["tabIndex"] = JValue.CreateNull(),
+                    ["isActive"] = false,
+                    ["project"] = TryGetDocumentProjectUniqueName(document) ?? string.Empty,
+                    ["isProjectBacked"] = IsProjectBackedDocument(document),
+                    ["isReviewArtifact"] = IsReviewArtifactDocument(document),
+                    ["saved"] = JValue.CreateNull(),
+                });
             document.Close(saveChanges ? vsSaveChanges.vsSaveChangesYes : vsSaveChanges.vsSaveChangesNo);
         }
 
