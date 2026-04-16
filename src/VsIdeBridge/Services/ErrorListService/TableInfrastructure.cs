@@ -240,49 +240,37 @@ internal sealed partial class ErrorListService
         int stableSamples = 0;
         int requiredStableSamples = StableSampleCount;
 
-        if (forceRefresh)
-        {
-            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
-            EnsureErrorListWindow(context.Dte);
-        }
-
         while (DateTimeOffset.UtcNow < deadline)
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
-            IReadOnlyList<JObject>? rows = null;
+            IReadOnlyList<JObject> rows;
             try
             {
-                rows = await ReadRowsAsync(context).ConfigureAwait(true);
+                rows = await ReadRowsAsync(context, includeDteRows: !forceRefresh).ConfigureAwait(true);
             }
             catch (InvalidOperationException)
             {
-                if (forceRefresh)
-                {
-                    EnsureErrorListWindow(context.Dte);
-                }
+                rows = [];
             }
 
-            if (rows is not null)
+            if (rows.Count != lastCount)
             {
-                if (rows.Count != lastCount)
-                {
-                    lastCount = rows.Count;
-                    stableSamples = 1;
-                }
-                else
-                {
-                    stableSamples++;
-                }
+                lastCount = rows.Count;
+                stableSamples = 1;
+            }
+            else
+            {
+                stableSamples++;
+            }
 
-                lastRows = [.. rows];
-                // Wait for multiple stable reads even after IntelliSense reports ready,
-                // because some Error List providers continue hydrating message rows after that point.
-                if (stableSamples >= requiredStableSamples)
-                {
-                    return rows;
-                }
+            lastRows = [.. rows];
+            // Wait for multiple stable reads even after IntelliSense reports ready,
+            // because some Error List providers continue hydrating message rows after that point.
+            if (stableSamples >= requiredStableSamples)
+            {
+                return rows;
             }
 
             await Task.Delay(PopulationPollIntervalMilliseconds, context.CancellationToken).ConfigureAwait(false);
@@ -291,9 +279,14 @@ internal sealed partial class ErrorListService
         return lastRows;
     }
 
-    private async Task<IReadOnlyList<JObject>> ReadRowsAsync(IdeCommandContext context)
+    private async Task<IReadOnlyList<JObject>> ReadRowsAsync(IdeCommandContext context, bool includeDteRows = true)
     {
         IReadOnlyList<JObject> tableRows = await TryReadTableRowsAsync(context.CancellationToken).ConfigureAwait(false);
+        if (!includeDteRows)
+        {
+            return tableRows;
+        }
+
         IReadOnlyList<JObject> dteRows = await ReadDteRowsAsync(context, tableRows).ConfigureAwait(false);
 
         // Table rows are preferred (richer data); merge DTE rows to fill gaps

@@ -41,6 +41,7 @@ internal static class BridgeConnectionArgs
             "rebuild-solution" or
             "build-errors" or
             "run-code-analysis" or
+            "debug-start" or
             "find-references" or
             "count-references" or
             "call-hierarchy" or

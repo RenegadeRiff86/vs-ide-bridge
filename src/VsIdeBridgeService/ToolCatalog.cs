@@ -13,7 +13,7 @@ internal static partial class ToolCatalog
 
     private static IReadOnlyList<ToolEntry> CreateEntries()
     {
-        return
+        ToolEntry[] entries =
         [
             // ── core: discovery + binding ──────────────────────────────────────
             .. CoreTools(),
@@ -35,6 +35,11 @@ internal static partial class ToolCatalog
             .. PythonNativeTools(),
             // ── nuget package management (service-native subprocess) ───────────
             .. NugetTools(),
+        ];
+
+        return
+        [
+            .. entries.Select(EnrichSearchHints),
         ];
     }
 }

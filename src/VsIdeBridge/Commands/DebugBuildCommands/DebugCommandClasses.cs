@@ -30,6 +30,16 @@ internal static partial class DebugBuildCommands
                 context.Dte,
                 args.GetBoolean("wait-for-break", false),
                 args.GetInt32(TimeoutMillisecondsArgument, DefaultDebuggerTimeoutMilliseconds)).ConfigureAwait(true);
+
+            if (commandData["likelyBuildOrLaunchFailure"]?.Value<bool>() == true)
+            {
+                JArray warnings =
+                [
+                    "Debugger returned to design mode without launching a process. The startup build or launch likely failed; read errors, warnings, messages, or diagnostics_snapshot for details.",
+                ];
+                return new CommandExecutionResult("Debugger did not start; the startup build or launch likely failed.", commandData, warnings);
+            }
+
             return new CommandExecutionResult("Debugger started.", commandData);
         }
     }

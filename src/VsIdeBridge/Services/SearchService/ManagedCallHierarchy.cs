@@ -2,6 +2,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.VisualStudio.LanguageServices;
+using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -95,13 +96,28 @@ internal sealed partial class SearchService
                 "No navigable symbol was found under the caret.");
         }
 
-        (Dictionary<string, string> pathToProject, Microsoft.VisualStudio.ComponentModelHost.IComponentModel? componentModel) =
-            await CaptureManagedSearchContextAsync(context, "solution", null, null).ConfigureAwait(true);
+        // Fetch component model and workspace on the UI thread - both are fast service lookups.
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+        Microsoft.VisualStudio.ComponentModelHost.IComponentModel? componentModel =
+            ((System.IServiceProvider)context.Package).GetService(typeof(Microsoft.VisualStudio.ComponentModelHost.SComponentModel))
+            as Microsoft.VisualStudio.ComponentModelHost.IComponentModel;
 
         if (componentModel is null)
         {
             return CreateManagedCallHierarchyOutcome(sourceLocation, null, 0, "component_model_missing", "SComponentModel service not available.");
         }
+
+        VisualStudioWorkspace? workspace = TryGetVisualStudioWorkspace(componentModel);
+        if (workspace is null)
+        {
+            return CreateManagedCallHierarchyOutcome(sourceLocation, null, 0, "workspace_missing", "VisualStudioWorkspace export was not available.");
+        }
+
+        // Capture the solution snapshot (immutable) then build pathToProject on a thread-pool
+        // thread from Roslyn data - no DTE COM enumeration, no UI-thread blocking.
+        Solution solution = workspace.CurrentSolution;
+        Dictionary<string, string> pathToProject = await Task.Run(
+            () => BuildPathToProjectFromSolution(solution), context.CancellationToken).ConfigureAwait(false);
 
         if (pathToProject.Count == 0 || !pathToProject.ContainsKey(sourcePath))
         {
@@ -112,14 +128,6 @@ internal sealed partial class SearchService
                 "no_managed_targets",
                 "The current source file was not available in the managed workspace scope.");
         }
-
-        VisualStudioWorkspace? workspace = TryGetVisualStudioWorkspace(componentModel);
-        if (workspace is null)
-        {
-            return CreateManagedCallHierarchyOutcome(sourceLocation, null, 0, "workspace_missing", "VisualStudioWorkspace export was not available.");
-        }
-
-        Solution solution = workspace.CurrentSolution;
 
         ISymbol? targetSymbol = await ResolveManagedTargetSymbolAsync(
             solution,
@@ -605,6 +613,31 @@ internal sealed partial class SearchService
             TraceSearchFailure("TryGetManagedLocationFromLocation", ex);
             return false;
         }
+    }
+
+    private static Dictionary<string, string> BuildPathToProjectFromSolution(Solution solution)
+    {
+        Dictionary<string, string> pathToProject = new(StringComparer.OrdinalIgnoreCase);
+        foreach (Project project in solution.Projects)
+        {
+            string projectName = project.FilePath ?? project.Name;
+            foreach (Document document in project.Documents)
+            {
+                string? filePath = document.FilePath;
+                if (filePath is null || !IsManagedSearchCandidate(filePath))
+                {
+                    continue;
+                }
+
+                string normalizedPath = PathNormalization.NormalizeFilePath(filePath);
+                if (!pathToProject.ContainsKey(normalizedPath))
+                {
+                    pathToProject[normalizedPath] = projectName;
+                }
+            }
+        }
+
+        return pathToProject;
     }
 
     private static VisualStudioWorkspace? TryGetVisualStudioWorkspace(Microsoft.VisualStudio.ComponentModelHost.IComponentModel? componentModel)

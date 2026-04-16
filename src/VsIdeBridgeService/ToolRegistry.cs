@@ -36,7 +36,7 @@ internal sealed class ToolExecutionRegistry
         return result;
     }
 
-    public Task<JsonNode> DispatchAsync(JsonNode? id, string name, JsonObject? args, BridgeConnection bridge)
+    public async Task<JsonNode> DispatchAsync(JsonNode? id, string name, JsonObject? args, BridgeConnection bridge)
     {
         if (!_byLookupName.TryGetValue(name, out ToolEntry? entry))
             throw new McpRequestException(id, McpErrorCodes.InvalidParams,
@@ -45,7 +45,31 @@ internal sealed class ToolExecutionRegistry
                 "recommend_tools with a description of your goal to get targeted suggestions, " +
                 "or tool_help with a tool name to read its full documentation.");
 
-        return entry.Handler(id, args, bridge);
+        try
+        {
+            return await entry.Handler(id, args, bridge).ConfigureAwait(false);
+        }
+        catch (McpRequestException ex) when (ex.Code == McpErrorCodes.InvalidParams)
+        {
+            // Convert InvalidParams into a content-level isError result so the model can
+            // self-correct using the embedded input schema rather than receiving a JSON-RPC error.
+            McpServerLog.Write($"tool invalid-params tool={name} message={ex.Message}");
+            return BuildInvalidParamsResult(ex.Message, entry);
+        }
+    }
+
+    private static JsonObject BuildInvalidParamsResult(string message, ToolEntry entry)
+    {
+        string schema = entry.Definition.ParameterSchema?.ToJsonString() ?? "{}";
+        string text =
+            $"{message}\n\n" +
+            $"Input schema for '{entry.Name}':\n{schema}\n\n" +
+            $"Call tool_help with name=\"{entry.Name}\" for full documentation.";
+        return new JsonObject
+        {
+            ["content"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = text } },
+            ["isError"] = true,
+        };
     }
 
     private static Dictionary<string, ToolEntry> BuildLookup(IEnumerable<ToolEntry> entries)

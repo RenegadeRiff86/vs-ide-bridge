@@ -46,12 +46,14 @@ internal static partial class ToolCatalog
     private const string MessagesTool = "messages";
     private const string DiagnosticsSnapshotCommand = "diagnostics-snapshot";
 
-    private const string DefaultMaxRows = "50";
-    private const int DefaultCompactDiagnosticsRows = 50;
+    private const string DefaultMaxRows = "10";
+    private const int DefaultCompactDiagnosticsRows = 10;
+    private const int DefaultCompactDiagnosticsStateItems = 10;
     private const string Refresh = "refresh";
     private const string PassiveDiagnosticsReadDescription = "Read the current passive diagnostics snapshot immediately. This may be stale relative to the live Error List.";
     private const string RefreshDiagnosticsDescription = "Force the Error List to refresh before reading when you need a fresh UI read (default false).";
     private const string PassiveSnapshotStaleWarning = "Using the passive diagnostics snapshot. This list may be stale relative to the current Visual Studio Error List. Use refresh=true for a fresh UI read.";
+    private const string TimedOutDirectReadWarning = "The direct Error List read timed out, so the bridge fell back to diagnostics_snapshot instead of failing outright.";
 
     private static ToolEntry CreateErrorsTool()
     {
@@ -61,7 +63,7 @@ internal static partial class ToolCatalog
                 OptBool(WaitForIntellisense, "Wait for IntelliSense readiness before a live filtered or refresh read (default false)."),
                 OptBool(Quick, PassiveDiagnosticsReadDescription),
                 OptBool(Refresh, RefreshDiagnosticsDescription),
-                OptInt(Max, "Max rows to return. Defaults to 50 when no filters are set."),
+                OptInt(Max, "Max rows to return. Defaults to 10 when no filters are set."),
                 Opt(Code, "Optional diagnostic code prefix filter."),
                 Opt(Project, ProjectFilterDesc),
                 Opt(Path, "Optional path filter."),
@@ -128,7 +130,7 @@ internal static partial class ToolCatalog
                 OptBool(WaitForIntellisense, "Wait for IntelliSense readiness before a live filtered or refresh read (default false)."),
                 OptBool(Quick, PassiveDiagnosticsReadDescription),
                 OptBool(Refresh, RefreshDiagnosticsDescription),
-                OptInt(Max, "Max rows to return. Defaults to 50 when no filters are set."),
+                OptInt(Max, "Max rows to return. Defaults to 10 when no filters are set."),
                 Opt(Code, "Optional warning code prefix filter."),
                 Opt(Project, ProjectFilterDesc),
                 Opt(Path, "Optional path filter."),
@@ -193,7 +195,7 @@ internal static partial class ToolCatalog
                     OptBool(WaitForIntellisense, "Wait for IntelliSense readiness before a live filtered or refresh read (default false)."),
                     OptBool(Quick, PassiveDiagnosticsReadDescription),
                     OptBool(Refresh, RefreshDiagnosticsDescription),
-                    OptInt(Max, "Max rows to return. Defaults to 50 when no filters are set."),
+                    OptInt(Max, "Max rows to return. Defaults to 10 when no filters are set."),
                     Opt(Code, "Optional message code prefix filter."),
                     Opt(Project, ProjectFilterDesc),
                     Opt(Path, "Optional path filter."),
@@ -365,12 +367,20 @@ internal static partial class ToolCatalog
         }
 
         string? errorMessage = response["Error"]?["message"]?.GetValue<string>();
-        return string.Equals(errorMessage, "Bridge server interrupted: The operation was canceled.", StringComparison.Ordinal);
+        return string.Equals(errorMessage, "Bridge server interrupted: The operation was canceled.", StringComparison.Ordinal)
+            || IsTimedOutDiagnosticsMessage(errorMessage)
+            || IsTimedOutDiagnosticsMessage(summary);
     }
 
     private static bool IsInterruptedDiagnosticsException(McpRequestException ex)
         => string.Equals(ex.Message, "Bridge server interrupted: The operation was canceled.", StringComparison.Ordinal)
-            || string.Equals(ex.Message, "The operation was canceled.", StringComparison.Ordinal);
+            || string.Equals(ex.Message, "The operation was canceled.", StringComparison.Ordinal)
+            || IsTimedOutDiagnosticsMessage(ex.Message);
+
+    private static bool IsTimedOutDiagnosticsMessage(string? message)
+        => !string.IsNullOrWhiteSpace(message)
+            && (message.Contains("Timed out waiting for VS bridge response", StringComparison.OrdinalIgnoreCase)
+                || message.Contains("Visual Studio may be blocked", StringComparison.OrdinalIgnoreCase));
 
     private static string BuildPassiveDiagnosticsSnapshotArgs()
         => Build((Quick, "true"));
@@ -428,6 +438,7 @@ internal static partial class ToolCatalog
         if (interruptedDirectRead)
         {
             warnings.Add($"Fell back to diagnostics_snapshot after the direct '{command}' read was interrupted.");
+            warnings.Add(TimedOutDirectReadWarning);
         }
 
         int count = bucket["count"]?.GetValue<int>() ?? 0;
@@ -509,10 +520,43 @@ internal static partial class ToolCatalog
             }
         }
 
+        CompactPreviewArray(obj, "openDocuments", "openDocumentCount", DefaultCompactDiagnosticsStateItems);
+        CompactPreviewArray(obj, "documents", "documentCount", DefaultCompactDiagnosticsStateItems);
+
         foreach ((string _, JsonNode? child) in obj)
         {
             CompactDiagnosticsNode(child, maxRows);
         }
+    }
+
+    private static void CompactPreviewArray(JsonObject obj, string propertyName, string totalCountPropertyName, int maxItems)
+    {
+        if (obj[propertyName] is not JsonArray items)
+        {
+            return;
+        }
+
+        int originalCount = items.Count;
+        if (originalCount == 0)
+        {
+            obj[totalCountPropertyName] ??= 0;
+            return;
+        }
+
+        obj[totalCountPropertyName] ??= originalCount;
+        if (originalCount <= maxItems)
+        {
+            return;
+        }
+
+        JsonArray compactItems = [];
+        for (int i = 0; i < maxItems; i++)
+        {
+            compactItems.Add(items[i]?.DeepClone());
+        }
+
+        obj[propertyName] = compactItems;
+        obj[$"{propertyName}Truncated"] = true;
     }
 
     private static IEnumerable<ToolEntry> BuildDiagnosticsTools()
@@ -568,12 +612,12 @@ internal static partial class ToolCatalog
 
         yield return CreateBuildTool(
              BuildSolutionTool,
-            "Build the active solution explicitly. Use this when you want the solution-wide build command rather than the generic build entry. Set errors_only=true to keep the response compact.",
+            "Build the active solution explicitly. Use this when you want the solution-wide build command rather than the generic build entry. By default it starts in the background and returns immediately so large solution builds do not block the bridge. Set wait_for_completion=true to wait for completion. Set errors_only=true only when waiting.",
             "build",
             includeProject: false,
-            defaultWaitForCompletion: true,
+            defaultWaitForCompletion: false,
             searchHints: BuildSearchHints(
-                workflow: [("errors", "Check errors after building")],
+                workflow: [("errors", "Check errors after the user reports the build finished")],
                 related: [("build", "Build a specific project"), ("rebuild_solution", "Rebuild the solution")]));
 
         yield return CreateBuildTool(
@@ -603,6 +647,7 @@ internal static partial class ToolCatalog
                     (Project, OptionalString(args, Project)),
                     (Configuration, OptionalString(args, Configuration)),
                     (Platform, OptionalString(args, Platform)),
+                    (WaitForCompletionHyphen, "true"),
                     BoolArg(WaitForIntellisenseHyphen, args, WaitForIntellisense, true, true),
                     BoolArg("require-clean-diagnostics", args, RequireCleanDiagnostics, true, true));
 

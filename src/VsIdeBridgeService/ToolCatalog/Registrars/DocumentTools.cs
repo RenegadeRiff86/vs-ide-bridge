@@ -21,6 +21,49 @@ internal static partial class ToolCatalog
         return Convert.ToBase64String(Encoding.UTF8.GetBytes(text ?? string.Empty));
     }
 
+    /// <summary>
+    /// Resolves a relative path to an existing file by searching upward from
+    /// <paramref name="solutionDir"/>. When multiple candidates exist (e.g., both
+    /// <c>src/foo.cpp</c> and <c>build/src/foo.cpp</c>), source-tree paths are
+    /// preferred over build-artifact paths, matching the DocumentService behavior.
+    /// Falls back to <c>Path.Combine(solutionDir, fileArg)</c> when no candidate exists.
+    /// </summary>
+    private static string ResolveExistingFilePath(string fileArg, string solutionDir)
+    {
+        if (System.IO.Path.IsPathRooted(fileArg))
+            return fileArg;
+
+        string normalizedArg = fileArg.Replace('/', System.IO.Path.DirectorySeparatorChar);
+        List<string> candidates = [];
+        string current = solutionDir;
+        for (int depth = 0; depth < 6 && !string.IsNullOrWhiteSpace(current); depth++)
+        {
+            string candidate = System.IO.Path.Combine(current, normalizedArg);
+            if (File.Exists(candidate))
+                candidates.Add(candidate);
+            string? parent = System.IO.Path.GetDirectoryName(current);
+            if (string.IsNullOrWhiteSpace(parent) || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+                break;
+            current = parent;
+        }
+
+        if (candidates.Count == 0)
+            return System.IO.Path.Combine(solutionDir, normalizedArg);
+
+        return candidates
+            .OrderByDescending(p => ContainsPathSegment(p, "src"))
+            .ThenBy(p => ContainsPathSegment(p, "build") || ContainsPathSegment(p, "bin") || ContainsPathSegment(p, "obj"))
+            .ThenBy(p => p.Length)
+            .First();
+    }
+
+    private static bool ContainsPathSegment(string path, string segment)
+    {
+        string sep = System.IO.Path.DirectorySeparatorChar.ToString();
+        string norm = path.Replace('/', System.IO.Path.DirectorySeparatorChar);
+        return norm.Contains(sep + segment + sep, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string BuildApplyDiffArgs(JsonObject? args)
     {
         return Build(
@@ -86,11 +129,11 @@ internal static partial class ToolCatalog
             ToolDefinitionCatalog.WriteFile(
                 ObjectSchema(
                     Req(FileArg, FileDesc),
-                    Req("content", "Full UTF-8 text content to write."),
+                    Req("content", "Full UTF-8 text content to write. This replaces the entire file; omitted text is removed."),
                     OptBool(PostCheck, "Queue a quick diagnostics refresh after writing (default false).")))
                 .WithSearchHints(BuildSearchHints(
                     workflow: [("reload_document", "Reload the file so VS picks up the changes"), ("errors", "Check for diagnostics after writing")],
-                    related: [(ApplyDiffTool, "Apply targeted changes instead of overwriting"), (ReadFileTool, "Read the current file contents first")])),
+                    related: [(ApplyDiffTool, "Apply targeted changes instead of replacing the whole file"), (ReadFileTool, "Read the current file contents first")])),
             async (id, args, bridge) =>
             {
                 JsonObject result = await bridge.SendAsync(id, "write-file", BuildWriteFileArgs(args))
@@ -275,9 +318,7 @@ internal static partial class ToolCatalog
                     throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Missing required argument 'FileArg'.");
 
                 string solutionDir = ServiceToolPaths.ResolveSolutionDirectory(bridge);
-                string resolvedPath = System.IO.Path.IsPathRooted(fileArg)
-                    ? fileArg
-                    : System.IO.Path.Combine(solutionDir, fileArg);
+                string resolvedPath = ResolveExistingFilePath(fileArg, solutionDir);
 
                 // Close in editor first (best-effort)
                 try
@@ -329,7 +370,7 @@ internal static partial class ToolCatalog
 
                 bool overwrite = args?["overwrite"]?.GetValue<bool?>() ?? false;
                 string solutionDir = ServiceToolPaths.ResolveSolutionDirectory(bridge);
-                string resolvedSource = System.IO.Path.IsPathRooted(sourceArg) ? sourceArg : System.IO.Path.Combine(solutionDir, sourceArg);
+                string resolvedSource = ResolveExistingFilePath(sourceArg, solutionDir);
                 string resolvedDest = System.IO.Path.IsPathRooted(destArg) ? destArg : System.IO.Path.Combine(solutionDir, destArg);
 
                 string? destDir = System.IO.Path.GetDirectoryName(resolvedDest);

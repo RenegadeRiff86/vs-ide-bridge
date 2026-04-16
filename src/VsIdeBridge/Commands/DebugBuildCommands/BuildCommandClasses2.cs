@@ -19,8 +19,8 @@ internal static partial class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             int timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
-            await EnsureCleanDiagnosticsAsync(context, args, timeout).ConfigureAwait(true);
-            bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, true);
+            bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, false);
+            await EnsureCleanDiagnosticsAsync(context, args, timeout, quickPreflight: !waitForCompletion).ConfigureAwait(true);
 
             string? project = args.GetString("project");
             JObject buildResult;
@@ -87,8 +87,8 @@ internal static partial class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             int timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
-            await EnsureCleanDiagnosticsAsync(context, args, timeout).ConfigureAwait(true);
             bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, false);
+            await EnsureCleanDiagnosticsAsync(context, args, timeout, quickPreflight: !waitForCompletion).ConfigureAwait(true);
 
             await context.Runtime.BridgeApprovalService.RequestApprovalAsync(
                 context,

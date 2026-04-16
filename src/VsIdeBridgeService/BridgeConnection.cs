@@ -252,7 +252,8 @@ internal sealed class BridgeConnection
         lock (_gate)
         {
             _state.LastSolutionPath = path;
-            if (_state.Cached is not null && string.IsNullOrWhiteSpace(_state.Cached.SolutionPath))
+            if (_state.Cached is not null
+                && !string.Equals(_state.Cached.SolutionPath, path, StringComparison.OrdinalIgnoreCase))
             {
                 _state.Cached = _state.Cached with
                 {

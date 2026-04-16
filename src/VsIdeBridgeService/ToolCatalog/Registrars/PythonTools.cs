@@ -56,12 +56,13 @@ internal static partial class ToolCatalog
 
         yield return new(PythonListEnvsTool,
             "Enumerate available Python interpreters: PATH entries, common venv locations under " +
-            "the solution directory, and the bridge-managed Python runtime if present.",
+            "the solution and repo root directories, and the bridge-managed Python runtime if present.",
             EmptySchema(), Python,
             async (id, _, bridge) =>
             {
                 string solutionDir = ServiceToolPaths.ResolveSolutionDirectory(bridge);
-                List<string> found = FindPythonInterpreters(solutionDir);
+                string repoRoot = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
+                List<string> found = FindPythonInterpreters(solutionDir, repoRoot);
 
                 JsonArray arr = [];
                 foreach (string p in found)
@@ -399,7 +400,7 @@ internal static partial class ToolCatalog
 
     // ── Python interpreter discovery ────────────────────────────────────────────────
 
-    private static List<string> FindPythonInterpreters(string solutionDir)
+    private static List<string> FindPythonInterpreters(string solutionDir, string repoRoot)
     {
         List<string> results = [];
 
@@ -419,19 +420,27 @@ internal static partial class ToolCatalog
             }
         }
 
-        // 2. Common venv locations inside the solution directory
-        foreach (string rel in new[] { ".venv", "venv", "env", ".env" })
-        {
-            foreach (string name in new[] { PythonExeName, "python3.exe" })
-            {
-                string candidate = IOPath.Combine(solutionDir, rel, "Scripts", name);
-                if (File.Exists(candidate) && !results.Contains(candidate))
-                    results.Add(candidate);
+        // 2. Common venv locations — search both repo root and solution directory so that
+        //    projects whose .sln lives in a build/ subdirectory still find venvs at the repo root.
+        List<string> venvRoots = [repoRoot];
+        if (!string.Equals(solutionDir, repoRoot, StringComparison.OrdinalIgnoreCase))
+            venvRoots.Add(solutionDir);
 
-                // Linux/macOS style (bin/)
-                candidate = IOPath.Combine(solutionDir, rel, "bin", name);
-                if (File.Exists(candidate) && !results.Contains(candidate))
-                    results.Add(candidate);
+        foreach (string venvRoot in venvRoots)
+        {
+            foreach (string rel in new[] { ".venv", "venv", "env", ".env" })
+            {
+                foreach (string name in new[] { PythonExeName, "python3.exe" })
+                {
+                    string candidate = IOPath.Combine(venvRoot, rel, "Scripts", name);
+                    if (File.Exists(candidate) && !results.Contains(candidate))
+                        results.Add(candidate);
+
+                    // Linux/macOS style (bin/)
+                    candidate = IOPath.Combine(venvRoot, rel, "bin", name);
+                    if (File.Exists(candidate) && !results.Contains(candidate))
+                        results.Add(candidate);
+                }
             }
         }
 

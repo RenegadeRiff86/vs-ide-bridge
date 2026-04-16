@@ -69,10 +69,39 @@ internal sealed partial class PatchService
                 $"Patch path '{relativeOrAbsolutePath}' is ambiguous in the active solution. Use a longer relative path to disambiguate it.");
         }
 
+        // For relative paths with directory components, prefer open VS documents over the
+        // filesystem walk. Without this, a path like "src/foo.cpp" resolves to the build-dir
+        // copy "build/src/foo.cpp" (found first on disk) instead of the source file that is
+        // actually open in the editor. apply_diff and write_file should target the live document.
+        if (relativeOrAbsolutePath.IndexOfAny(['\\', '/']) >= 0)
+        {
+            string? openDocPath = FindOpenDocumentBySuffix(dte, relativeOrAbsolutePath);
+            if (openDocPath is not null)
+                return openDocPath;
+        }
+
         string solutionDirectory = dte.Solution?.IsOpen == true
             ? Path.GetDirectoryName(dte.Solution.FullName) ?? baseDirectory
             : baseDirectory;
 
+        string? filesystemMatch = TryFindOnFilesystem(baseDirectory, solutionDirectory, relativeOrAbsolutePath, allowCreate);
+        if (filesystemMatch is not null)
+            return filesystemMatch;
+
+        string? fallbackMatch = FindOpenDocumentFallbackMatch(dte, relativeOrAbsolutePath);
+        if (fallbackMatch is not null)
+            return fallbackMatch;
+
+        return PathNormalization.NormalizeFilePath(Path.Combine(baseDirectory, relativeOrAbsolutePath));
+    }
+
+    /// <summary>
+    /// Walks up from <paramref name="baseDirectory"/> and <paramref name="solutionDirectory"/>
+    /// looking for the relative path on disk. Returns the first match that exists, respecting
+    /// <paramref name="allowCreate"/> for parent-directory-exists checks. Returns null when not found.
+    /// </summary>
+    private static string? TryFindOnFilesystem(string baseDirectory, string solutionDirectory, string relativeOrAbsolutePath, bool allowCreate)
+    {
         List<string> searchRoots = [];
         AddDistinctPath(searchRoots, baseDirectory);
 
@@ -87,21 +116,28 @@ internal sealed partial class PatchService
         {
             string candidate = PathNormalization.NormalizeFilePath(Path.Combine(root, relativeOrAbsolutePath));
             if (File.Exists(candidate))
-            {
                 return candidate;
-            }
 
             if (allowCreate)
             {
-                string candidateDirectory = Path.GetDirectoryName(candidate);
+                string? candidateDirectory = Path.GetDirectoryName(candidate);
                 if (!string.IsNullOrWhiteSpace(candidateDirectory) && Directory.Exists(candidateDirectory))
-                {
                     return candidate;
-                }
             }
         }
 
-        // Filesystem walk did not find the file. Search open VS documents as a fallback.
+        return null;
+    }
+
+    /// <summary>
+    /// Searches open VS documents for one whose full path ends with <paramref name="relativeOrAbsolutePath"/>
+    /// (suffix match), falling back to a filename-only match. Intended as a last resort after the
+    /// filesystem walk has failed. Returns null when no open document matches.
+    /// </summary>
+    private static string? FindOpenDocumentFallbackMatch(DTE2 dte, string relativeOrAbsolutePath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
         // This handles bare filenames (e.g. "connect.cpp") and relative paths from projects
         // whose source tree is not under the solution directory.
         string normalizedTarget = relativeOrAbsolutePath.Replace('/', Path.DirectorySeparatorChar);
@@ -112,16 +148,13 @@ internal sealed partial class PatchService
         {
             string docPath = document.FullName;
             if (string.IsNullOrWhiteSpace(docPath))
-            {
                 continue;
-            }
 
             // Prefer a document whose full path ends with the relative path from the patch.
             string normalizedDocPath = docPath.Replace('/', Path.DirectorySeparatorChar);
             if (File.Exists(docPath) &&
                 (normalizedDocPath.EndsWith(Path.DirectorySeparatorChar + normalizedTarget, StringComparison.OrdinalIgnoreCase) ||
-                normalizedDocPath.EndsWith(normalizedTarget, StringComparison.OrdinalIgnoreCase))
-            )
+                 normalizedDocPath.EndsWith(normalizedTarget, StringComparison.OrdinalIgnoreCase)))
             {
                 return PathNormalization.NormalizeFilePath(docPath);
             }
@@ -135,12 +168,9 @@ internal sealed partial class PatchService
             }
         }
 
-        if (filenameMatch is not null)
-        {
-            return PathNormalization.NormalizeFilePath(filenameMatch);
-        }
-
-        return PathNormalization.NormalizeFilePath(Path.Combine(baseDirectory, relativeOrAbsolutePath));
+        return filenameMatch is not null
+            ? PathNormalization.NormalizeFilePath(filenameMatch)
+            : null;
     }
 
     private static bool TryResolvePreferredSolutionFile(DTE2 dte, string baseDirectory, string relativeOrAbsolutePath, out string? resolvedPath, out int matchCount)
@@ -275,6 +305,60 @@ internal sealed partial class PatchService
         {
             paths.Add(normalizedValue!);
         }
+    }
+
+    /// <summary>
+    /// Searches open VS documents for one whose full path ends with <paramref name="relativePath"/>.
+    /// The active document wins over all others; among the rest the shortest full path wins
+    /// (closest match to the input when both a source and a build-dir copy are open).
+    /// Returns null when no open document matches.
+    /// </summary>
+    private static string? FindOpenDocumentBySuffix(DTE2 dte, string relativePath)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        string suffix = relativePath.Replace('/', Path.DirectorySeparatorChar);
+
+        // Active document has highest priority.
+        string? activePath = TryGetActiveDocumentFullName(dte.ActiveDocument);
+        if (activePath is string activePathStr && File.Exists(activePathStr) && PathEndsWith(activePathStr, suffix))
+            return PathNormalization.NormalizeFilePath(activePathStr);
+
+        // Among remaining open documents prefer the shortest full path (most direct match).
+        string? bestMatch = null;
+        try
+        {
+            foreach (Document doc in dte.Documents)
+            {
+                try
+                {
+                    string docPath = doc.FullName;
+                    if (string.IsNullOrWhiteSpace(docPath) || !File.Exists(docPath))
+                        continue;
+                    if (!PathEndsWith(docPath, suffix))
+                        continue;
+                    if (bestMatch is null || docPath.Length < bestMatch.Length)
+                        bestMatch = docPath;
+                }
+                catch (COMException)
+                {
+                    // Document may be in a transient state; skip it and continue searching.
+                }
+            }
+        }
+        catch (COMException)
+        {
+            // dte.Documents can throw if VS is shutting down or the collection is unavailable.
+        }
+
+        return bestMatch is null ? null : PathNormalization.NormalizeFilePath(bestMatch);
+    }
+
+    private static bool PathEndsWith(string fullPath, string normalizedSuffix)
+    {
+        string norm = fullPath.Replace('/', Path.DirectorySeparatorChar);
+        return norm.EndsWith(Path.DirectorySeparatorChar + normalizedSuffix, StringComparison.OrdinalIgnoreCase)
+            || norm.EndsWith(normalizedSuffix, StringComparison.OrdinalIgnoreCase);
     }
 
     public string ResolveFilePath(DTE2 dte, string filePathOrRelative)

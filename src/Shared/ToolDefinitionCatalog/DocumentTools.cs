@@ -24,8 +24,8 @@ public static partial class ToolDefinitionCatalog
         => CreateMutatingTool(
             "write_file",
             "documents",
-            "Write one file through the editor.",
-            "Write or overwrite a file through the live editor. Prefer apply_diff for targeted edits, and use this only when a new file or large replacement makes patching impractical.",
+            "Replace one file through the editor.",
+            "Write or overwrite a file through the live editor. This REPLACES the entire file contents; it does not append or preserve omitted text. Prefer apply_diff for targeted edits, and use write_file only when creating a new file or intentionally replacing the whole file with complete content.",
             parameterSchema,
             bridgeCommand: "write-file",
             title: "Write File",

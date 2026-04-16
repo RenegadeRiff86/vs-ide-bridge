@@ -35,7 +35,7 @@ internal static partial class ToolCatalog
             EmptySchema(), Git,
             async (id, _, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 return await GitRunner.RunAsync(id, repo, "status --porcelain=v1 --branch")
                     .ConfigureAwait(false);
             },
@@ -48,7 +48,7 @@ internal static partial class ToolCatalog
             EmptySchema(), Git,
             async (id, _, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 return await GitSdkReader.GetCurrentBranchAsync(id, repo)
                     .ConfigureAwait(false);
             },
@@ -60,7 +60,7 @@ internal static partial class ToolCatalog
             EmptySchema(), Git,
             async (id, _, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 return await GitSdkReader.GetBranchListAsync(id, repo)
                     .ConfigureAwait(false);
             },
@@ -74,7 +74,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 int max = args?["max_count"]?.GetValue<int?>() ?? 20;
                 return await GitSdkReader.GetLogAsync(id, repo, max).ConfigureAwait(false);
             },
@@ -88,7 +88,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string rev = args?["revision"]?.GetValue<string>() ?? "HEAD";
                 return await GitRunner.RunAsync(id, repo, $"show --no-color {EscapeArg(rev)}")
                     .ConfigureAwait(false);
@@ -105,7 +105,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 int ctx = args?["context"]?.GetValue<int?>() ?? DefaultDiffContext;
                 return await GitRunner.RunAsync(id, repo, $"diff --no-color --unified={ctx}")
                     .ConfigureAwait(false);
@@ -120,7 +120,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 int ctx = args?["context"]?.GetValue<int?>() ?? DefaultDiffContext;
                 return await GitRunner.RunAsync(id, repo, $"diff --cached --no-color --unified={ctx}")
                     .ConfigureAwait(false);
@@ -134,7 +134,7 @@ internal static partial class ToolCatalog
             EmptySchema(), Git,
             async (id, _, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 return await GitSdkReader.GetRemoteListAsync(id, repo).ConfigureAwait(false);
             },
             searchHints: BuildSearchHints(
@@ -145,7 +145,7 @@ internal static partial class ToolCatalog
             EmptySchema(), Git,
             async (id, _, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 return await GitRunner.RunAsync(id, repo, "tag --list --sort=-version:refname")
                     .ConfigureAwait(false);
             },
@@ -157,7 +157,7 @@ internal static partial class ToolCatalog
             EmptySchema(), Git,
             async (id, _, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 return await GitRunner.RunAsync(id, repo, "stash list").ConfigureAwait(false);
             },
             searchHints: BuildSearchHints(
@@ -174,7 +174,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string pathList = BuildPathList(args, Paths);
                 return await GitRunner.RunAsync(id, repo, $"add -- {pathList}")
                     .ConfigureAwait(false);
@@ -190,7 +190,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string pathList = BuildPathList(args, Paths);
                 return await GitRunner.RunAsync(id, repo,
                     $"restore --source=HEAD --worktree -- {pathList}")
@@ -205,7 +205,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string? pathsRaw = args?[Paths]?.GetValue<string>();
                 string pathSpec = string.IsNullOrWhiteSpace(pathsRaw)
                     ? string.Empty
@@ -222,7 +222,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string msg = args?[Message]?.GetValue<string>() ?? string.Empty;
                 return await GitRunner.RunAsync(id, repo, $"commit -m {EscapeArg(msg)}")
                     .ConfigureAwait(false);
@@ -239,7 +239,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string? msg = args?[Message]?.GetValue<string>();
                 bool noEdit = string.IsNullOrWhiteSpace(msg) &&
                               (args?["no_edit"]?.GetValue<bool?>() ?? true);
@@ -261,7 +261,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string target = args?["target"]?.GetValue<string>() ?? string.Empty;
                 return await GitRunner.RunAsync(id, repo, $"checkout {EscapeArg(target)}")
                     .ConfigureAwait(false);
@@ -278,7 +278,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string name = args?["name"]?.GetValue<string>() ?? string.Empty;
                 string? start = args?["start_point"]?.GetValue<string>();
                 string startArg = string.IsNullOrWhiteSpace(start) ? string.Empty : $" {EscapeArg(start)}";
@@ -301,7 +301,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string? remote = args?["remote"]?.GetValue<string>();
                 bool all = string.IsNullOrWhiteSpace(remote) &&
                            (args?["all"]?.GetValue<bool?>() ?? true);
@@ -324,7 +324,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string remote = args?["remote"]?.GetValue<string>() ?? string.Empty;
                 string branch = args?["branch"]?.GetValue<string>() ?? string.Empty;
                 string remoteArg = string.IsNullOrWhiteSpace(remote) ? string.Empty : EscapeArg(remote);
@@ -346,7 +346,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string remote = args?["remote"]?.GetValue<string>() ?? string.Empty;
                 string branch = args?["branch"]?.GetValue<string>() ?? string.Empty;
                 bool setUpstream = args?["set_upstream"]?.GetValue<bool?>() ?? false;
@@ -376,7 +376,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string source = args?["source"]?.GetValue<string>() ?? string.Empty;
                 bool ffOnly = args?["ff_only"]?.GetValue<bool?>() ?? false;
                 bool noFf = args?["no_ff"]?.GetValue<bool?>() ?? false;
@@ -408,7 +408,7 @@ internal static partial class ToolCatalog
             Git,
             async (id, args, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 string? msg = args?[Message]?.GetValue<string>();
                 bool untracked = args?["include_untracked"]?.GetValue<bool?>() ?? false;
                 string msgArg = !string.IsNullOrWhiteSpace(msg) ? $"-m {EscapeArg(msg)}" : string.Empty;
@@ -426,7 +426,7 @@ internal static partial class ToolCatalog
             EmptySchema(), Git,
             async (id, _, bridge) =>
             {
-                string repo = ServiceToolPaths.ResolveSolutionDirectory(bridge);
+                string repo = ServiceToolPaths.ResolveRepoRootDirectory(bridge);
                 return await GitRunner.RunAsync(id, repo, "stash pop").ConfigureAwait(false);
             },
             searchHints: BuildSearchHints(

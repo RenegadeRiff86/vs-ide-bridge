@@ -355,7 +355,7 @@ internal sealed class DebuggerService
         dte.Debugger.Go(false);
         return waitForBreak
             ? await WaitForBreakOrDesignModeAsync(dte, timeoutMs, throwOnTimeout: true).ConfigureAwait(true)
-            : await GetStateAsync(dte).ConfigureAwait(true);
+            : await GetPostStartStateAsync(dte).ConfigureAwait(true);
     }
 
     public async Task<JObject> StopAsync(DTE2 dte)
@@ -547,5 +547,32 @@ internal sealed class DebuggerService
         timedOutData["waitedForBreak"] = true;
         timedOutData["timedOut"] = true;
         return timedOutData;
+    }
+
+    private async Task<JObject> GetPostStartStateAsync(DTE2 dte)
+    {
+        JObject state = await GetStateAsync(dte).ConfigureAwait(true);
+        state["waitedForBreak"] = false;
+
+        string mode = state["mode"]?.Value<string>() ?? string.Empty;
+        string currentProcess = state["currentProcess"]?.Value<string>() ?? string.Empty;
+        int processCount = state["processes"] is JArray processes ? processes.Count : 0;
+
+        bool likelyStartupFailure = string.Equals(mode, dbgDebugMode.dbgDesignMode.ToString(), StringComparison.Ordinal)
+            && string.IsNullOrWhiteSpace(currentProcess)
+            && processCount == 0;
+
+        state["likelyBuildOrLaunchFailure"] = likelyStartupFailure;
+        if (likelyStartupFailure)
+        {
+            state["status"] = "did_not_start";
+            state["guidance"] = "The debugger returned to design mode without launching a process. The startup build or launch likely failed. Read errors, warnings, messages, or diagnostics_snapshot for details.";
+        }
+        else
+        {
+            state["status"] = "started";
+        }
+
+        return state;
     }
 }

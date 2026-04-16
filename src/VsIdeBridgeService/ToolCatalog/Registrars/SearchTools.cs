@@ -80,7 +80,7 @@ internal static partial class ToolCatalog
 
     private static IEnumerable<ToolEntry> FileDiscoveryTools()
     {
-        yield return BridgeTool(
+        yield return new(
             ToolDefinitionCatalog.FindFiles(
                 ObjectSchema(
                     Req(Query, "File name or path fragment. Use instead of Glob/find/ls when you know the filename or a partial path. For glob patterns like **/*.cs use the glob tool instead."),
@@ -93,14 +93,45 @@ internal static partial class ToolCatalog
                     workflow: [(SearchReadFileTool, "Read the found file"), (SearchReadFileBatchTool, "Read multiple found files at once")],
                     related: [("glob", "Find files by glob pattern"), (SearchFindTextTool, "Search file contents"), (SearchSymbolsTool, "Search by symbol name")]))
                 .WithOutputSchema(BuildFindFilesOutputSchema()),
-            "find-files",
-            a => Build(
-                (Query, OptionalString(a, Query)),
-                (Path, OptionalString(a, Path)),
-                (SearchExtensionsProperty, a?[SearchExtensionsProperty]?.ToJsonString()),
-                BoolArg("include-non-project", a, "include_non_project", true, true),
-                ("max-results", OptionalText(a, "max_results")),
-                (Scope, OptionalString(a, Scope))));
+            async (id, args, bridge) =>
+            {
+                JsonObject response = await bridge.SendAsync(id, "find-files", Build(
+                    (Query, OptionalString(args, Query)),
+                    (Path, OptionalString(args, Path)),
+                    (SearchExtensionsProperty, OptionalStringArray(args, SearchExtensionsProperty)),
+                    BoolArg("include-non-project", args, "include_non_project", true, true),
+                    ("max-results", OptionalText(args, "max_results")),
+                    (Scope, OptionalString(args, Scope)))).ConfigureAwait(false);
+
+                bool success = response["Success"]?.GetValue<bool>() ?? false;
+                if (!success)
+                {
+                    bool isError = ToolResultFormatter.ShouldTreatAsError(response, defaultIsError: true);
+                    return ToolResultFormatter.StructuredToolResult(response, args, isError: isError);
+                }
+
+                JsonObject data = response["Data"] as JsonObject ?? [];
+                int count = data["count"]?.GetValue<int>() ?? 0;
+                string query = data[Query]?.GetValue<string>() ?? OptionalString(args, Query) ?? string.Empty;
+                string text = count == 0
+                    ? $"find_files: no file(s) found for '{query}'. If you expected a pattern match, try glob instead."
+                    : ToolResultFormatter.StructuredToolResult(response, args).AsObject()["content"]?[0]?["text"]?.GetValue<string>()
+                        ?? $"find_files: found {count} file(s).";
+
+                return new JsonObject
+                {
+                    ["content"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["type"] = "text",
+                            ["text"] = text,
+                        },
+                    },
+                    ["isError"] = false,
+                    ["structuredContent"] = StripBridgeEnvelopeFields(data),
+                };
+            });
     }
 
     private static IEnumerable<ToolEntry> TextPatternTools()
@@ -229,6 +260,15 @@ internal static partial class ToolCatalog
             ["required"] = new JsonArray { "query", "pathFilter", SearchExtensionsProperty, "includeNonProject", "count", "matches" },
             ["additionalProperties"] = false,
         };
+
+    // Strip bridge-internal envelope fields the infrastructure appends to every Data payload
+    // (e.g. "queue" timing info) so the result passes the strict output schema validation.
+    private static JsonObject StripBridgeEnvelopeFields(JsonObject data)
+    {
+        JsonObject clone = (JsonObject)data.DeepClone();
+        clone.Remove("queue");
+        return clone;
+    }
 
     private static IEnumerable<ToolEntry> CodeExplorationTools()
     {

@@ -31,7 +31,7 @@ internal static partial class DebugBuildCommands
     private static CommandExecutionResult CreateStartedResult(string operationLabel, JObject data)
     {
         return new CommandExecutionResult(
-            $"{operationLabel} started. Prompt the model again when it finishes, then read warnings, errors, messages, or diagnostics_snapshot.",
+            $"{operationLabel} started in the background and the bridge is released. Prompt the user to reply when Visual Studio finishes, then read warnings, errors, messages, or diagnostics_snapshot.",
             data);
     }
 
@@ -88,18 +88,26 @@ internal static partial class DebugBuildCommands
             ]);
     }
 
-    private static async Task EnsureCleanDiagnosticsAsync(IdeCommandContext context, CommandArguments args, int timeoutMilliseconds)
+    private static async Task EnsureCleanDiagnosticsAsync(IdeCommandContext context, CommandArguments args, int timeoutMilliseconds, bool quickPreflight = false)
     {
         if (!args.GetBoolean(RequireCleanDiagnosticsArgument, true))
         {
             return;
         }
 
-        JObject diagnostics = await GetDiagnosticsSnapshotAsync(
-            context,
-            args,
-            GetPreflightDiagnosticsTimeout(timeoutMilliseconds),
-            args.GetBoolean(WaitForIntellisenseArgument, true)).ConfigureAwait(true);
+        int preflightTimeout = GetPreflightDiagnosticsTimeout(timeoutMilliseconds);
+        JObject diagnostics = quickPreflight
+            ? await GetDiagnosticsWithFallbackAsync(
+                context,
+                waitForIntellisense: false,
+                preflightTimeout,
+                quickSnapshot: true,
+                query: new ErrorListQuery { Max = args.GetNullableInt32("max") ?? DefaultBlockingDiagnosticsMax }).ConfigureAwait(true)
+            : await GetDiagnosticsSnapshotAsync(
+                context,
+                args,
+                preflightTimeout,
+                args.GetBoolean(WaitForIntellisenseArgument, true)).ConfigureAwait(true);
 
         ThrowIfDiagnosticsPresent(diagnostics, "Build blocked by existing diagnostics", args);
     }
