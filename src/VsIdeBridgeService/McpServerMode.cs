@@ -10,7 +10,7 @@ namespace VsIdeBridgeService;
 // Launched when the service binary is invoked with the "mcp-server" argument.
 internal static class McpServerMode
 {
-    private static readonly ToolExecutionRegistry Registry = ToolCatalog.CreateRegistry();
+    private static readonly ToolExecutionRegistry Registry = ToolCatalog.Registry;
     private const int BadRequestStatusCode = 400;
 
     public static async Task RunAsync(string[] args)
@@ -342,8 +342,8 @@ internal static class McpServerMode
             {
                 context.Response.Close();
             }
-            catch (ObjectDisposedException) { /* intentional: response already closed during shutdown */ }
-            catch (HttpListenerException) { /* intentional: listener stopped before response could be sent */ }
+            catch (ObjectDisposedException ex) { McpServerLog.WriteException("HTTP response close skipped because the response was already disposed", ex); }
+            catch (HttpListenerException ex) { McpServerLog.WriteException("HTTP response close skipped because the listener was already stopping", ex); }
         }
     }
 

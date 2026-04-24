@@ -13,6 +13,7 @@
     <Compile Include="..\Shared\BridgeCommandCatalog\NavigationDetails.cs" Link="BridgeCommandCatalog\NavigationDetails.cs" />
     <Compile Include="..\Shared\BridgeCommandCatalog\DebugAndDiagnosticsDetails.cs" Link="BridgeCommandCatalog\DebugAndDiagnosticsDetails.cs" />
     <Compile Include="..\Shared\BridgeCommandCatalog\ProjectDetails.cs" Link="BridgeCommandCatalog\ProjectDetails.cs" />
+    <Compile Include="..\Shared\HttpServerStatePaths.cs" Link="HttpServerStatePaths.cs" />
     <Compile Include="..\Shared\NamedPipeAccessDefaults.cs" Link="NamedPipeAccessDefaults.cs" />
   </ItemGroup>
 </Project>

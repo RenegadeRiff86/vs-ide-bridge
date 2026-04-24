@@ -23,7 +23,7 @@ internal static partial class ToolCatalog
                 ObjectSchema(Req(FileArg, FileDesc)))
                 .WithSearchHints(BuildSearchHints(
                     workflow: [(SemanticReadFileTool, "Read the full implementation of a symbol"), (GotoDefinitionTool, "Navigate to a symbol's definition"), (FindReferencesTool, "Find all usages of a symbol")],
-                    related: [("search_symbols", "Search symbols across the solution"), ("file_symbols", "List symbols filtered by kind")])),
+                    related: [(SearchSymbolsTool, "Search symbols across the solution"), ("find_files", "Locate likely files first"), ("file_symbols", "List symbols filtered by kind")])),
             "file-outline",
             a => Build((FileArg, OptionalString(a, FileArg))));
 
@@ -32,7 +32,7 @@ internal static partial class ToolCatalog
                 ObjectSchema(Req(FileArg, FileDesc), ReqInt(Line, LineDesc), ReqInt(Column, ColumnDesc)))
                 .WithSearchHints(BuildSearchHints(
                     workflow: [(GotoDefinitionTool, "Navigate to the symbol's definition"), (FindReferencesTool, "Find all usages of the symbol")],
-                    related: [("peek_definition", "Peek at the definition inline"), ("file_outline", "See all symbols in the file")])),
+                    related: [("peek_definition", "Peek at the definition inline"), (SearchSymbolsTool, "Search matching symbols across the solution"), ("file_outline", "See all symbols in the file")])),
             "quick-info",
             a => Build(
                 (FileArg, OptionalString(a, FileArg)),
@@ -47,7 +47,12 @@ internal static partial class ToolCatalog
                 ObjectSchema(Req(FileArg, FileDesc), ReqInt(Line, LineDesc), ReqInt(Column, ColumnDesc)))
                 .WithSearchHints(BuildSearchHints(
                     workflow: [(SemanticReadFileTool, "Read a file containing a usage"), (GotoDefinitionTool, "Navigate to the definition")],
-                    related: [("count_references", "Get the exact reference count"), ("call_hierarchy", "Explore the caller tree")])),
+                    related:
+                    [
+                        ("count_references", "Get the exact reference count"),
+                        ("call_hierarchy", "Explore the caller tree"),
+                        (SearchSymbolsTool, "Search related symbol definitions"),
+                    ])),
             "find-references",
             a => Build(
                 (FileArg, OptionalString(a, FileArg)),
@@ -71,10 +76,10 @@ internal static partial class ToolCatalog
                 ("timeout-ms", OptionalText(a, "timeout_ms"))),
             Search,
             searchHints: BuildSearchHints(
-                related: [(FindReferencesTool, "Get the full list of usages"), ("call_hierarchy", "Explore the caller tree")]));
+                related: [(FindReferencesTool, "Get the full list of usages"), ("call_hierarchy", "Explore the caller tree"), (SearchSymbolsTool, "Search related symbol definitions")]));
 
         yield return BridgeTool("call_hierarchy",
-            "Open Call Hierarchy for the symbol at a file/line/column and, for managed languages, return a bounded caller tree. This can take longer than direct read/search tools.",
+            "Open Call Hierarchy for the symbol at a file/line/column and return a recursive caller tree — who calls this, and who calls those callers. Use this when you need to understand call chains, trace propagation paths, or find all entry points that can reach a symbol. For managed languages the tree is returned directly in the result. This can take longer than direct read/search tools.",
             ObjectSchema(
                 Req(FileArg, FileDesc),
                 ReqInt(Line, LineDesc),
@@ -93,7 +98,7 @@ internal static partial class ToolCatalog
             Search,
             searchHints: BuildSearchHints(
                 workflow: [(FindReferencesTool, "Get all usages"), (SemanticReadFileTool, "Read a caller's implementation")],
-                related: [(GotoDefinitionTool, "Navigate to the symbol's definition"), ("count_references", "Count total usages")]));
+                related: [(GotoDefinitionTool, "Navigate to the symbol's definition"), ("count_references", "Count total usages"), (SearchSymbolsTool, "Search related symbol definitions"), ("smart_context", "Broader open-ended exploration of how a symbol fits in the codebase")]));
     }
 
     private static IEnumerable<ToolEntry> DefinitionNavigationTools()
@@ -109,7 +114,7 @@ internal static partial class ToolCatalog
             Search,
             searchHints: BuildSearchHints(
                 workflow: [(SemanticReadFileTool, "Read the definition"), ("file_outline", "See all symbols in the definition file"), (FindReferencesTool, "Find all usages")],
-                related: [("goto_implementation", "Navigate to an implementation"), ("peek_definition", "Peek inline without navigating")]));
+                related: [("goto_implementation", "Navigate to an implementation"), ("peek_definition", "Peek inline without navigating"), (SearchSymbolsTool, "Search matching symbol definitions"), ("call_hierarchy", "See the recursive caller tree - who calls this symbol")]));
 
         yield return BridgeTool("goto_implementation",
             "Navigate to an implementation of the symbol at a file/line/column.",
@@ -122,14 +127,14 @@ internal static partial class ToolCatalog
             Search,
             searchHints: BuildSearchHints(
                 workflow: [(SemanticReadFileTool, "Read the implementation"), (FindReferencesTool, "Find all usages of the implementation")],
-                related: [(GotoDefinitionTool, "Navigate to the definition instead"), ("peek_definition", "Peek inline without navigating")]));
+                related: [(GotoDefinitionTool, "Navigate to the definition instead"), ("peek_definition", "Peek inline without navigating"), (SearchSymbolsTool, "Search matching symbol definitions")]));
 
         yield return BridgeTool(
             ToolDefinitionCatalog.PeekDefinition(
                 ObjectSchema(Req(FileArg, FileDesc), ReqInt(Line, LineDesc), ReqInt(Column, ColumnDesc)))
                 .WithSearchHints(BuildSearchHints(
                     workflow: [(SemanticReadFileTool, "Read the full definition file"), (FindReferencesTool, "Find all usages")],
-                    related: [(GotoDefinitionTool, "Navigate to the definition"), ("symbol_info", "Get type and documentation info")])),
+                    related: [(GotoDefinitionTool, "Navigate to the definition"), ("symbol_info", "Get type and documentation info"), (SearchSymbolsTool, "Search matching symbol definitions")])),
             "peek-definition",
             a => Build(
                 (FileArg, OptionalString(a, FileArg)),

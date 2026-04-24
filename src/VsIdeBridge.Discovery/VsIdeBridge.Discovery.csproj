@@ -10,7 +10,6 @@
     <Compile Include="..\Shared\ToolCategoryDefinition.cs" Link="ToolCategoryDefinition.cs" />
     <Compile Include="..\Shared\ToolDefinition.cs" Link="ToolDefinition.cs" />
     <Compile Include="..\Shared\ToolDefinitionPropertyNames.cs" Link="ToolDefinitionPropertyNames.cs" />
-    <Compile Include="..\Shared\ToolDefinitionCatalog.cs" Link="ToolDefinitionCatalog.cs" />
     <Compile Include="..\Shared\ToolDefinitionCatalog\Builders.cs" Link="ToolDefinitionCatalog\Builders.cs" />
     <Compile Include="..\Shared\ToolDefinitionCatalog\DiagnosticsTools.cs" Link="ToolDefinitionCatalog\DiagnosticsTools.cs" />
     <Compile Include="..\Shared\ToolDefinitionCatalog\DiscoveryTools.cs" Link="ToolDefinitionCatalog\DiscoveryTools.cs" />

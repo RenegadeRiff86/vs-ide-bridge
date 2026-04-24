@@ -110,7 +110,7 @@ internal sealed partial class DocumentService
             openDocument.Activate();
             if (openDocument.Object(TextDocumentKind) is TextDocument textDocument)
             {
-                _ = TryNavigateToLine(textDocument, line, column);
+                _ = await TryNavigateToLineAsync(textDocument, line, column).ConfigureAwait(true);
             }
 
             return;

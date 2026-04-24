@@ -868,6 +868,17 @@
           <LocCanonicalName>.Tools.IdeGetQuickInfo</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdePeekDefinition" priority="0x0265" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Peek Definition</ButtonText>
+          <CommandName>IdePeekDefinition</CommandName>
+          <CanonicalName>Tools.IdePeekDefinition</CanonicalName>
+          <LocCanonicalName>.Tools.IdePeekDefinition</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeGetDocumentSlices" priority="0x0228" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -1039,6 +1050,7 @@
       <IDSymbol name="cmdidIdeBatchCommands" value="0x0225" />
       <IDSymbol name="cmdidIdeSearchSymbols" value="0x0226" />
       <IDSymbol name="cmdidIdeGetQuickInfo" value="0x0227" />
+      <IDSymbol name="cmdidIdePeekDefinition" value="0x0265" />
       <IDSymbol name="cmdidIdeGetDocumentSlices" value="0x0228" />
       <IDSymbol name="cmdidIdeGetFileSymbols" value="0x022D" />
       <IDSymbol name="cmdidIdeEnableBreakpoint" value="0x0229" />

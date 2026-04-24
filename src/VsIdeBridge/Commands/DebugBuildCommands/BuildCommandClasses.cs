@@ -20,17 +20,27 @@ internal static partial class DebugBuildCommands
             bool waitForIntellisense = args.GetBoolean("wait-for-intellisense", !quick);
             int? max = args.GetNullableInt32("max");
 
-            JObject all = await context.Runtime.ErrorListService.GetErrorListAsync(
+            JObject errors = await GetSeverityDiagnosticsAsync(
                 context,
                 waitForIntellisense,
                 timeout,
                 quick,
-                new ErrorListQuery { Max = max }).ConfigureAwait(true);
-
-            JArray allRows = (JArray?)all["rows"] ?? [];
-            JObject errors = FilterRowsBySeverity(allRows, "Error", max);
-            JObject warnings = FilterRowsBySeverity(allRows, "Warning", max);
-            JObject messages = FilterRowsBySeverity(allRows, "Message", max);
+                "Error",
+                max).ConfigureAwait(true);
+            JObject warnings = await GetSeverityDiagnosticsAsync(
+                context,
+                waitForIntellisense,
+                timeout,
+                quick,
+                "Warning",
+                max).ConfigureAwait(true);
+            JObject messages = await GetSeverityDiagnosticsAsync(
+                context,
+                waitForIntellisense,
+                timeout,
+                quick,
+                "Message",
+                max).ConfigureAwait(true);
 
             JObject diagnosticsSnapshot = new()
             {

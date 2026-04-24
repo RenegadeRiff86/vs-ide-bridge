@@ -18,10 +18,23 @@ internal static class McpServerLog
                     $"{DateTime.Now:O} [pid:{Environment.ProcessId}] {message}{Environment.NewLine}");
             }
         }
-        catch
+        catch (IOException ex)
         {
-            // best effort logging
+            System.Diagnostics.Debug.WriteLine($"McpServerLog.Write failed: {ex}");
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"McpServerLog.Write failed: {ex}");
+        }
+        catch (NotSupportedException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"McpServerLog.Write failed: {ex}");
+        }
+    }
+
+    public static void WriteException(string context, Exception ex)
+    {
+        Write($"{context}: {ex}");
     }
 
     public static void WriteRequest(JsonObject request, McpProtocol.WireFormat format)
@@ -84,9 +97,17 @@ internal static class McpServerLog
                 Directory.CreateDirectory(directory);
                 return Path.Combine(directory, "mcp-server.log");
             }
-            catch
+            catch (IOException ex)
             {
-                // try next location
+                System.Diagnostics.Debug.WriteLine($"McpServerLog.ResolveLogPath failed for '{directory}': {ex}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"McpServerLog.ResolveLogPath failed for '{directory}': {ex}");
+            }
+            catch (NotSupportedException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"McpServerLog.ResolveLogPath failed for '{directory}': {ex}");
             }
         }
 

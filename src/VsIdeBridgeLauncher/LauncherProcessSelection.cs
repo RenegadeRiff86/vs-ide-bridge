@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Globalization;
 
 namespace VsIdeBridgeLauncher
 {
@@ -35,7 +36,7 @@ namespace VsIdeBridgeLauncher
             bool timedOut,
             int timeoutMilliseconds)
         {
-            List<LauncherProcessSnapshot> snapshotList = new(snapshots);
+            List<LauncherProcessSnapshot> snapshotList = [.. snapshots];
             int? launchedProcessId = SelectNewestLaunchedProcessId(snapshotList, existingProcessIds);
             int activeProcessId = launchedProcessId ?? primaryProcessId;
 
@@ -52,14 +53,16 @@ namespace VsIdeBridgeLauncher
             {
                 return LauncherStartupEvaluation.Failed(
                     string.Format(
+                        CultureInfo.InvariantCulture,
                         "Visual Studio exited before startup completed. ExitCode={0}.",
-                        primaryExitCode.HasValue ? primaryExitCode.Value.ToString() : "unknown"));
+                        primaryExitCode.HasValue ? primaryExitCode.Value.ToString(CultureInfo.InvariantCulture) : "unknown"));
             }
 
             if (timedOut)
             {
                 return LauncherStartupEvaluation.Failed(
                     string.Format(
+                        CultureInfo.InvariantCulture,
                         "Visual Studio launched as PID {0} but never showed a main window or registered the bridge within {1} ms.",
                         activeProcessId,
                         timeoutMilliseconds));
@@ -70,7 +73,7 @@ namespace VsIdeBridgeLauncher
 
         public static IReadOnlyList<string> NormalizeTempRoots(IEnumerable<string> candidates)
         {
-            List<string> tempRoots = new();
+            List<string> tempRoots = [];
             HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
 
             foreach (string candidate in candidates)
@@ -97,10 +100,14 @@ namespace VsIdeBridgeLauncher
 
         public static IReadOnlyList<string> BuildDiscoveryFileCandidates(IEnumerable<string> tempRoots, int processId)
         {
-            List<string> paths = new();
+            List<string> paths = [];
             foreach (string tempRoot in NormalizeTempRoots(tempRoots))
             {
-                paths.Add(Path.Combine(tempRoot, "vs-ide-bridge", "pipes", string.Format("bridge-{0}.json", processId)));
+                paths.Add(Path.Combine(
+                    tempRoot,
+                    "vs-ide-bridge",
+                    "pipes",
+                    string.Format(CultureInfo.InvariantCulture, "bridge-{0}.json", processId)));
             }
 
             return paths;
@@ -139,23 +146,15 @@ namespace VsIdeBridgeLauncher
         }
     }
 
-    internal readonly struct LauncherProcessSnapshot
+    internal readonly struct LauncherProcessSnapshot(int processId, DateTime startTimeUtc, bool hasBridgeDiscovery, bool hasMainWindow)
     {
-        public LauncherProcessSnapshot(int processId, DateTime startTimeUtc, bool hasBridgeDiscovery, bool hasMainWindow)
-        {
-            ProcessId = processId;
-            StartTimeUtc = startTimeUtc;
-            HasBridgeDiscovery = hasBridgeDiscovery;
-            HasMainWindow = hasMainWindow;
-        }
+        public int ProcessId { get; } = processId;
 
-        public int ProcessId { get; }
+        public DateTime StartTimeUtc { get; } = startTimeUtc;
 
-        public DateTime StartTimeUtc { get; }
+        public bool HasBridgeDiscovery { get; } = hasBridgeDiscovery;
 
-        public bool HasBridgeDiscovery { get; }
-
-        public bool HasMainWindow { get; }
+        public bool HasMainWindow { get; } = hasMainWindow;
     }
 
     internal readonly struct LauncherStartupEvaluation

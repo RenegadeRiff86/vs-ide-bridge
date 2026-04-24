@@ -265,7 +265,7 @@ internal static partial class ToolCatalog
             searchHints: BuildSearchHints(
                 related: [("python_set_startup_file", "Change the startup file")]));
 
-        yield return BridgeTool("python_sync_env",
+        yield return BridgeWrapperTool("python_sync_env",
             "Sync the active bridge Python interpreter to the active Python project in Visual Studio.",
             ObjectSchema(
                 Opt(Project, "Python project name or path. Defaults to the active project.")),

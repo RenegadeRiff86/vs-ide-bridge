@@ -39,11 +39,12 @@ internal static partial class BestPracticeAnalyzer
         }
     }
 
-    // ── BP1044: In-source warning suppression (C#) ────────────────────────────
+    // ── BP1044: Diagnostic suppression ─────────────────────────────────────────
 
-    public static IEnumerable<JObject> FindPragmaWarningDisable(string file, string content)
+    public static IEnumerable<JObject> FindDiagnosticSuppressions(string file, string content)
     {
         int findingCount = 0;
+
         foreach (Match match in PragmaWarningDisablePattern().Matches(content))
         {
             string pragmaText = GetLineAt(content, match.Index).Trim();
@@ -52,7 +53,88 @@ internal static partial class BestPracticeAnalyzer
                 message: $"In-source warning suppression '{pragmaText}' hides diagnostics instead of fixing the root cause. Remove the pragma and address the underlying warning.",
                 file: file,
                 line: GetLineNumber(content, match.Index),
-                symbol: "#pragma warning disable",
+                symbol: pragmaText,
+                helpUri: BP1044HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+
+        foreach (Match match in EditorConfigDiagnosticSuppressionPattern().Matches(content))
+        {
+            string diagnosticCode = match.Groups["code"].Value;
+            string severity = match.Groups["severity"].Value;
+            string symbol = $"dotnet_diagnostic.{diagnosticCode}.severity = {severity}";
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1044",
+                message: $"Diagnostic suppression '{symbol}' hides analyzer output instead of fixing the root cause. Restore a visible severity and address the underlying diagnostic.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: symbol,
+                helpUri: BP1044HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+
+        foreach (Match match in NoWarnElementPattern().Matches(content))
+        {
+            string codes = match.Groups["codes"].Value.Trim();
+            string symbol = $"NoWarn={codes}";
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1044",
+                message: $"Project-level suppression '{symbol}' hides diagnostics instead of fixing the root cause. Remove NoWarn entries and repair the underlying diagnostics.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: symbol,
+                helpUri: BP1044HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+
+        foreach (Match match in NoWarnAttributePattern().Matches(content))
+        {
+            string codes = match.Groups["codes"].Value.Trim();
+            string symbol = $"NoWarn={codes}";
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1044",
+                message: $"Project-level suppression '{symbol}' hides diagnostics instead of fixing the root cause. Remove NoWarn entries and repair the underlying diagnostics.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: symbol,
+                helpUri: BP1044HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+
+        foreach (Match match in SuppressMessagePattern().Matches(content))
+        {
+            string suppressionText = GetLineAt(content, match.Index).Trim();
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1044",
+                message: $"Suppression attribute '{Truncate(suppressionText, 96)}' hides diagnostics instead of fixing the root cause. Remove the attribute and address the underlying diagnostic.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: "SuppressMessage",
+                helpUri: BP1044HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+
+        foreach (Match match in RuleSetSuppressionPattern().Matches(content))
+        {
+            string diagnosticCode = match.Groups["code"].Value;
+            string action = match.Groups["action"].Value;
+            string symbol = $"Rule {diagnosticCode} Action={action}";
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1044",
+                message: $"Ruleset suppression '{symbol}' hides diagnostics instead of fixing the root cause. Restore a visible action and address the underlying diagnostic.",
+                file: file,
+                line: GetLineNumber(content, match.Index),
+                symbol: symbol,
                 helpUri: BP1044HelpUri);
 
             findingCount++;
@@ -60,24 +142,52 @@ internal static partial class BestPracticeAnalyzer
         }
     }
 
-    // ── BP1045: TODO comments left in code ─────────────────────────────────────
+    // ── BP1004: Empty or comment-only catch block (C#) ───────────────────────
+
+    public static IEnumerable<JObject> FindEmptyCatchBlocks(string file, string content)
+    {
+        string[] lines = content.Split('\n');
+        MatchCollection matches = CatchBlockPattern().Matches(content);
+        int findingCount = 0;
+        foreach (Match match in matches)
+        {
+            if (!TryGetCommentOnlyCatchBlockInfo(lines, content, match.Index, out int startLine, out string message))
+            {
+                continue;
+            }
+
+            yield return DiagnosticRowFactory.CreateBestPracticeRow(
+                code: "BP1004",
+                message: message,
+                file: file,
+                line: startLine,
+                symbol: "catch",
+                helpUri: BP1004HelpUri);
+
+            findingCount++;
+            if (findingCount >= MaxSuppressionFindingsPerFile) { yield break; }
+        }
+    }
+
+    // ── BP1045: TODO/FIXME-style marker comments left in code ──────────────────
 
     public static IEnumerable<JObject> FindTodoComments(string file, string content)
     {
         int findingCount = 0;
         foreach (Match match in TodoCommentPattern().Matches(content))
         {
-            string todoText = match.Groups["text"].Value.Trim();
-            string message = string.IsNullOrWhiteSpace(todoText)
-                ? "TODO comment found. Track the work in an issue or resolve it before shipping."
-                : $"TODO comment found: \"{Truncate(todoText, 72)}\". Track the work in an issue or resolve it before shipping.";
+            string marker = match.Groups["marker"].Value.ToUpperInvariant();
+            string markerText = match.Groups["text"].Value.Trim();
+            string message = string.IsNullOrWhiteSpace(markerText)
+                ? $"{marker} comment found. Track the work in an issue or resolve it before shipping."
+                : $"{marker} comment found: \"{Truncate(markerText, 72)}\". Track the work in an issue or resolve it before shipping.";
 
             yield return DiagnosticRowFactory.CreateBestPracticeRow(
                 code: "BP1045",
                 message: message,
                 file: file,
                 line: GetLineNumber(content, match.Index),
-                symbol: "TODO",
+                symbol: marker,
                 helpUri: BP1045HelpUri);
 
             findingCount++;

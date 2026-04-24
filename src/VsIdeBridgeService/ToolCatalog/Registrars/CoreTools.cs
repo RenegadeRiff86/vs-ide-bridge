@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using static VsIdeBridgeService.ArgBuilder;
 using static VsIdeBridgeService.SchemaHelpers;
@@ -26,19 +27,7 @@ internal static partial class ToolCatalog
             searchHints: BuildSearchHints(
                 related: [(VsStateToolName, "Check current IDE state"), (ListInstancesToolName, "Find all bridge instances")]));
 
-        yield return BridgeTool("batch",
-            "Execute multiple bridge commands in one round-trip. Use when you need results from " +
-            "several commands together (e.g. state + errors + list-projects). " +
-            "Steps format: [{\"command\":\"state\"},{\"command\":\"errors\",\"args\":\"{\\\"max\\\":20}\"},{\"command\":\"list-projects\"}]. " +
-            "Note: prefer read_file_batch for multiple file reads and find_text_batch for multiple searches.",
-            ObjectSchema(Req("steps",
-                "JSON array of command steps. Each step: {\"command\":\"cmd-name\",\"args\":\"{...}\",\"id\":\"optional-label\"}. " +
-                "Example: [{\"command\":\"state\"},{\"command\":\"errors\",\"args\":\"{\\\"max\\\":20}\"}]")),
-            "batch",
-            a => Build(("steps", OptionalString(a, "steps"))),
-            Core,
-            searchHints: BuildSearchHints(
-                related: [("vs_state", "Check IDE state"), ("errors", "Fetch diagnostics"), ("read_file_batch", "Batch-read multiple files instead")]));
+        yield return CreateBatchTool();
 
         yield return new(ListInstancesToolName,
             "List live VS IDE Bridge instances visible to this MCP server.",
@@ -92,6 +81,283 @@ internal static partial class ToolCatalog
             searchHints: BuildSearchHints(
                 workflow: [("errors", "Check diagnostics after loading"), ("search_symbols", "Search for symbols"), ("file_outline", "Inspect file structure")],
                 related: [(VsStateToolName, "Check current IDE state")]));
+    }
+
+    private static ToolEntry CreateBatchTool() =>
+        new("batch",
+            "Execute multiple bridge or service tools in one MCP round-trip. Use when you need results from " +
+            "several tools together (e.g. vs_state + errors + list_projects or state + errors + list-projects). " +
+            "Steps format: [{\"command\":\"vs_state\"},{\"command\":\"errors\",\"args\":{\"max\":20}},{\"command\":\"list_tool_categories\"}]. " +
+            "Note: prefer read_file_batch for multiple file reads and find_text_batch for multiple searches.",
+            ObjectSchema(
+                (("steps",
+                    new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["description"] =
+                            "Batch steps to execute in order. Each step is an object: {\"command\":\"tool-or-command-name\",\"args\":{...},\"id\":\"optional-label\"}. " +
+                            "Accepts MCP tool names like vs_state/find_text/list_tool_categories and bridge command aliases like state/find-text. " +
+                            "Example: [{\"command\":\"vs_state\"},{\"command\":\"errors\",\"args\":{\"max\":20}}]",
+                        ["items"] = ObjectSchema(
+                            Req("command", "Tool or bridge command name (e.g. vs_state, errors, find-text)."),
+                            Opt("id", "Optional label echoed back in the per-step result."),
+                            ("args", new JsonObject
+                            {
+                                ["type"] = "object",
+                                ["description"] = "Arguments for the step's tool, matching that tool's input schema.",
+                                ["additionalProperties"] = true,
+                            }, false)),
+                        ["minItems"] = 1,
+                    },
+                    true)),
+                OptBool("stop_on_error", "Stop after the first failing step (default false).")),
+            Core,
+            ExecuteBatchToolAsync,
+            searchHints: BuildSearchHints(
+                related: [("vs_state", "Check IDE state"), ("errors", "Fetch diagnostics"), ("read_file_batch", "Batch-read multiple files instead")]));
+
+    private static async Task<JsonNode> ExecuteBatchToolAsync(JsonNode? id, JsonObject? args, BridgeConnection bridge)
+    {
+        JsonArray steps = ReadStepsArgument(id, args);
+
+        bool stopOnError = args?["stop_on_error"]?.GetValue<bool>() ?? false;
+        JsonObject response = await ExecuteBatchLocallyAsync(id, steps, stopOnError, bridge).ConfigureAwait(false);
+        return ToolResultFormatter.StructuredToolResult(
+            response,
+            args,
+            successText: response["Summary"]?.GetValue<string>());
+    }
+
+    private static JsonArray ReadStepsArgument(JsonNode? id, JsonObject? args)
+    {
+        JsonNode raw = args?["steps"]
+            ?? throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Missing required argument steps.");
+
+        if (raw is JsonArray array)
+        {
+            if (array.Count == 0)
+            {
+                throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Argument 'steps' must contain at least one step.");
+            }
+            return array;
+        }
+
+        // Tolerate clients that send a JSON-encoded string (legacy CLI shape).
+        if (raw is JsonValue value && value.TryGetValue(out string? text) && !string.IsNullOrWhiteSpace(text))
+        {
+            JsonNode? parsed;
+            try
+            {
+                parsed = JsonNode.Parse(text);
+            }
+            catch (JsonException ex)
+            {
+                throw new McpRequestException(id, McpErrorCodes.InvalidParams, $"Argument 'steps' must be a JSON array. {ex.Message}");
+            }
+            if (parsed is JsonArray parsedArray)
+            {
+                if (parsedArray.Count == 0)
+                {
+                    throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Argument 'steps' must contain at least one step.");
+                }
+                return parsedArray;
+            }
+        }
+
+        throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Argument 'steps' must be a JSON array of step objects.");
+    }
+
+    private static async Task<JsonObject> ExecuteBatchLocallyAsync(
+        JsonNode? id,
+        JsonArray steps,
+        bool stopOnError,
+        BridgeConnection bridge)
+    {
+        JsonArray results = [];
+        int successCount = 0;
+        int failureCount = 0;
+        bool stoppedEarly = false;
+
+        for (int i = 0; i < steps.Count; i++)
+        {
+            (JsonObject stepResult, bool succeeded) = await ExecuteBatchStepLocallyAsync(id, steps[i], i, bridge).ConfigureAwait(false);
+            if (succeeded)
+            {
+                successCount++;
+            }
+            else
+            {
+                failureCount++;
+            }
+
+            results.Add(stepResult);
+
+            if (stopOnError && !succeeded)
+            {
+                stoppedEarly = i < steps.Count - 1;
+                break;
+            }
+        }
+
+        JsonObject data = new()
+        {
+            ["batchCount"] = steps.Count,
+            ["successCount"] = successCount,
+            ["failureCount"] = failureCount,
+            ["stoppedEarly"] = stoppedEarly,
+            ["results"] = results,
+        };
+
+        return new JsonObject
+        {
+            ["SchemaVersion"] = 1,
+            ["Command"] = "batch",
+            ["Success"] = true,
+            ["Summary"] = $"Batch: {successCount}/{steps.Count} succeeded, {failureCount} failed.",
+            ["Warnings"] = new JsonArray(),
+            ["Error"] = null,
+            ["Data"] = data,
+        };
+    }
+
+    private static async Task<(JsonObject Result, bool Succeeded)> ExecuteBatchStepLocallyAsync(
+        JsonNode? id,
+        JsonNode? entry,
+        int index,
+        BridgeConnection bridge)
+    {
+        if (entry is not JsonObject step)
+        {
+            return (CreateBatchStepFailure(index, null, string.Empty, "invalid_batch_entry", "Batch entry must be a JSON object."), false);
+        }
+
+        string? stepId = step["id"]?.GetValue<string>();
+        string commandName = step["command"]?.GetValue<string>() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(commandName))
+        {
+            return (CreateBatchStepFailure(index, stepId, commandName, "invalid_batch_entry", "Batch step is missing required field 'command'."), false);
+        }
+
+        JsonObject? stepArgs;
+        try
+        {
+            stepArgs = ParseBatchStepArgs(step["args"]);
+        }
+        catch (JsonException ex)
+        {
+            return (CreateBatchStepFailure(index, stepId, commandName, "invalid_json", $"Batch step args must be valid JSON. {ex.Message}"), false);
+        }
+        catch (McpRequestException ex)
+        {
+            return (CreateBatchStepFailure(index, stepId, commandName, "invalid_arguments", ex.Message), false);
+        }
+
+        if (!Registry.TryGet(commandName, out ToolEntry? _))
+        {
+            return (CreateBatchStepFailure(index, stepId, commandName, "unknown_command", $"Tool or bridge command not registered: {commandName}"), false);
+        }
+
+        JsonNode toolResult = await Registry.DispatchAsync(id, commandName, stepArgs, bridge).ConfigureAwait(false);
+        JsonObject normalized = NormalizeBatchStepResult(index, stepId, commandName, toolResult);
+        return (normalized, normalized["success"]?.GetValue<bool>() ?? false);
+    }
+
+    private static JsonObject? ParseBatchStepArgs(JsonNode? args)
+    {
+        if (args is null)
+        {
+            return null;
+        }
+
+        if (args is JsonObject obj)
+        {
+            return (JsonObject)obj.DeepClone();
+        }
+
+        if (args is JsonValue value && value.TryGetValue(out string? raw) && !string.IsNullOrWhiteSpace(raw))
+        {
+            JsonNode? parsed = JsonNode.Parse(raw);
+            if (parsed is JsonObject parsedObject)
+            {
+                return parsedObject;
+            }
+
+            throw new McpRequestException(null, McpErrorCodes.InvalidParams, "Batch step args string must parse to a JSON object.");
+        }
+
+        throw new McpRequestException(null, McpErrorCodes.InvalidParams, "Batch step args must be a JSON object.");
+    }
+
+    private static JsonObject NormalizeBatchStepResult(int index, string? stepId, string commandName, JsonNode toolResult)
+    {
+        JsonObject toolResultObject = toolResult as JsonObject ?? [];
+        bool succeeded = !(toolResultObject["isError"]?.GetValue<bool>() ?? false);
+        JsonNode? structuredContent = toolResultObject["structuredContent"];
+
+        JsonArray warnings = structuredContent is JsonObject structuredObject && structuredObject["Warnings"] is JsonArray structuredWarnings
+            ? (JsonArray)structuredWarnings.DeepClone()
+            : [];
+
+        JsonNode data = structuredContent is JsonObject structuredResponse && structuredResponse["Data"] is JsonNode rawData
+            ? rawData.DeepClone()
+            : structuredContent?.DeepClone() ?? new JsonObject();
+
+        JsonNode? error = succeeded
+            ? null
+            : BuildBatchStepError(structuredContent as JsonObject, GetBatchStepSummary(toolResultObject));
+
+        return new JsonObject
+        {
+            ["index"] = index,
+            ["id"] = stepId is null ? null : stepId,
+            ["command"] = commandName,
+            ["success"] = succeeded,
+            ["summary"] = GetBatchStepSummary(toolResultObject),
+            ["warnings"] = warnings,
+            ["data"] = data,
+            ["error"] = error,
+        };
+    }
+
+    private static JsonObject CreateBatchStepFailure(
+        int index,
+        string? stepId,
+        string commandName,
+        string errorCode,
+        string message)
+        => new()
+        {
+            ["index"] = index,
+            ["id"] = stepId is null ? null : stepId,
+            ["command"] = commandName,
+            ["success"] = false,
+            ["summary"] = message,
+            ["warnings"] = new JsonArray(),
+            ["data"] = new JsonObject(),
+            ["error"] = new JsonObject
+            {
+                ["code"] = errorCode,
+                ["message"] = message,
+            },
+        };
+
+    private static string GetBatchStepSummary(JsonObject toolResult)
+        => toolResult["content"]?[0]?["text"]?.GetValue<string>()
+            ?? toolResult["structuredContent"]?["Summary"]?.GetValue<string>()
+            ?? toolResult.ToJsonString();
+
+    private static JsonObject BuildBatchStepError(JsonObject? structuredContent, string summary)
+    {
+        if (structuredContent?["Error"] is JsonObject rawError)
+        {
+            return (JsonObject)rawError.DeepClone();
+        }
+
+        return new JsonObject
+        {
+            ["code"] = "tool_error",
+            ["message"] = summary,
+        };
     }
 
     private static IEnumerable<ToolEntry> CoreRegistryTools()

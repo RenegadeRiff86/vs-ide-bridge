@@ -97,4 +97,7 @@ internal static class SchemaHelpers
 
     public static (string, JsonObject, bool) OptArr(string name, string description)
         => (name, ArrayOfStringsSchema(description), false);
+
+    public static (string, JsonObject, bool) ReqArr(string name, string description)
+        => (name, ArrayOfStringsSchema(description), true);
 }

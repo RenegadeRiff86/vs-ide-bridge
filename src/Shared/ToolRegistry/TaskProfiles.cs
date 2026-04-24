@@ -19,15 +19,26 @@ public sealed partial class ToolRegistry
                 "error", "warning", "diagnostic", "build", "broken", "failing"),
             ContainsAny(normalizedTask,
                 "change", "edit", "write", "patch", "refactor", "rename", "update",
-                "fix", "create", "replace", "overwrite"),
+                "fix", "replace", "overwrite"),
             ContainsAny(normalizedTask,
-                "build", "compile", "installer", "package", "publish", "msbuild", "rebuild"),
+                "build", "compile", "installer", "publish", "msbuild", "rebuild"),
             ContainsAny(normalizedTask,
                 "powershell", "cmd", "command line", "process", "exe", "script", "iscc", "terminal"),
             ContainsAny(normalizedTask,
                 "which tool", "what tool", "recommend", "discover", "connect", "instance",
                 "bridge", "available tools", "tool list", "list tools", "find tool", "what should",
-                "how do i", "getting started", "setup", "mcp"));
+                "how do i", "getting started", "setup", "mcp"),
+            ContainsAny(normalizedTask,
+                "python", "venv", "virtualenv", "virtual environment", "pip", "conda",
+                "interpreter"),
+            ContainsAny(normalizedTask,
+                "git", "commit", "branch", "stash", "merge", "rebase", "checkout",
+                "push", "pull", "fetch", "remote", "staged", "unstaged"),
+            ContainsAny(normalizedTask,
+                "nuget", "dotnet add", "dotnet remove", "dotnet package"),
+            ContainsAny(normalizedTask,
+                "breakpoint", "debug", "debugger", "watch", "step into", "step over",
+                "step out", "stack frame", "callstack", "call stack", "locals", "exception"));
     }
 
     private readonly record struct TaskProfile(
@@ -38,5 +49,9 @@ public sealed partial class ToolRegistry
         bool LooksLikeEditTask,
         bool LooksLikeBuildTask,
         bool LooksLikeExternalProcessTask,
-        bool LooksLikeDiscoveryTask);
+        bool LooksLikeDiscoveryTask,
+        bool LooksLikePythonTask,
+        bool LooksLikeGitTask,
+        bool LooksLikeNuGetTask,
+        bool LooksLikeDebugTask);
 }

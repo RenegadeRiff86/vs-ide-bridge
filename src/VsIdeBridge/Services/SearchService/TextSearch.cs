@@ -1,12 +1,15 @@
 ﻿using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.FindResults;
 using Microsoft.VisualStudio.Text;
+using EnvDTE;
+using EnvDTE80;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 
@@ -14,6 +17,8 @@ namespace VsIdeBridge.Services;
 
 internal sealed partial class SearchService
 {
+    private sealed record SearchFileSnapshot(string Path, string ProjectUniqueName, string[] Lines);
+
     private async Task PopulateFindResultsAsync(
         IdeCommandContext context,
         IReadOnlyDictionary<string, List<FindResult>> groupedMatches,
@@ -45,13 +50,13 @@ internal sealed partial class SearchService
         {
             throw;
         }
-        catch (COMException)
+        catch (COMException ex)
         {
-            // Best effort — populating the Find Results window is non-critical.
+            BridgeActivityLog.LogWarning(nameof(SearchService), "Failed to populate the Find Results window", ex);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            // Best effort — populating the Find Results window is non-critical.
+            BridgeActivityLog.LogWarning(nameof(SearchService), "Failed to complete Find Results window population", ex);
         }
     }
 
@@ -82,6 +87,28 @@ internal sealed partial class SearchService
         string? projectUniqueName,
         string? pathFilter = null)
     {
+        List<SearchFileSnapshot> files = await CaptureSearchFileSnapshotsAsync(context, scope, projectUniqueName, pathFilter).ConfigureAwait(true);
+        return await SearchTextMatchesAsync(files, query, matchCase, wholeWord, useRegex, context.CancellationToken).ConfigureAwait(false);
+    }
+
+    private static Task<(List<SearchHit> Matches, Dictionary<string, List<FindResult>> GroupedMatches)> SearchTextMatchesAsync(
+        IReadOnlyList<SearchFileSnapshot> files,
+        string query,
+        bool matchCase,
+        bool wholeWord,
+        bool useRegex,
+        CancellationToken cancellationToken)
+    {
+        Regex regex = BuildRegex(query, matchCase, wholeWord, useRegex);
+        return Task.Run(() => SearchTextMatchesInSnapshots(files, regex, query, cancellationToken), cancellationToken);
+    }
+
+    private async Task<List<SearchFileSnapshot>> CaptureSearchFileSnapshotsAsync(
+        IdeCommandContext context,
+        string scope,
+        string? projectUniqueName,
+        string? pathFilter)
+    {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
 
         string? normalizedPathFilter = NormalizeSearchPathFilter(context.Dte, pathFilter);
@@ -98,21 +125,70 @@ internal sealed partial class SearchService
             ? allFiles
             : [.. allFiles.Where(file => MatchesPathFilter(file.Path, normalizedPathFilter))];
 
-        Regex regex = BuildRegex(query, matchCase, wholeWord, useRegex);
+        Dictionary<string, string[]> openDocumentSnapshots = CaptureOpenDocumentSnapshots(context.Dte, files.Select(file => file.Path));
+        return await Task.Run(
+            () => BuildSearchFileSnapshots(files, openDocumentSnapshots, context.CancellationToken),
+            context.CancellationToken).ConfigureAwait(false);
+    }
+
+    private static Dictionary<string, string[]> CaptureOpenDocumentSnapshots(DTE2 dte, IEnumerable<string> targetPaths)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        IEnumerable<string> normalizedTargetPaths = targetPaths
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(PathNormalization.NormalizeFilePath);
+
+        HashSet<string> normalizedTargets = new(normalizedTargetPaths, StringComparer.OrdinalIgnoreCase);
+
+        Dictionary<string, string[]> snapshots = new(StringComparer.OrdinalIgnoreCase);
+        if (normalizedTargets.Count == 0)
+        {
+            return snapshots;
+        }
+
+        foreach (Document document in dte.Documents)
+        {
+            try
+            {
+                string normalizedPath = PathNormalization.NormalizeFilePath(document.FullName);
+                if (!normalizedTargets.Contains(normalizedPath))
+                {
+                    continue;
+                }
+
+                if (document.Object("TextDocument") is TextDocument textDocument)
+                {
+                    EditPoint editPoint = textDocument.StartPoint.CreateEditPoint();
+                    string text = editPoint.GetText(textDocument.EndPoint);
+                    snapshots[normalizedPath] = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+                }
+            }
+            catch (COMException ex)
+            {
+                TraceSearchFailure("CaptureOpenDocumentSnapshots", ex);
+            }
+        }
+
+        return snapshots;
+    }
+
+    private static (List<SearchHit> Matches, Dictionary<string, List<FindResult>> GroupedMatches) SearchTextMatchesInSnapshots(
+        IReadOnlyList<SearchFileSnapshot> files,
+        Regex regex,
+        string query,
+        CancellationToken cancellationToken)
+    {
         List<SearchHit> hits = [];
         Dictionary<string, List<FindResult>> groupedMatches = [];
 
-        foreach ((string Path, string ProjectUniqueName) file in files)
+        foreach (SearchFileSnapshot file in files)
         {
-            if (!File.Exists(file.Path))
-            {
-                continue;
-            }
+            cancellationToken.ThrowIfCancellationRequested();
 
-            string[] lines = ReadSearchLines(context.Dte, file.Path);
-            for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+            for (int lineIndex = 0; lineIndex < file.Lines.Length; lineIndex++)
             {
-                string line = lines[lineIndex];
+                string line = file.Lines[lineIndex];
                 foreach (Match match in regex.Matches(line))
                 {
                     hits.Add(new SearchHit
@@ -141,26 +217,48 @@ internal sealed partial class SearchService
         return (hits, groupedMatches);
     }
 
-    private async Task<(List<SearchHit> Matches, Dictionary<string, List<FindResult>> GroupedMatches)> SearchSmartQueryTermsAsync(
-        IdeCommandContext context,
-        string query,
-        string scope,
-        string? projectUniqueName)
+    private static List<SearchFileSnapshot> BuildSearchFileSnapshots(
+        IReadOnlyList<(string Path, string ProjectUniqueName)> files,
+        IReadOnlyDictionary<string, string[]> openDocumentSnapshots,
+        CancellationToken cancellationToken)
     {
-        IReadOnlyList<SmartQueryTerm> terms = ExtractSmartQueryTerms(query);
+        List<SearchFileSnapshot> snapshots = [];
+
+        foreach ((string Path, string ProjectUniqueName) file in files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrWhiteSpace(file.Path) || !File.Exists(file.Path))
+            {
+                continue;
+            }
+
+            string normalizedPath = PathNormalization.NormalizeFilePath(file.Path);
+            if (!openDocumentSnapshots.TryGetValue(normalizedPath, out string[]? lines))
+            {
+                lines = File.ReadAllLines(file.Path);
+            }
+
+            snapshots.Add(new SearchFileSnapshot(file.Path, file.ProjectUniqueName, lines));
+        }
+
+        return snapshots;
+    }
+
+    private static (List<SearchHit> Matches, Dictionary<string, List<FindResult>> GroupedMatches) SearchSmartQueryTermsInSnapshots(
+        IReadOnlyList<SearchFileSnapshot> files,
+        IReadOnlyList<SmartQueryTerm> terms,
+        CancellationToken cancellationToken)
+    {
         Dictionary<string, SearchHit> hitMap = [];
         Dictionary<string, List<FindResult>> groupedMatches = [];
 
         foreach (SmartQueryTerm term in terms)
         {
-            (List<SearchHit> Matches, Dictionary<string, List<FindResult>> GroupedMatches) = await SearchTextMatchesAsync(
-                context,
-                term.Text,
-                scope,
-                matchCase: false,
-                wholeWord: term.WholeWord,
-                useRegex: false,
-                projectUniqueName).ConfigureAwait(true);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Regex regex = BuildRegex(term.Text, matchCase: false, wholeWord: term.WholeWord, useRegex: false);
+            (List<SearchHit> Matches, _) = SearchTextMatchesInSnapshots(files, regex, term.Text, cancellationToken);
 
             foreach (SearchHit hit in Matches)
             {
@@ -182,7 +280,7 @@ internal sealed partial class SearchService
                 }
 
                 existing.ScoreHint += term.Weight;
-                if (!existing.SourceQueries.Contains(term.Text, StringComparer.OrdinalIgnoreCase))
+                if (!existing.SourceQueries.Any(query => string.Equals(query, term.Text, StringComparison.OrdinalIgnoreCase)))
                 {
                     existing.SourceQueries.Add(term.Text);
                 }
@@ -202,6 +300,19 @@ internal sealed partial class SearchService
             .ThenBy(hit => hit.Path, StringComparer.OrdinalIgnoreCase)
             .ThenBy(hit => hit.Line)
             .ToList(), groupedMatches);
+    }
+
+    private async Task<(List<SearchHit> Matches, Dictionary<string, List<FindResult>> GroupedMatches)> SearchSmartQueryTermsAsync(
+        IdeCommandContext context,
+        string query,
+        string scope,
+        string? projectUniqueName)
+    {
+        IReadOnlyList<SmartQueryTerm> terms = [.. ExtractSmartQueryTerms(query).Take(SmartContextMaxQueryTerms)];
+        List<SearchFileSnapshot> files = await CaptureSearchFileSnapshotsAsync(context, scope, projectUniqueName, pathFilter: null).ConfigureAwait(true);
+        return await Task.Run(
+            () => SearchSmartQueryTermsInSnapshots(files, terms, context.CancellationToken),
+            context.CancellationToken).ConfigureAwait(false);
     }
 
     private static List<string> NormalizeQueries(IEnumerable<string> queries)
@@ -252,7 +363,7 @@ internal sealed partial class SearchService
             existing.ScoreHint = Math.Max(existing.ScoreHint, hit.ScoreHint);
             foreach (string query in hit.SourceQueries)
             {
-                if (!existing.SourceQueries.Contains(query, StringComparer.OrdinalIgnoreCase))
+                if (!existing.SourceQueries.Any(sourceQuery => string.Equals(sourceQuery, query, StringComparison.OrdinalIgnoreCase)))
                 {
                     existing.SourceQueries.Add(query);
                 }

@@ -292,6 +292,71 @@ internal sealed partial class DocumentService
         };
     }
 
+    public async Task<JObject> PeekDefinitionAsync(DTE2 dte, string? filePath, string? documentQuery, int? line, int? column)
+    {
+        JObject sourceLocation = await PositionTextSelectionAsync(dte, filePath, documentQuery, line, column, selectWord: true)
+            .ConfigureAwait(false);
+
+        string sourcePath = (string?)sourceLocation[ResolvedPathProperty] ?? string.Empty;
+        int sourceLine = (int?)sourceLocation["line"] ?? 0;
+        int sourceColumn = (int?)sourceLocation["column"] ?? column ?? 1;
+        string word = ((string?)sourceLocation[SelectedTextProperty] ?? string.Empty).Trim();
+        sourceLocation[SelectedTextProperty] = word;
+
+        if (!HasNavigableSymbolText(word))
+        {
+            return new JObject
+            {
+                ["word"] = word,
+                [SourceLocationProperty] = sourceLocation,
+                [DefinitionFoundProperty] = false,
+                [DefinitionLocationProperty] = JValue.CreateNull(),
+                ["definitionSource"] = JValue.CreateNull(),
+                ["definitionContext"] = JValue.CreateNull(),
+                ["note"] = "No symbol was found under the caret.",
+            };
+        }
+
+        bool definitionFound = false;
+        JObject? definitionLocation = null;
+        JObject? definitionSource = null;
+        string? note = null;
+
+        try
+        {
+            JObject definitionResult = await GoToDefinitionAsync(dte, sourcePath, null, sourceLine, sourceColumn)
+                .ConfigureAwait(false);
+            definitionFound = (bool?)definitionResult[DefinitionFoundProperty] == true;
+            definitionLocation = definitionResult[DefinitionLocationProperty] as JObject;
+
+            if (definitionFound && definitionLocation is not null)
+            {
+                (definitionSource, note) = await BuildPeekDefinitionSourceAsync(dte, definitionLocation).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            await TryRestoreLocationAsync(dte, sourcePath, sourceLine, sourceColumn).ConfigureAwait(false);
+        }
+
+        JObject result = new()
+        {
+            ["word"] = word,
+            [SourceLocationProperty] = sourceLocation,
+            [DefinitionFoundProperty] = definitionFound,
+            [DefinitionLocationProperty] = definitionLocation ?? (JToken)JValue.CreateNull(),
+            ["definitionSource"] = definitionSource ?? (JToken)JValue.CreateNull(),
+            ["definitionContext"] = definitionSource ?? (JToken)JValue.CreateNull(),
+        };
+
+        if (!string.IsNullOrWhiteSpace(note))
+        {
+            result["note"] = note;
+        }
+
+        return result;
+    }
+
     private async Task TryRestoreLocationAsync(DTE2 dte, string? filePath, int? line, int? column)
     {
         if (string.IsNullOrWhiteSpace(filePath) || !line.HasValue || line.Value <= 0)
@@ -314,6 +379,150 @@ internal sealed partial class DocumentService
         catch (InvalidOperationException ex)
         {
             System.Diagnostics.Debug.WriteLine(ex);
+        }
+    }
+
+    private async Task<(JObject? Slice, string? Note)> BuildPeekDefinitionSourceAsync(DTE2 dte, JObject definitionLocation)
+    {
+        string definitionPath = (string?)definitionLocation[ResolvedPathProperty] ?? string.Empty;
+        int definitionLine = (int?)definitionLocation["line"] ?? 0;
+        if (string.IsNullOrWhiteSpace(definitionPath) || definitionLine <= 0)
+        {
+            return (null, "Definition location was found, but its file path or line number was unavailable.");
+        }
+
+        (int startLine, int endLine)? range = await TryResolveDefinitionExtentAsync(dte, definitionPath, definitionLine).ConfigureAwait(false);
+        if (range is { } resolvedRange)
+        {
+            JObject fullSlice = await GetDocumentSliceAsync(
+                dte,
+                definitionPath,
+                resolvedRange.startLine,
+                resolvedRange.endLine,
+                includeLineNumbers: true,
+                revealInEditor: false).ConfigureAwait(false);
+            return (fullSlice, null);
+        }
+
+        JObject fallbackSlice = await GetDocumentSliceAsync(
+            dte,
+            definitionPath,
+            Math.Max(1, definitionLine - 2),
+            definitionLine + 12,
+            includeLineNumbers: true,
+            revealInEditor: false).ConfigureAwait(false);
+        return (fallbackSlice, "Returned surrounding definition context because the full definition extent could not be determined safely.");
+    }
+
+    private static async Task<(int startLine, int endLine)?> TryResolveDefinitionExtentAsync(DTE2 dte, string definitionPath, int definitionLine)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        string resolvedPath = ResolveDocumentPath(dte, definitionPath, allowDiskFallback: false);
+        ProjectItem? projectItem = null;
+        try
+        {
+            projectItem = dte.Solution.FindProjectItem(resolvedPath);
+        }
+        catch (COMException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+        }
+
+        if (projectItem?.FileCodeModel?.CodeElements is not CodeElements codeElements)
+        {
+            return null;
+        }
+
+        CodeElement? targetElement = FindDefinitionElement(codeElements, definitionLine);
+        if (targetElement is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            int startLine = targetElement.StartPoint?.Line ?? 0;
+            int endLine = targetElement.EndPoint?.Line ?? 0;
+            return startLine > 0 && endLine >= startLine ? (startLine, endLine) : null;
+        }
+        catch (COMException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+            return null;
+        }
+    }
+
+    private static CodeElement? FindDefinitionElement(CodeElements elements, int definitionLine)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        CodeElement? bestMatch = null;
+        foreach (CodeElement element in elements)
+        {
+            CodeElement? candidate = FindDefinitionElement(element, definitionLine);
+            if (candidate is not null)
+            {
+                bestMatch = candidate;
+            }
+        }
+
+        return bestMatch;
+    }
+
+    private static CodeElement? FindDefinitionElement(CodeElement element, int definitionLine)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            int startLine = element.StartPoint?.Line ?? 0;
+            int endLine = element.EndPoint?.Line ?? 0;
+            if (startLine <= 0 || endLine < startLine || definitionLine < startLine || definitionLine > endLine)
+            {
+                return null;
+            }
+
+            if (TryGetDefinitionChildren(element) is { } children)
+            {
+                foreach (CodeElement child in children)
+                {
+                    CodeElement? nested = FindDefinitionElement(child, definitionLine);
+                    if (nested is not null)
+                    {
+                        return nested;
+                    }
+                }
+            }
+
+            return element;
+        }
+        catch (COMException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+            return null;
+        }
+    }
+
+    private static CodeElements? TryGetDefinitionChildren(CodeElement element)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            return element switch
+            {
+                CodeNamespace ns => ns.Members,
+                CodeClass cls => cls.Members,
+                CodeStruct st => st.Members,
+                CodeInterface iface => iface.Members,
+                _ => null,
+            };
+        }
+        catch (COMException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+            return null;
         }
     }
 

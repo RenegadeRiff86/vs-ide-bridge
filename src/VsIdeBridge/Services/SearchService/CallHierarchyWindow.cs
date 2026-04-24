@@ -32,14 +32,14 @@ internal sealed partial class SearchService
         }
 
         BridgeCallHierarchyMemberItem rootItem = new(root, context.Dte);
-        NativeCallHierarchyWindowResolution resolution = await ResolveNativeCallHierarchyWindowAsync(context.Dte, activateWindow);
-        if (resolution.Status is not null)
-        {
-            return resolution.Status;
-        }
-
         try
         {
+            NativeCallHierarchyWindowResolution resolution = await ResolveNativeCallHierarchyWindowAsync(context.Dte, activateWindow);
+            if (resolution.Status is not null)
+            {
+                return resolution.Status;
+            }
+
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             resolution.ToolWindowUi!.ClearAllItems();
             resolution.ToolWindowUi.AddRootItem(rootItem);
@@ -55,18 +55,21 @@ internal sealed partial class SearchService
             return CreateNativeCallHierarchyStatus(
                 available: false,
                 stage: "populate_failed",
-                detail: ex.Message,
-                resolution.WindowObject,
-                resolution.ToolWindowUiSource);
+                detail: ex.Message);
         }
         catch (InvalidOperationException ex)
         {
             return CreateNativeCallHierarchyStatus(
                 available: false,
                 stage: "populate_failed",
-                detail: ex.Message,
-                resolution.WindowObject,
-                resolution.ToolWindowUiSource);
+                detail: ex.Message);
+        }
+        catch (InvalidCastException ex)
+        {
+            return CreateNativeCallHierarchyStatus(
+                available: false,
+                stage: "populate_failed",
+                detail: ex.Message);
         }
     }
 
@@ -167,6 +170,19 @@ internal sealed partial class SearchService
         }
     }
 
+    private static object? TryGetVsShellWindowObject(IVsWindowFrame frame)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        try
+        {
+            return VsShellUtilities.GetWindowObject(frame);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static bool TryResolveCallHierarchyToolWindowUi(object? windowObject, out ICallHierarchyToolWindowUI? toolWindowUi, out string source)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
@@ -259,7 +275,7 @@ internal sealed partial class SearchService
 
         object?[] frameCandidates =
         [
-            VsShellUtilities.GetWindowObject(frame),
+            TryGetVsShellWindowObject(frame),
             TryGetFrameProperty(frame, __VSFPROPID.VSFPROPID_DocView),
             TryGetFrameProperty(frame, __VSFPROPID.VSFPROPID_ViewHelper),
         ];
@@ -396,6 +412,10 @@ internal sealed partial class SearchService
         {
             return string.Empty;
         }
+        catch (InvalidCastException)
+        {
+            return string.Empty;
+        }
     }
 
     private static string TryGetWindowObjectKind(Window window)
@@ -411,6 +431,10 @@ internal sealed partial class SearchService
             return string.Empty;
         }
         catch (InvalidOperationException)
+        {
+            return string.Empty;
+        }
+        catch (InvalidCastException)
         {
             return string.Empty;
         }

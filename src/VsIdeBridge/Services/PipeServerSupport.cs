@@ -125,9 +125,9 @@ internal static class PipeServerSupport
         {
             AddPipeAccessRule(security, new SecurityIdentifier(sidValue), rights);
         }
-        catch
+        catch (ArgumentException ex)
         {
-            // Older Windows builds can reject some well-known SIDs. Fall back gracefully.
+            System.Diagnostics.Debug.WriteLine($"PipeServerSupport failed to add pipe access rule for SID '{sidValue}': {ex}");
         }
     }
 

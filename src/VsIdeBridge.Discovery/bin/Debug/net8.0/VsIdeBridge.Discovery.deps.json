@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "VsIdeBridge.Discovery/2.2.6": {
+      "VsIdeBridge.Discovery/2.2.11": {
         "runtime": {
           "VsIdeBridge.Discovery.dll": {}
         }
@@ -14,7 +14,7 @@
     }
   },
   "libraries": {
-    "VsIdeBridge.Discovery/2.2.6": {
+    "VsIdeBridge.Discovery/2.2.11": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

@@ -15,6 +15,7 @@ internal static partial class ToolCatalog
     private const string DevenvExe = "devenv.exe";
     private const string DevenvPathKey = "devenv_path";
     private const string InstanceIdKey = "instanceId";
+    private const string ProcessIdKey = "processId";
     private const string SolutionKey = "solution";
     private const string PendingLaunchFlagDirectoryName = "vs-ide-bridge";
     private const string ServiceName = "VsIdeBridgeService";
@@ -35,15 +36,33 @@ internal static partial class ToolCatalog
     private const int ErrorPrivilegeNotHeld = 1314;
     private const int LogonWithProfile = 0x00000001;
 
-    private static Task<JsonNode> BridgeHealthAsync(JsonNode? id, BridgeConnection bridge)
+    private static async Task<JsonNode> BridgeHealthAsync(JsonNode? id, BridgeConnection bridge)
     {
         BridgeInstance? instance = bridge.CurrentInstance;
+        IReadOnlyList<BridgeInstance> visibleInstances = await VsDiscovery.ListAsync(bridge.Mode).ConfigureAwait(false);
+        JsonArray visibleInstanceItems = [];
+        foreach (BridgeInstance visibleInstance in visibleInstances)
+        {
+            visibleInstanceItems.Add(new JsonObject
+            {
+                ["instanceId"] = visibleInstance.InstanceId,
+                ["label"] = visibleInstance.Label,
+                ["pipeName"] = visibleInstance.PipeName,
+                [ProcessIdKey] = visibleInstance.ProcessId,
+                ["solutionPath"] = visibleInstance.SolutionPath ?? string.Empty,
+                ["solutionName"] = visibleInstance.SolutionName ?? string.Empty,
+                ["source"] = visibleInstance.Source,
+            });
+        }
+
         JsonObject health = new()
         {
             ["success"] = true,
             ["discoveryMode"] = bridge.Mode.ToString(),
             ["currentSolutionPath"] = bridge.CurrentSolutionPath,
             ["bound"] = instance is not null,
+            ["visibleInstanceCount"] = visibleInstances.Count,
+            ["visibleInstances"] = visibleInstanceItems,
         };
 
         if (instance is not null)
@@ -53,13 +72,13 @@ internal static partial class ToolCatalog
                 [InstanceIdKey] = instance.InstanceId,
                 ["label"] = instance.Label,
                 ["pipeName"] = instance.PipeName,
-                ["processId"] = instance.ProcessId,
+                [ProcessIdKey] = instance.ProcessId,
                 ["solutionPath"] = instance.SolutionPath ?? string.Empty,
                 ["source"] = instance.Source,
             };
         }
 
-        return Task.FromResult((JsonNode)BridgeResult(health));
+        return BridgeResult(health);
     }
 
     private static async Task<JsonNode> VsOpenAsync(JsonNode? id, JsonObject? args, BridgeConnection bridge)
@@ -611,17 +630,17 @@ internal static partial class ToolCatalog
                     TimeSpan.FromSeconds(10));
             }
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
-            // Service may not be installed or visible on this machine — proceed anyway.
+            McpServerLog.WriteException("failed to start VsIdeBridgeService because the service is unavailable", ex);
         }
-        catch (Win32Exception)
+        catch (Win32Exception ex)
         {
-            // We may lack permission to control the service — proceed anyway.
+            McpServerLog.WriteException("failed to start VsIdeBridgeService because service control was denied", ex);
         }
-        catch (System.ServiceProcess.TimeoutException)
+        catch (System.ServiceProcess.TimeoutException ex)
         {
-            // Service start may take longer than our best-effort wait — proceed anyway.
+            McpServerLog.WriteException("VsIdeBridgeService did not report Running within the best-effort wait window", ex);
         }
     }
 }

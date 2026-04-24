@@ -1,16 +1,16 @@
 using System;
 using System.IO;
+using VsIdeBridge.Shared;
 
 namespace VsIdeBridge.Services;
 
 /// <summary>
-/// Manages HTTP server state for VS IDE Bridge by reading/writing the flag file.
-/// This mirrors the state management in VsIdeBridgeService.HttpServerController.
+/// Manages HTTP server state for VS IDE Bridge by reading/writing the shared
+/// machine-wide flag file used by VsIdeBridgeService.HttpServerController.
 /// </summary>
 internal static class HttpServerStateManager
 {
-    private static readonly string FlagFilePath = Path.Combine(
-        Path.GetTempPath(), "vs-ide-bridge", "http-enabled.flag");
+    private static readonly string FlagFilePath = HttpServerStatePaths.GetHttpEnabledFlagPath();
 
     public const int DefaultPort = 8080;
     public static string Url => $"http://localhost:{DefaultPort}/";

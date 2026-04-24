@@ -5,7 +5,7 @@
   },
   "projects": {
     "C:\\Users\\elsto\\source\\repos\\vs-ide-bridge\\src\\VsIdeBridge.Discovery\\VsIdeBridge.Discovery.csproj": {
-      "version": "2.2.6",
+      "version": "2.2.11",
       "restore": {
         "projectUniqueName": "C:\\Users\\elsto\\source\\repos\\vs-ide-bridge\\src\\VsIdeBridge.Discovery\\VsIdeBridge.Discovery.csproj",
         "projectName": "VsIdeBridge.Discovery",
@@ -66,7 +66,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.201/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\10.0.202/PortableRuntimeIdentifierGraph.json"
         }
       }
     }

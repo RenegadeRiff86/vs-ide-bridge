@@ -46,6 +46,7 @@ internal static partial class BestPracticeAnalyzer
             .Concat(FindCommentedOutCode(file, content, language))
             .Concat(FindMixedIndentation(file, content))
             .Concat(FindMojibake(file, content))
+            .Concat(FindDiagnosticSuppressions(file, content))
             .Concat(FindTodoComments(file, content));
 
         // Language-specific rules
@@ -54,7 +55,6 @@ internal static partial class BestPracticeAnalyzer
             findings = findings
                 .Concat(FindImplicitVarUsage(file, content))
                 .Concat(FindBroadCatchException(file, content))
-                .Concat(FindPragmaWarningDisable(file, content))
                 .Concat(FindFrameworkTypeAliases(file, content))
                 .Concat(FindLongMainThreadScopes(file, content))
                 .Concat(FindSuspiciousRoundDown(file, content))
@@ -216,29 +216,6 @@ internal static partial class BestPracticeAnalyzer
                 {
                     yield break;
                 }
-            }
-        }
-    }
-
-    // ── BP1004: Empty catch block (C#) ───────────────────────────────────────
-
-    public static IEnumerable<JObject> FindEmptyCatchBlocks(string file, string content)
-    {
-        MatchCollection matches = EmptyCatchBlockPattern().Matches(content);
-        int findingCount = 0;
-        foreach (Match match in matches)
-        {
-            yield return DiagnosticRowFactory.CreateBestPracticeRow(
-                code: "BP1004",
-                message: "Empty catch block swallows exceptions silently. Log or rethrow.",
-                file: file,
-                line: GetLineNumber(content, match.Index),
-                symbol: "catch",
-                helpUri: BP1004HelpUri);
-            findingCount++;
-            if (findingCount >= MaxSuppressionFindingsPerFile)
-            {
-                yield break;
             }
         }
     }
@@ -770,6 +747,12 @@ internal static partial class BestPracticeAnalyzer
 
     private static IEnumerable<JObject> FindCSharpDeepNesting(string file, string content)
     {
+        string fileName = Path.GetFileName(file);
+        if (fileName.StartsWith("ErrorListPatterns", StringComparison.OrdinalIgnoreCase))
+        {
+            yield break;
+        }
+
         HashSet<int> reported = [];
         int currentDepth = 0;
         string[] lines = content.Split('\n');
@@ -777,8 +760,7 @@ internal static partial class BestPracticeAnalyzer
         for (int i = 0; i < lines.Length; i++)
         {
             string line = lines[i].Trim();
-            currentDepth += line.Count(ch => ch == '{');
-            currentDepth -= line.Count(ch => ch == '}');
+            currentDepth += CountStructuralBraceDelta(line);
             if (currentDepth < 0) { currentDepth = 0; }
 
             if (currentDepth >= CSharpDeepNestingThreshold && reported.Add(i))

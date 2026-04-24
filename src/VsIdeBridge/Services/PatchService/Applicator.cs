@@ -127,6 +127,16 @@ internal sealed partial class PatchService
 
             int? blockStartLine = null;
             int blockAddedLineCount = 0;
+            bool isPureContext = block.Lines.Count > 0 && block.Lines.All(line => line.Kind == ' ');
+
+            if (isPureContext)
+            {
+                for (int lineIndex = 0; lineIndex < block.Lines.Count; lineIndex++)
+                    EnsureLineMatches(path, existingLines, targetIndex + lineIndex, block.Lines[lineIndex].Text, "context");
+
+                matchedLineCount += block.Lines.Count;
+                continue;
+            }
 
             foreach (HunkLine line in block.Lines)
             {
@@ -301,7 +311,8 @@ internal sealed partial class PatchService
             InvalidArgumentsCode,
             $"Could not locate {descriptor} in {path} (searched from line {sourceIndex + 1}).{bestMatchHint} " +
             $"First context line: \"{firstMatchLine}\". " +
-            "Fix: call read_file to verify the context lines exist in the file, then regenerate the patch with correct content.",
+            "Fix: call read_file to verify the context lines exist in the file, then regenerate the patch with correct content. " +
+            BuildBackwardSearchHint(existingLines, sourceIndex, maxStart, matchLines),
             new
             {
                 block = block.Header,
@@ -341,6 +352,38 @@ internal sealed partial class PatchService
         }
 
         return -1;
+    }
+
+    private static string BuildBackwardSearchHint(
+        IReadOnlyList<string> existingLines,
+        int sourceIndex,
+        int maxStart,
+        IReadOnlyList<string> matchLines)
+    {
+        if (sourceIndex <= 0)
+        {
+            return string.Empty;
+        }
+
+        int backwardMaxStart = Math.Min(maxStart, sourceIndex - 1);
+        if (backwardMaxStart < 0)
+        {
+            return string.Empty;
+        }
+
+        int consumedMatchLine = FindSequentialMatch(existingLines, 0, backwardMaxStart, matchLines, useFuzzyMatch: false);
+        if (consumedMatchLine < 0)
+        {
+            consumedMatchLine = FindSequentialMatch(existingLines, 0, backwardMaxStart, matchLines, useFuzzyMatch: true);
+        }
+
+        if (consumedMatchLine < 0 || consumedMatchLine >= sourceIndex)
+        {
+            return string.Empty;
+        }
+
+        return $"The same context exists earlier at line {consumedMatchLine + 1}, before the current search cursor. " +
+               "This usually means a previous @@ block already consumed those lines. Fix: combine related @@ blocks, or use a pure anchor block followed by a change block that does not rely on already-consumed context.";
     }
 
     private static (int BestCandidate, int BestScore) FindBestAnchorMatch(

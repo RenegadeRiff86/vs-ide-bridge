@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json.Nodes;
@@ -123,9 +124,17 @@ internal static class ShellExecTool
                 process.Kill(entireProcessTree: true);
             }
         }
-        catch
+        catch (InvalidOperationException ex)
         {
-            // Process may have already exited or been killed — ignore.
+            McpServerLog.WriteException("failed to terminate shell-exec child process", ex);
+        }
+        catch (Win32Exception ex)
+        {
+            McpServerLog.WriteException("failed to terminate shell-exec child process", ex);
+        }
+        catch (NotSupportedException ex)
+        {
+            McpServerLog.WriteException("failed to terminate shell-exec child process", ex);
         }
     }
 }

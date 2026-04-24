@@ -97,9 +97,9 @@ internal static partial class SolutionProjectCommands
             if (dte.Solution.SolutionBuild.StartupProjects is object[] arr)
                 return [.. arr.OfType<string>()];
         }
-        catch (COMException)
+        catch (COMException ex)
         {
-            // StartupProjects throws when no startup project is configured; return empty list.
+            BridgeActivityLog.LogWarning(nameof(SolutionProjectCommands), "Failed to read startup projects; returning an empty list", ex);
         }
         return [];
     }
@@ -113,17 +113,17 @@ internal static partial class SolutionProjectCommands
         {
             fullName = p.FullName;
         }
-        catch (COMException)
+        catch (COMException ex)
         {
-            // Unloaded/external projects can throw COM failures when resolving FullName.
+            BridgeActivityLog.LogWarning(nameof(SolutionProjectCommands), $"Failed to resolve project path for '{p.Name}' because FullName threw COM", ex);
         }
-        catch (NotImplementedException)
+        catch (NotImplementedException ex)
         {
-            // Unloaded/external projects can report that FullName is not implemented.
+            BridgeActivityLog.LogWarning(nameof(SolutionProjectCommands), $"Failed to resolve project path for '{p.Name}' because FullName is not implemented", ex);
         }
-        catch (NotSupportedException)
+        catch (NotSupportedException ex)
         {
-            // Unloaded/external projects throw E_NOTIMPL from GetFileName(); treat path as empty.
+            BridgeActivityLog.LogWarning(nameof(SolutionProjectCommands), $"Failed to resolve project path for '{p.Name}' because FullName is not supported", ex);
         }
 
         return new JObject

@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using static VsIdeBridge.Diagnostics.ErrorListConstants;
+using VsIdeBridge.Infrastructure;
 
 namespace VsIdeBridge.Services;
 
@@ -228,6 +229,20 @@ internal sealed partial class ErrorListService
             score += 1;
         }
 
+        if (file.IndexOf("\\src\\", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            score += 1;
+        }
+
+        if (file.IndexOf("\\build\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            file.IndexOf("\\bin\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            file.IndexOf("\\obj\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            file.IndexOf("\\out\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            file.IndexOf("\\output\\", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            score -= 1;
+        }
+
         return score;
     }
 
@@ -243,7 +258,7 @@ internal sealed partial class ErrorListService
 
     private static void LogNonCriticalException(Exception ex)
     {
-        System.Diagnostics.Debug.WriteLine(ex);
+        BridgeActivityLog.LogWarning("ErrorListService", ex.GetType().Name, ex);
     }
 
     private static string NormalizeSeverity(string? severity)

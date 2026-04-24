@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -121,9 +122,17 @@ internal static partial class BuildErrorsTool
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
         }
-        catch
+        catch (InvalidOperationException ex)
         {
-            // Process already exited or cannot be signaled. The timeout path still returns a useful error.
+            McpServerLog.WriteException("failed to terminate timed-out build-errors process", ex);
+        }
+        catch (Win32Exception ex)
+        {
+            McpServerLog.WriteException("failed to terminate timed-out build-errors process", ex);
+        }
+        catch (NotSupportedException ex)
+        {
+            McpServerLog.WriteException("failed to terminate timed-out build-errors process", ex);
         }
     }
 

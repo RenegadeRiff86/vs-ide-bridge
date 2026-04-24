@@ -39,8 +39,8 @@ internal static class BestPracticeRuleMetadata
                 "Replace the suspicious floor-or-truncate cast with code that makes the rounding intent explicit. Prefer integer division when that is the real goal; otherwise use a clearly named rounding helper."),
             [BestPracticeRuleCatalog.BP1004.Code] = new(
                 "This catch path suppresses exception intent, which makes failures invisible and encourages silent corruption or partial success.",
-                "Handle the exception explicitly by logging it, translating it, or rethrowing it.",
-                "Fix this catch block so the exception is handled intentionally. Either log it with useful context, translate it to a narrower exception, or rethrow it. Do not leave a silent broad catch."),
+                "Handle the exception explicitly by writing it to the log with useful context, translating it, or rethrowing it.",
+                "Fix this catch block so the exception is handled intentionally. If the block is empty or only contains comments, write the exception to the log with useful context, translate it to a narrower exception, or rethrow it. Do not leave a silent catch."),
             [BestPracticeRuleCatalog.BP1005.Code] = new(
                 "Async void methods hide failures from callers and make cancellation, composition, and testing much harder.",
                 "Return Task instead of async void unless this is a real event handler.",
@@ -83,8 +83,8 @@ internal static class BestPracticeRuleMetadata
                 "Rename this symbol to reflect its purpose, ownership, or role in the workflow. Avoid generic names that require nearby context to understand."),
             [BestPracticeRuleCatalog.BP1015.Code] = new(
                 "Deep nesting hides the happy path and increases the chance of missed edge cases during edits.",
-                "Flatten the control flow with guard clauses, extracted helpers, or simpler branching.",
-                "Refactor this nested control flow so the main path is easier to read. Prefer guard clauses, early returns, or extracted helpers over additional nesting."),
+                "Flatten the control flow with guard clauses, extracted helpers, or simpler branching. Use file_outline first when you need a quick map of the surrounding type or method structure.",
+                "Use file_outline first if you need a quick map of the surrounding type or method structure, then refactor this nested control flow so the main path is easier to read. Prefer guard clauses, early returns, or extracted helpers over additional nesting."),
             [BestPracticeRuleCatalog.BP1016.Code] = new(
                 "Commented-out code becomes stale quickly and is a poor substitute for version control history.",
                 "Delete the dead code and rely on version control instead of commented-out blocks.",
@@ -198,13 +198,13 @@ internal static class BestPracticeRuleMetadata
                 "Keep the command on a background thread by default and limit UI-thread work to the smallest block that truly requires DTE or shell services.",
                 "Refactor this method so it stays off the Visual Studio UI thread by default. Move SwitchToMainThreadAsync as close as possible to the specific DTE or shell call that needs it, and move back to background work for parsing, shaping, and serialization."),
             [BestPracticeRuleCatalog.BP1044.Code] = new(
-                "In-source warning suppression hides diagnostics from both humans and models, which makes the codebase look healthier than it really is.",
-                "Remove '#pragma warning disable' and fix the underlying warning unless there is a rare, documented compatibility reason not to.",
-                "Delete this '#pragma warning disable' suppression and fix the underlying analyzer or compiler warning directly. Only keep a suppression when there is a documented, unavoidable compatibility reason, and then explain that reason next to the suppression."),
+                "Diagnostic suppression hides warnings and messages from both humans and models, which makes the codebase look healthier than it really is.",
+                "Remove pragma, .editorconfig, NoWarn, ruleset, or SuppressMessage suppression settings and fix the underlying diagnostic unless there is a rare, documented compatibility reason not to.",
+                "Delete this diagnostic suppression and fix the underlying analyzer or compiler diagnostic directly. This includes pragma suppression, .editorconfig severity downgrades to none or silent, NoWarn entries, ruleset suppressions, and SuppressMessage attributes. If the current diagnostics result shows more than 10 BP1044 rows, stop and ask the user before making a broad suppression cleanup pass. Only keep a suppression when there is a documented, unavoidable compatibility reason, and then explain that reason next to the suppression."),
             [BestPracticeRuleCatalog.BP1045.Code] = new(
-                "TODO comments are easy to forget in code review and leave uncertain work hidden in the codebase instead of tracked in a visible backlog.",
-                "Resolve the TODO or move it into a tracked issue, then remove the comment from the code.",
-                "Find the work described by this TODO comment and either implement it now or move it into a tracked issue/work item with enough context for follow-up. Remove the TODO comment from the code once the work is tracked or resolved."),
+                "Marker comments like TODO, FIXME, XXX, HACK, TBD, and BUGBUG are easy to forget in code review and leave uncertain work hidden in the codebase instead of tracked in a visible backlog.",
+                "Resolve the marker comment or move the work into a tracked issue, then remove the marker from the code.",
+                "Find the work described by this marker comment and either implement it now or move it into a tracked issue or work item with enough context for follow-up. Remove the marker comment from the code once the work is tracked or resolved. Treat TODO, FIXME, XXX, HACK, TBD, and BUGBUG as reminders to finish or formally track the work, not as permanent code annotations."),
         };
     }
 }

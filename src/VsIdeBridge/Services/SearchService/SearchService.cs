@@ -19,6 +19,7 @@ internal sealed partial class SearchService
     private const string FunctionKind = "function";
     private const string InterfaceKind = "interface";
     private const string PathFilterPropertyName = "pathFilter";
+    private const int SmartContextMaxQueryTerms = 8;
     private const string TotalMatchCountPropertyName = "totalMatchCount";
 
     private sealed record SearchHit
@@ -150,8 +151,9 @@ internal sealed partial class SearchService
         string? projectUniqueName,
         string? pathFilter = null)
     {
+        List<SearchFileSnapshot> files = await CaptureSearchFileSnapshotsAsync(context, scope, projectUniqueName, pathFilter).ConfigureAwait(true);
         (List<SearchHit> Matches, Dictionary<string, List<FindResult>> GroupedMatches) = await SearchTextMatchesAsync(
-            context, query, scope, matchCase, wholeWord, useRegex, projectUniqueName, pathFilter).ConfigureAwait(true);
+            files, query, matchCase, wholeWord, useRegex, context.CancellationToken).ConfigureAwait(false);
 
         await PopulateFindResultsAsync(context, GroupedMatches, query, resultsWindow).ConfigureAwait(true);
 
@@ -184,13 +186,14 @@ internal sealed partial class SearchService
             throw new ArgumentException("At least one non-empty query is required.", nameof(queries));
         }
 
+        List<SearchFileSnapshot> files = await CaptureSearchFileSnapshotsAsync(context, scope, projectUniqueName, pathFilter).ConfigureAwait(true);
         int chunkSize = Math.Max(1, maxQueriesPerChunk);
         Dictionary<string, SearchHit> mergedHits = [];
         JArray queryResults = [];
         JArray chunks = [];
         int totalMatchCount = await ExecuteBatchChunksAsync(
-            context, normalizedQueries, scope, matchCase, wholeWord, useRegex,
-            projectUniqueName, pathFilter, chunkSize, mergedHits, queryResults, chunks).ConfigureAwait(true);
+            context, files, normalizedQueries, matchCase, wholeWord, useRegex,
+            chunkSize, mergedHits, queryResults, chunks).ConfigureAwait(false);
 
         SearchHit[] orderedMergedHits =
         [.. mergedHits.Values
@@ -222,13 +225,11 @@ internal sealed partial class SearchService
 
     private async Task<int> ExecuteBatchChunksAsync(
         IdeCommandContext context,
+        IReadOnlyList<SearchFileSnapshot> files,
         IReadOnlyList<string> normalizedQueries,
-        string scope,
         bool matchCase,
         bool wholeWord,
         bool useRegex,
-        string? projectUniqueName,
-        string? pathFilter,
         int chunkSize,
         Dictionary<string, SearchHit> mergedHits,
         JArray queryResults,
@@ -242,8 +243,7 @@ internal sealed partial class SearchService
             foreach (string query in chunkQueries)
             {
                 (List<SearchHit> matches, _) = await SearchTextMatchesAsync(
-                    context, query, scope, matchCase, wholeWord, useRegex,
-                    projectUniqueName, pathFilter).ConfigureAwait(true);
+                    files, query, matchCase, wholeWord, useRegex, context.CancellationToken).ConfigureAwait(false);
                 totalMatchCount += matches.Count;
                 chunkMatchCount += matches.Count;
                 MergeSearchHits(mergedHits, matches);
@@ -409,7 +409,10 @@ internal sealed partial class SearchService
 
         IReadOnlyList<string> searchTerms = useRegex
             ? [query]
-            : [.. ExtractSmartQueryTerms(query).Select(term => term.Text).Distinct(StringComparer.OrdinalIgnoreCase)];
+            : [.. ExtractSmartQueryTerms(query)
+                .Take(SmartContextMaxQueryTerms)
+                .Select(term => term.Text)
+                .Distinct(StringComparer.OrdinalIgnoreCase)];
 
         if (populateResultsWindow)
         {

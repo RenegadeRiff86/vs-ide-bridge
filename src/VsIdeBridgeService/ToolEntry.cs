@@ -49,4 +49,9 @@ internal sealed class ToolEntry(ToolDefinition definition, Func<JsonNode?, JsonO
     public string Name => Definition.Name;
 
     public string Category => Definition.Category;
+
+    public ToolEntry WithDefinition(ToolDefinition definition)
+    {
+        return new ToolEntry(definition, Handler);
+    }
 }

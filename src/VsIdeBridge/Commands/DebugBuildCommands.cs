@@ -3,6 +3,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Services;
@@ -30,7 +31,7 @@ internal static partial class DebugBuildCommands
     private static CommandExecutionResult CreateStartedResult(string operationLabel, JObject data)
     {
         return new CommandExecutionResult(
-            $"{operationLabel} started. Prompt the model again when it finishes, then read warnings, errors, messages, or diagnostics_snapshot.",
+            $"{operationLabel} started in the background and the bridge is released. Prompt the user to reply when Visual Studio finishes, then read warnings, errors, messages, or diagnostics_snapshot.",
             data);
     }
 
@@ -87,29 +88,70 @@ internal static partial class DebugBuildCommands
             ]);
     }
 
-    private static async Task EnsureCleanDiagnosticsAsync(IdeCommandContext context, CommandArguments args, int timeoutMilliseconds)
+    private static async Task EnsureCleanDiagnosticsAsync(IdeCommandContext context, CommandArguments args, int timeoutMilliseconds, bool quickPreflight = false)
     {
         if (!args.GetBoolean(RequireCleanDiagnosticsArgument, true))
         {
             return;
         }
 
-        JObject diagnostics = await GetDiagnosticsSnapshotAsync(
-            context,
-            args,
-            GetPreflightDiagnosticsTimeout(timeoutMilliseconds),
-            args.GetBoolean(WaitForIntellisenseArgument, true)).ConfigureAwait(true);
+        int preflightTimeout = GetPreflightDiagnosticsTimeout(timeoutMilliseconds);
+        JObject diagnostics = quickPreflight
+            ? await GetDiagnosticsWithFallbackAsync(
+                context,
+                waitForIntellisense: false,
+                preflightTimeout,
+                quickSnapshot: true,
+                query: new ErrorListQuery { Max = args.GetNullableInt32("max") ?? DefaultBlockingDiagnosticsMax }).ConfigureAwait(true)
+            : await GetDiagnosticsSnapshotAsync(
+                context,
+                args,
+                preflightTimeout,
+                args.GetBoolean(WaitForIntellisenseArgument, true)).ConfigureAwait(true);
 
         ThrowIfDiagnosticsPresent(diagnostics, "Build blocked by existing diagnostics", args);
     }
 
     private static async Task<JObject> GetDiagnosticsSnapshotAsync(IdeCommandContext context, CommandArguments args, int timeoutMilliseconds, bool waitForIntellisense)
     {
-        return await context.Runtime.ErrorListService.GetErrorListAsync(
+        return await GetDiagnosticsWithFallbackAsync(
             context,
             waitForIntellisense,
             timeoutMilliseconds,
+            quickSnapshot: true,
             query: new ErrorListQuery { Max = args.GetNullableInt32("max") ?? DefaultBlockingDiagnosticsMax }).ConfigureAwait(true);
+    }
+
+    private static async Task<JObject> GetDiagnosticsWithFallbackAsync(
+        IdeCommandContext context,
+        bool waitForIntellisense,
+        int timeoutMilliseconds,
+        bool quickSnapshot,
+        ErrorListQuery? query = null,
+        bool forceRefresh = false)
+    {
+        try
+        {
+            return await context.Runtime.ErrorListService.GetErrorListAsync(
+                context,
+                waitForIntellisense,
+                timeoutMilliseconds,
+                quickSnapshot,
+                query,
+                includeBuildOutputFallback: true,
+                forceRefresh: forceRefresh).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException) when (!quickSnapshot)
+        {
+            return await context.Runtime.ErrorListService.GetErrorListAsync(
+                context,
+                waitForIntellisense: false,
+                timeoutMilliseconds,
+                quickSnapshot: true,
+                query,
+                includeBuildOutputFallback: true,
+                forceRefresh: false).ConfigureAwait(true);
+        }
     }
 
     private static void ThrowIfDiagnosticsPresent(JObject diagnostics, string summaryPrefix, CommandArguments args, JObject? extraData = null)

@@ -31,8 +31,8 @@ internal static partial class ErrorListPatterns
     private static readonly Regex _suspiciousRoundDownPattern = new(@"\(int\)\s*Math\s*\.\s*(?<op>Floor|Truncate)\s*\(", RegexOptions.Compiled);
     public static Regex SuspiciousRoundDownPattern() { return _suspiciousRoundDownPattern; }
 
-    private static readonly Regex _emptyCatchBlockPattern = new(@"catch\s*(?:\([^)]*\))?\s*\{\s*\}", RegexOptions.Compiled);
-    public static Regex EmptyCatchBlockPattern() { return _emptyCatchBlockPattern; }
+    private static readonly Regex _catchBlockPattern = new(@"catch\s*(?:\([^)]*\))?\s*\{", RegexOptions.Compiled);
+    public static Regex CatchBlockPattern() { return _catchBlockPattern; }
 
     private static readonly Regex _asyncVoidPattern = new(@"\basync\s+void\s+(\w+)", RegexOptions.Compiled);
     public static Regex AsyncVoidPattern() { return _asyncVoidPattern; }
@@ -87,10 +87,25 @@ internal static partial class ErrorListPatterns
     private static readonly Regex _broadCatchPattern = new(@"catch\s*\(\s*(?:System\.)?Exception(?:\s+[A-Za-z_][A-Za-z0-9_]*)?\s*\)(?!\s*when\b)", RegexOptions.Compiled);
     public static Regex BroadCatchPattern() { return _broadCatchPattern; }
 
-    private static readonly Regex _pragmaWarningDisablePattern = new(@"^[ \t]*#pragma\s+warning\s+disable\b.*$", RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
+    private static readonly Regex _pragmaWarningDisablePattern = new(@"^[ \t]*#pragma\s+warning(?:\s+disable\b.*|\s*\(\s*disable\s*:\s*[^)]*\))$", RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.IgnoreCase);
     public static Regex PragmaWarningDisablePattern() { return _pragmaWarningDisablePattern; }
 
-    private static readonly Regex _todoCommentPattern = new(@"(?im)^[ \t]*(?://+|#|'+|/\*+|\*+|\(\*)\s*TODO\b(?<text>.*)$", RegexOptions.Compiled);
+    private static readonly Regex _editorConfigDiagnosticSuppressionPattern = new(@"(?im)^[ \t]*dotnet_diagnostic\.(?<code>[A-Za-z0-9_.-]+)\.severity\s*=\s*(?<severity>none|silent)\b.*$", RegexOptions.Compiled);
+    public static Regex EditorConfigDiagnosticSuppressionPattern() { return _editorConfigDiagnosticSuppressionPattern; }
+
+    private static readonly Regex _noWarnElementPattern = new(@"(?im)<NoWarn>\s*(?<codes>[^<]+?)\s*</NoWarn>", RegexOptions.Compiled);
+    public static Regex NoWarnElementPattern() { return _noWarnElementPattern; }
+
+    private static readonly Regex _noWarnAttributePattern = new(@"(?im)\bNoWarn\s*=\s*""(?<codes>[^""]+?)""", RegexOptions.Compiled);
+    public static Regex NoWarnAttributePattern() { return _noWarnAttributePattern; }
+
+    private static readonly Regex _suppressMessagePattern = new(@"(?is)\[\s*(?:assembly\s*:\s*)?SuppressMessage\s*\((?<args>.*?)\)\s*\]", RegexOptions.Compiled);
+    public static Regex SuppressMessagePattern() { return _suppressMessagePattern; }
+
+    private static readonly Regex _ruleSetSuppressionPattern = new(@"(?im)<Rule\b[^>]*\bId\s*=\s*""(?<code>[^""]+)""[^>]*\bAction\s*=\s*""(?<action>None|Hidden)""[^>]*/?>", RegexOptions.Compiled);
+    public static Regex RuleSetSuppressionPattern() { return _ruleSetSuppressionPattern; }
+
+    private static readonly Regex _todoCommentPattern = new(@"(?im)^[ \t]*(?://+|#|'+|/\*+|\*+|\(\*)\s*(?<marker>TODO|FIXME|XXX|HACK|TBD|BUGBUG)\b(?<text>.*)$", RegexOptions.Compiled);
     public static Regex TodoCommentPattern() { return _todoCommentPattern; }
 
     private static readonly Regex _frameworkTypePattern = new(@"\bSystem\.(?<type>String|Int16|Int32|Int64|UInt16|UInt32|UInt64|Boolean|Object|Decimal|Double|Single|Byte|SByte|Char)\b", RegexOptions.Compiled);

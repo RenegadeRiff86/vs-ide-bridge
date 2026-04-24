@@ -12,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Diagnostics;
@@ -62,29 +63,51 @@ internal sealed partial class ErrorListService
 {
     private sealed class ErrorTableCollector : ITableDataSink, IDisposable
     {
+        private readonly object _gate = new();
         private readonly List<ITableEntry> _entries = [];
         private readonly List<ITableEntriesSnapshot> _snapshots = [];
         private readonly List<ITableEntriesSnapshotFactory> _factories = [];
+        private DateTimeOffset _lastMutationUtc = DateTimeOffset.UtcNow;
+        private TaskCompletionSource<bool> _changeSignal = CreateChangeSignal();
+
+        public bool HasData
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _entries.Count > 0 || _snapshots.Count > 0 || _factories.Count > 0;
+                }
+            }
+        }
 
         public bool IsStable { get; set; } = true;
 
-        public bool HasData => _entries.Count > 0 || _snapshots.Count > 0 || _factories.Count > 0;
-
         public IReadOnlyList<JObject> GetRows()
         {
+            List<ITableEntry> entries;
+            List<ITableEntriesSnapshot> snapshots;
+            List<ITableEntriesSnapshotFactory> factories;
+            lock (_gate)
+            {
+                entries = [.. _entries];
+                snapshots = [.. _snapshots];
+                factories = [.. _factories];
+            }
+
             List<JObject> rows = [];
 
-            foreach (ITableEntry entry in _entries)
+            foreach (ITableEntry entry in entries)
             {
                 rows.Add(CreateRowFromTableEntry(entry));
             }
 
-            foreach (ITableEntriesSnapshot snapshot in _snapshots)
+            foreach (ITableEntriesSnapshot snapshot in snapshots)
             {
                 AddSnapshotRows(rows, snapshot);
             }
 
-            foreach (ITableEntriesSnapshotFactory factory in _factories)
+            foreach (ITableEntriesSnapshotFactory factory in factories)
             {
                 AddSnapshotRows(rows, factory.GetCurrentSnapshot());
             }
@@ -94,22 +117,67 @@ internal sealed partial class ErrorListService
                 .Select(SelectPreferredDiagnosticRow)];
         }
 
+        public async Task WaitForStabilityAsync(TimeSpan quietPeriod, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                Task changeTask;
+                TimeSpan remainingQuiet;
+                lock (_gate)
+                {
+                    remainingQuiet = quietPeriod - (DateTimeOffset.UtcNow - _lastMutationUtc);
+                    if (remainingQuiet <= TimeSpan.Zero)
+                    {
+                        return;
+                    }
+
+                    changeTask = _changeSignal.Task;
+                }
+
+                TimeSpan remainingTimeout = deadline - DateTimeOffset.UtcNow;
+                if (remainingTimeout <= TimeSpan.Zero)
+                {
+                    return;
+                }
+
+                TimeSpan waitDuration = remainingQuiet < remainingTimeout ? remainingQuiet : remainingTimeout;
+                Task completed = await Task.WhenAny(changeTask, Task.Delay(waitDuration, cancellationToken)).ConfigureAwait(false);
+                if (completed != changeTask)
+                {
+                    return;
+                }
+            }
+        }
+
         public void AddEntries(IReadOnlyList<ITableEntry> newEntries, bool removeAllEntries)
         {
-            if (removeAllEntries)
+            lock (_gate)
             {
-                _entries.Clear();
+                if (removeAllEntries)
+                {
+                    _entries.Clear();
+                }
+
+                _entries.AddRange(newEntries);
             }
 
-            _entries.AddRange(newEntries);
+            RecordMutation();
         }
 
         public void RemoveEntries(IReadOnlyList<ITableEntry> oldEntries)
         {
-            foreach (ITableEntry entry in oldEntries)
+            lock (_gate)
             {
-                _entries.Remove(entry);
+                foreach (ITableEntry entry in oldEntries)
+                {
+                    _entries.Remove(entry);
+                }
             }
+
+            RecordMutation();
         }
 
         public void ReplaceEntries(IReadOnlyList<ITableEntry> oldEntries, IReadOnlyList<ITableEntry> newEntries)
@@ -120,22 +188,37 @@ internal sealed partial class ErrorListService
 
         public void RemoveAllEntries()
         {
-            _entries.Clear();
+            lock (_gate)
+            {
+                _entries.Clear();
+            }
+
+            RecordMutation();
         }
 
         public void AddSnapshot(ITableEntriesSnapshot newSnapshot, bool removeAllSnapshots)
         {
-            if (removeAllSnapshots)
+            lock (_gate)
             {
-                _snapshots.Clear();
+                if (removeAllSnapshots)
+                {
+                    _snapshots.Clear();
+                }
+
+                _snapshots.Add(newSnapshot);
             }
 
-            _snapshots.Add(newSnapshot);
+            RecordMutation();
         }
 
         public void RemoveSnapshot(ITableEntriesSnapshot oldSnapshot)
         {
-            _snapshots.Remove(oldSnapshot);
+            lock (_gate)
+            {
+                _snapshots.Remove(oldSnapshot);
+            }
+
+            RecordMutation();
         }
 
         public void ReplaceSnapshot(ITableEntriesSnapshot oldSnapshot, ITableEntriesSnapshot newSnapshot)
@@ -146,17 +229,27 @@ internal sealed partial class ErrorListService
 
         public void AddFactory(ITableEntriesSnapshotFactory newFactory, bool removeAllFactories)
         {
-            if (removeAllFactories)
+            lock (_gate)
             {
-                _factories.Clear();
+                if (removeAllFactories)
+                {
+                    _factories.Clear();
+                }
+
+                _factories.Add(newFactory);
             }
 
-            _factories.Add(newFactory);
+            RecordMutation();
         }
 
         public void RemoveFactory(ITableEntriesSnapshotFactory oldFactory)
         {
-            _factories.Remove(oldFactory);
+            lock (_gate)
+            {
+                _factories.Remove(oldFactory);
+            }
+
+            RecordMutation();
         }
 
         public void ReplaceFactory(ITableEntriesSnapshotFactory oldFactory, ITableEntriesSnapshotFactory newFactory)
@@ -167,16 +260,30 @@ internal sealed partial class ErrorListService
 
         public void FactorySnapshotChanged(ITableEntriesSnapshotFactory? factory)
         {
+            if (factory is not null)
+            {
+                RecordMutation();
+            }
         }
 
         public void RemoveAllFactories()
         {
-            _factories.Clear();
+            lock (_gate)
+            {
+                _factories.Clear();
+            }
+
+            RecordMutation();
         }
 
         public void RemoveAllSnapshots()
         {
-            _snapshots.Clear();
+            lock (_gate)
+            {
+                _snapshots.Clear();
+            }
+
+            RecordMutation();
         }
 
         public void Dispose()
@@ -189,6 +296,24 @@ internal sealed partial class ErrorListService
             {
                 rows.Add(CreateRowFromTableSnapshot(snapshot, index));
             }
+        }
+
+        private static TaskCompletionSource<bool> CreateChangeSignal()
+        {
+            return new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        private void RecordMutation()
+        {
+            TaskCompletionSource<bool> signal;
+            lock (_gate)
+            {
+                _lastMutationUtc = DateTimeOffset.UtcNow;
+                signal = _changeSignal;
+                _changeSignal = CreateChangeSignal();
+            }
+
+            signal.TrySetResult(true);
         }
     }
 

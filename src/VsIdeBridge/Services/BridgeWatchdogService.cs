@@ -147,6 +147,16 @@ internal sealed class BridgeWatchdogService(AsyncPackage package, int probeInter
                 ["probeStalled"] = probeStalled,
                 ["probeStalledForMs"] = Math.Round(probeStalledForMs, 1),
                 ["lastProbeError"] = _probe.Health.LastError,
+                ["lastProbeTimeoutCommand"] = _probe.Health.LastProbeTimeoutCommand.DetectedAtUtc is null
+                    ? JValue.CreateNull()
+                    : new JObject
+                    {
+                        ["name"] = _probe.Health.LastProbeTimeoutCommand.Name,
+                        ["requestId"] = _probe.Health.LastProbeTimeoutCommand.RequestId,
+                        ["startedAtUtc"] = ToNullableTimestamp(_probe.Health.LastProbeTimeoutCommand.StartedAtUtc),
+                        ["detectedAtUtc"] = ToNullableTimestamp(_probe.Health.LastProbeTimeoutCommand.DetectedAtUtc),
+                        ["elapsedMs"] = Math.Round(_probe.Health.LastProbeTimeoutCommand.ElapsedMs, 1),
+                    },
                 ["activeCommand"] = _command.Active.StartedAtUtc is null
                     ? JValue.CreateNull()
                     : new JObject
@@ -326,9 +336,20 @@ internal sealed class BridgeWatchdogService(AsyncPackage package, int probeInter
         DateTimeOffset now = DateTimeOffset.UtcNow;
         lock (_sync)
         {
+            double activeCommandElapsedMs = _command.Active.StartedAtUtc is null
+                ? 0.0
+                : Math.Max(0, (now - _command.Active.StartedAtUtc.Value).TotalMilliseconds);
             _probe.Metrics.TotalTimeouts++;
             _probe.Health.ConsecutiveUnhealthyProbes++;
-            _probe.Health.LastError = $"UI responsiveness probe exceeded {_probeTimeoutMilliseconds} ms (elapsed={Math.Round(elapsedMs, 1)} ms).";
+            _probe.Health.LastProbeTimeoutCommand.Name = _command.Active.Name;
+            _probe.Health.LastProbeTimeoutCommand.RequestId = _command.Active.RequestId;
+            _probe.Health.LastProbeTimeoutCommand.StartedAtUtc = _command.Active.StartedAtUtc;
+            _probe.Health.LastProbeTimeoutCommand.DetectedAtUtc = now;
+            _probe.Health.LastProbeTimeoutCommand.ElapsedMs = activeCommandElapsedMs;
+            string activeCommandName = string.IsNullOrWhiteSpace(_command.Active.Name)
+                ? "<unknown>"
+                : _command.Active.Name;
+            _probe.Health.LastError = $"UI responsiveness probe exceeded {_probeTimeoutMilliseconds} ms (elapsed={Math.Round(elapsedMs, 1)} ms, activeCommand={activeCommandName}).";
             if (!_probe.Health.IsDegraded)
             {
                 _probe.Health.DegradedSinceUtc = now;

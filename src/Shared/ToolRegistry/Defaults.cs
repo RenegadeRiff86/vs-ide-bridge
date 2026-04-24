@@ -5,6 +5,7 @@ public sealed partial class ToolRegistry
     private static readonly string[] DefaultRecommendedNavigationToolNames =
     [
         "find_files",
+        "glob",
         "search_symbols",
         "call_hierarchy",
         "read_file",
@@ -57,6 +58,7 @@ public sealed partial class ToolRegistry
     public static IReadOnlyList<string> FeaturedToolNames { get; } =
     [
         "find_files",
+        "glob",
         "find_text",
         "find_text_batch",
         "search_symbols",

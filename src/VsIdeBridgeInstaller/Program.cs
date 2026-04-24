@@ -74,8 +74,6 @@ internal static class Program
         int idleSoftSeconds = GetIntOption(options, "idle-soft-seconds", InstallerDefaults.DefaultIdleSoftSeconds);
         int idleHardSeconds = GetIntOption(options, "idle-hard-seconds", InstallerDefaults.DefaultIdleHardSeconds);
 
-        string cliSource = GetPathOption(options, "cli-source")
-            ?? Path.Combine(repoRoot, "src", "VsIdeBridgeService", "bin", configuration, "cli", "net8.0");
         string serviceSource = GetPathOption(options, "service-source")
             ?? Path.Combine(repoRoot, "src", "VsIdeBridgeService", "bin", configuration, "net8.0-windows");
         string launcherSource = GetPathOption(options, "launcher-source")
@@ -86,16 +84,7 @@ internal static class Program
         bool skipVsix = HasFlag(options, "skip-vsix");
         bool skipService = HasFlag(options, "skip-service");
 
-        if (!Directory.Exists(cliSource))
-        {
-            return Fail($"CLI source directory not found: {cliSource}");
-        }
-
         Directory.CreateDirectory(installDir);
-
-        string cliDest = Path.Combine(installDir, InstallerDefaults.CliDirectoryName);
-        CopyDirectory(cliSource, cliDest);
-        Console.WriteLine($"Installed CLI files -> {cliDest}");
 
         if (!skipService)
         {
@@ -110,6 +99,13 @@ internal static class Program
             }
 
             string serviceDest = Path.Combine(installDir, InstallerDefaults.ServiceDirectoryName);
+            string legacyCliDest = Path.Combine(installDir, "cli");
+            if (Directory.Exists(legacyCliDest))
+            {
+                Directory.Delete(legacyCliDest, recursive: true);
+                Console.WriteLine($"Removed legacy CLI directory -> {legacyCliDest}");
+            }
+
             CopyDirectory(serviceSource, serviceDest);
             CopyDirectory(launcherSource, serviceDest);
             string installedServiceExe = Path.Combine(serviceDest, InstallerDefaults.ServiceExecutableName);
@@ -389,7 +385,6 @@ internal static class Program
         Console.WriteLine($"  --configuration <cfg>      Build config (default: {InstallerDefaults.DefaultConfiguration})");
         Console.WriteLine($"  --install-dir <path>       Install root (default: {InstallerDefaults.DefaultInstallDir})");
         Console.WriteLine("  --repo-root <path>         Repo root override");
-        Console.WriteLine("  --cli-source <path>        CLI source folder override");
         Console.WriteLine("  --service-source <path>    Service source folder override");
         Console.WriteLine($"  --service-name <name>      Service name (default: {InstallerDefaults.ServiceName})");
         Console.WriteLine($"  --idle-soft-seconds <n>    Idle drain start (default: {InstallerDefaults.DefaultIdleSoftSeconds})");

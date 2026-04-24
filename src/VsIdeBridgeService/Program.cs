@@ -71,9 +71,9 @@ internal static class Program
                 {
                     EventLog.WriteEntry("Application", $"VsIdeBridgeService failed to start: {ex}", EventLogEntryType.Error);
                 }
-                catch
+                catch (Exception eventLogEx)
                 {
-                    // best effort event logging
+                    BootstrapLog($"event log write failed: {eventLogEx}");
                 }
             }
 
@@ -88,9 +88,9 @@ internal static class Program
             string logPath = Path.Combine(Path.GetTempPath(), "VsIdeBridgeService-bootstrap.log");
             File.AppendAllText(logPath, $"{DateTime.Now:O} {message}{Environment.NewLine}");
         }
-        catch
+        catch (Exception ex)
         {
-            // best effort logging
+            McpServerLog.WriteException("bootstrap log write failed", ex);
         }
     }
 }
@@ -183,9 +183,9 @@ internal sealed class BridgeService : ServiceBase
         {
             AddPipeAccessRule(security, new SecurityIdentifier(sidValue), rights);
         }
-        catch
+        catch (ArgumentException ex)
         {
-            // Older Windows builds can reject some well-known SIDs. Fall back gracefully.
+            McpServerLog.WriteException($"failed to add pipe access rule for SID '{sidValue}'", ex);
         }
     }
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
@@ -375,9 +375,17 @@ internal sealed class BridgeService : ServiceBase
         {
             File.AppendAllText(_logPath, $"{DateTime.Now:O} {message}{Environment.NewLine}");
         }
-        catch
+        catch (IOException ex)
         {
-            // best effort logging
+            Debug.WriteLine($"BridgeService.Log failed: {ex}");
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Debug.WriteLine($"BridgeService.Log failed: {ex}");
+        }
+        catch (NotSupportedException ex)
+        {
+            Debug.WriteLine($"BridgeService.Log failed: {ex}");
         }
     }
 
@@ -431,9 +439,17 @@ internal sealed class BridgeService : ServiceBase
                 Directory.CreateDirectory(directory);
                 return Path.Combine(directory, "service.log");
             }
-            catch
+            catch (IOException ex)
             {
-                // try next location
+                System.Diagnostics.Debug.WriteLine($"BridgeService.ResolveLogPath failed for '{directory}': {ex}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"BridgeService.ResolveLogPath failed for '{directory}': {ex}");
+            }
+            catch (NotSupportedException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"BridgeService.ResolveLogPath failed for '{directory}': {ex}");
             }
         }
 

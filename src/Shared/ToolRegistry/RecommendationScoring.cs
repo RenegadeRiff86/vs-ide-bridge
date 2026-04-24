@@ -101,6 +101,31 @@ public sealed partial class ToolRegistry
             reason = ChooseReason(reason, "System category matches tool-discovery task");
         }
 
+        if (profile.LooksLikePythonTask && string.Equals(tool.Category, "python", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 35;
+            reason = ChooseReason(reason, "Python category matches python task");
+        }
+
+        if (profile.LooksLikeGitTask && string.Equals(tool.Category, "git", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 35;
+            reason = ChooseReason(reason, "Git category matches version control task");
+        }
+
+        if (profile.LooksLikeNuGetTask && string.Equals(tool.Category, "project", StringComparison.OrdinalIgnoreCase)
+            && tool.Name.StartsWith("nuget_", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 50;
+            reason = ChooseReason(reason, "NuGet tool matches package-management task");
+        }
+
+        if (profile.LooksLikeDebugTask && string.Equals(tool.Category, "debug", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 35;
+            reason = ChooseReason(reason, "Debug category matches debugger task");
+        }
+
         return score;
     }
 

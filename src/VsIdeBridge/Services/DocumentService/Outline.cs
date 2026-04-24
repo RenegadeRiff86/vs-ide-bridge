@@ -4,13 +4,31 @@ using Microsoft.VisualStudio.Shell;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace VsIdeBridge.Services;
 
 internal sealed partial class DocumentService
 {
+    private const int MaxSemanticOutlineSymbols = 500;
+    private static readonly HashSet<string> s_textOutlineExtensions =
+    [
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".h",
+        ".hh",
+        ".hpp",
+        ".hxx",
+        ".ipp",
+        ".inl",
+        ".ixx",
+    ];
+
     private static readonly HashSet<vsCMElement> s_outlineKinds =
     [
         vsCMElement.vsCMElementFunction,
@@ -48,6 +66,12 @@ internal sealed partial class DocumentService
 
         string resolvedPath = ResolveDocumentPath(dte, filePath);
 
+        if (ShouldUseTextOutlineFallback(resolvedPath))
+        {
+            JArray textSymbols = BuildTextOutlineFallback(resolvedPath, maxDepth, kindFilter);
+            return (resolvedPath, textSymbols, textSymbols.Count, "Returned a text outline fallback for a C/C++ file to avoid blocking the Visual Studio code model.");
+        }
+
         ProjectItem? projectItem = null;
         try { projectItem = dte.Solution.FindProjectItem(resolvedPath); } catch (COMException ex) { System.Diagnostics.Debug.WriteLine(ex); }
 
@@ -55,6 +79,15 @@ internal sealed partial class DocumentService
         string? note = projectItem is null
             ? "File is not part of any project or code model is unavailable."
             : TryCollectFileCodeElements(projectItem, symbols, maxDepth, kindFilter);
+
+        if (symbols.Count == 0 && File.Exists(resolvedPath))
+        {
+            JArray fallbackSymbols = BuildTextOutlineFallback(resolvedPath, maxDepth, kindFilter);
+            if (fallbackSymbols.Count > 0)
+            {
+                return (resolvedPath, fallbackSymbols, fallbackSymbols.Count, $"{note ?? "Code model unavailable."} Returned a text outline fallback instead.");
+            }
+        }
 
         int count = symbols.Count;
         await Task.Yield();
@@ -68,17 +101,12 @@ internal sealed partial class DocumentService
         try
         {
             FileCodeModel? codeModel = projectItem.FileCodeModel;
-            if (codeModel?.CodeElements is not null)
+            if (codeModel?.CodeElements is null)
             {
-                foreach (CodeElement element in codeModel.CodeElements)
-                {
-                    try { CollectOutlineSymbols(element, symbols, 0, maxDepth, kindFilter); } catch (COMException ex) { System.Diagnostics.Debug.WriteLine(ex); }
-                }
-
-                return null;
+                return "No code model available for this file type.";
             }
 
-            return "No code model available for this file type.";
+            return TryCollectOutlineFromCodeElements(codeModel.CodeElements, symbols, maxDepth, kindFilter);
         }
         catch (COMException ex)
         {
@@ -86,13 +114,44 @@ internal sealed partial class DocumentService
         }
     }
 
-    private static void CollectOutlineSymbols(CodeElement element, JArray symbols, int depth, int maxDepth, string? kindFilter = null)
+    private static string? TryCollectOutlineFromCodeElements(CodeElements codeElements, JArray symbols, int maxDepth, string? kindFilter)
     {
         ThreadHelper.ThrowIfNotOnUIThread();
-        if (depth > maxDepth) return;
+
+        int symbolCount = 0;
+        foreach (CodeElement element in codeElements)
+        {
+            if (TryCollectOutlineFromCodeElement(element, symbols, maxDepth, kindFilter, ref symbolCount))
+            {
+                return $"Outline truncated after {MaxSemanticOutlineSymbols} symbols to keep Visual Studio responsive.";
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryCollectOutlineFromCodeElement(CodeElement element, JArray symbols, int maxDepth, string? kindFilter, ref int symbolCount)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        try
+        {
+            return CollectOutlineSymbols(element, symbols, 0, maxDepth, kindFilter, ref symbolCount);
+        }
+        catch (COMException ex)
+        {
+            System.Diagnostics.Debug.WriteLine(ex);
+            return false;
+        }
+    }
+
+    private static bool CollectOutlineSymbols(CodeElement element, JArray symbols, int depth, int maxDepth, string? kindFilter, ref int symbolCount)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+        if (depth > maxDepth || symbolCount >= MaxSemanticOutlineSymbols) return symbolCount >= MaxSemanticOutlineSymbols;
 
         vsCMElement kind;
-        try { kind = element.Kind; } catch (COMException ex) { System.Diagnostics.Debug.WriteLine(ex); return; }
+        try { kind = element.Kind; } catch (COMException ex) { System.Diagnostics.Debug.WriteLine(ex); return false; }
 
         string name = string.Empty;
         int startLine = 0, endLine = 0;
@@ -114,6 +173,11 @@ internal sealed partial class DocumentService
                     ["endLine"] = endLine,
                     ["depth"] = depth,
                 });
+                symbolCount++;
+                if (symbolCount >= MaxSemanticOutlineSymbols)
+                {
+                    return true;
+                }
             }
         }
 
@@ -127,11 +191,174 @@ internal sealed partial class DocumentService
         }
         catch (COMException ex) { System.Diagnostics.Debug.WriteLine(ex); }
 
-        if (children is null) return;
+        if (children is null) return false;
         foreach (CodeElement child in children)
         {
-            try { CollectOutlineSymbols(child, symbols, depth + 1, maxDepth, kindFilter); } catch (COMException ex) { System.Diagnostics.Debug.WriteLine(ex); }
+            try
+            {
+                if (CollectOutlineSymbols(child, symbols, depth + 1, maxDepth, kindFilter, ref symbolCount))
+                {
+                    return true;
+                }
+            }
+            catch (COMException ex)
+            {
+                System.Diagnostics.Debug.WriteLine(ex);
+            }
         }
+
+        return false;
+    }
+
+    private static bool ShouldUseTextOutlineFallback(string resolvedPath)
+    {
+        string extension = Path.GetExtension(resolvedPath);
+        return s_textOutlineExtensions.Contains(extension);
+    }
+
+    private static JArray BuildTextOutlineFallback(string resolvedPath, int maxDepth, string? kindFilter)
+    {
+        JArray symbols = [];
+        if (!File.Exists(resolvedPath))
+        {
+            return symbols;
+        }
+
+        string[] lines = File.ReadAllLines(resolvedPath);
+        int braceDepth = 0;
+        for (int index = 0; index < lines.Length; index++)
+        {
+            string line = lines[index];
+            string trimmed = line.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("//", StringComparison.Ordinal) || trimmed.StartsWith("#", StringComparison.Ordinal))
+            {
+                braceDepth += CountBraces(line);
+                continue;
+            }
+
+            int symbolDepth = Math.Max(0, braceDepth);
+            if (TryParseTextOutlineSymbol(trimmed, index + 1, symbolDepth, kindFilter) is JObject symbol && symbolDepth <= maxDepth)
+            {
+                symbols.Add(symbol);
+            }
+
+            braceDepth += CountBraces(line);
+        }
+
+        return symbols;
+    }
+
+    private static JObject? TryParseTextOutlineSymbol(string trimmedLine, int lineNumber, int depth, string? kindFilter)
+    {
+        string? keywordKind = TryMatchKeywordKind(trimmedLine, out string? name);
+        if (keywordKind is not null && MatchesOutlineKind(keywordKind, kindFilter))
+        {
+            return CreateTextOutlineSymbol(name ?? string.Empty, keywordKind, lineNumber, depth);
+        }
+
+        if (LooksLikeTextFunction(trimmedLine, out string? functionName) && MatchesOutlineKind("function", kindFilter))
+        {
+            return CreateTextOutlineSymbol(functionName ?? string.Empty, "function", lineNumber, depth);
+        }
+
+        return null;
+    }
+
+    private static JObject CreateTextOutlineSymbol(string name, string kind, int lineNumber, int depth)
+    {
+        return new JObject
+        {
+            ["name"] = name,
+            ["kind"] = kind,
+            ["startLine"] = lineNumber,
+            ["endLine"] = lineNumber,
+            ["depth"] = depth,
+        };
+    }
+
+    private static string? TryMatchKeywordKind(string trimmedLine, out string? name)
+    {
+        name = null;
+        string[] keywords = ["enum class", "namespace", "class", "struct", "enum"];
+        foreach (string keyword in keywords)
+        {
+            if (!trimmedLine.StartsWith(keyword + " ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string remainder = trimmedLine.Substring(keyword.Length).Trim();
+            if (string.IsNullOrWhiteSpace(remainder))
+            {
+                continue;
+            }
+
+            int delimiter = remainder.IndexOfAny([' ', ':', '{']);
+            name = delimiter >= 0 ? remainder.Substring(0, delimiter) : remainder;
+            return keyword.StartsWith("enum", StringComparison.Ordinal) ? "enum" : keyword;
+        }
+
+        return null;
+    }
+
+    private static bool LooksLikeTextFunction(string trimmedLine, out string? functionName)
+    {
+        functionName = null;
+        int openParen = trimmedLine.IndexOf('(');
+        int closeParen = trimmedLine.LastIndexOf(')');
+        if (openParen <= 0 || closeParen <= openParen)
+        {
+            return false;
+        }
+
+        string beforeParen = trimmedLine.Substring(0, openParen).TrimEnd();
+        if (beforeParen.Length == 0)
+        {
+            return false;
+        }
+
+        string candidate = ExtractTrailingQualifiedName(beforeParen);
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        int qualifierIndex = candidate.LastIndexOf("::", StringComparison.Ordinal);
+        string bareName = qualifierIndex >= 0
+            ? candidate.Substring(qualifierIndex + 2)
+            : candidate;
+
+        if (bareName is "if" or "for" or "while" or "switch" or "catch")
+        {
+            return false;
+        }
+
+        functionName = candidate;
+        return true;
+    }
+
+    private static string ExtractTrailingQualifiedName(string text)
+    {
+        Match match = Regex.Match(text, @"(?<name>[~A-Za-z_][A-Za-z0-9_:~]*)\s*$");
+        return match.Success ? match.Groups["name"].Value : string.Empty;
+    }
+
+    private static int CountBraces(string line)
+    {
+        int count = 0;
+        foreach (char character in line)
+        {
+            if (character == '{')
+            {
+                count++;
+            }
+            else if (character == '}')
+            {
+                count--;
+            }
+        }
+
+        return count;
     }
 
     private static string NormalizeOutlineKind(vsCMElement kind)

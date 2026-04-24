@@ -1,5 +1,6 @@
 using System.Text;
 using System.IO;
+using System.Linq;
 using System.Text.Json.Nodes;
 using static VsIdeBridgeService.ArgBuilder;
 using static VsIdeBridgeService.SchemaHelpers;
@@ -18,6 +19,49 @@ internal static partial class ToolCatalog
     private static string EncodeUtf8ToBase64(string? text)
     {
         return Convert.ToBase64String(Encoding.UTF8.GetBytes(text ?? string.Empty));
+    }
+
+    /// <summary>
+    /// Resolves a relative path to an existing file by searching upward from
+    /// <paramref name="solutionDir"/>. When multiple candidates exist (e.g., both
+    /// <c>src/foo.cpp</c> and <c>build/src/foo.cpp</c>), source-tree paths are
+    /// preferred over build-artifact paths, matching the DocumentService behavior.
+    /// Falls back to <c>Path.Combine(solutionDir, fileArg)</c> when no candidate exists.
+    /// </summary>
+    private static string ResolveExistingFilePath(string fileArg, string solutionDir)
+    {
+        if (System.IO.Path.IsPathRooted(fileArg))
+            return fileArg;
+
+        string normalizedArg = fileArg.Replace('/', System.IO.Path.DirectorySeparatorChar);
+        List<string> candidates = [];
+        string current = solutionDir;
+        for (int depth = 0; depth < 6 && !string.IsNullOrWhiteSpace(current); depth++)
+        {
+            string candidate = System.IO.Path.Combine(current, normalizedArg);
+            if (File.Exists(candidate))
+                candidates.Add(candidate);
+            string? parent = System.IO.Path.GetDirectoryName(current);
+            if (string.IsNullOrWhiteSpace(parent) || string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+                break;
+            current = parent;
+        }
+
+        if (candidates.Count == 0)
+            return System.IO.Path.Combine(solutionDir, normalizedArg);
+
+        return candidates
+            .OrderByDescending(p => ContainsPathSegment(p, "src"))
+            .ThenBy(p => ContainsPathSegment(p, "build") || ContainsPathSegment(p, "bin") || ContainsPathSegment(p, "obj"))
+            .ThenBy(p => p.Length)
+            .First();
+    }
+
+    private static bool ContainsPathSegment(string path, string segment)
+    {
+        string sep = System.IO.Path.DirectorySeparatorChar.ToString();
+        string norm = path.Replace('/', System.IO.Path.DirectorySeparatorChar);
+        return norm.Contains(sep + segment + sep, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildApplyDiffArgs(JsonObject? args)
@@ -85,11 +129,11 @@ internal static partial class ToolCatalog
             ToolDefinitionCatalog.WriteFile(
                 ObjectSchema(
                     Req(FileArg, FileDesc),
-                    Req("content", "Full UTF-8 text content to write."),
+                    Req("content", "Full UTF-8 text content to write. This replaces the entire file; omitted text is removed."),
                     OptBool(PostCheck, "Queue a quick diagnostics refresh after writing (default false).")))
                 .WithSearchHints(BuildSearchHints(
                     workflow: [("reload_document", "Reload the file so VS picks up the changes"), ("errors", "Check for diagnostics after writing")],
-                    related: [(ApplyDiffTool, "Apply targeted changes instead of overwriting"), (ReadFileTool, "Read the current file contents first")])),
+                    related: [(ApplyDiffTool, "Apply targeted changes instead of replacing the whole file"), (ReadFileTool, "Read the current file contents first")])),
             async (id, args, bridge) =>
             {
                 JsonObject result = await bridge.SendAsync(id, "write-file", BuildWriteFileArgs(args))
@@ -232,7 +276,7 @@ internal static partial class ToolCatalog
             searchHints: BuildSearchHints(
                 related: [("format_document", "Format a document"), ("shell_exec", "Run an external process")]));
 
-        yield return BridgeTool("format_document",
+        yield return BridgeWrapperTool("format_document",
             "Format the current document or a specific FileArg.",
             ObjectSchema(
                 Opt(FileArg, FileDesc),
@@ -274,9 +318,7 @@ internal static partial class ToolCatalog
                     throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Missing required argument 'FileArg'.");
 
                 string solutionDir = ServiceToolPaths.ResolveSolutionDirectory(bridge);
-                string resolvedPath = System.IO.Path.IsPathRooted(fileArg)
-                    ? fileArg
-                    : System.IO.Path.Combine(solutionDir, fileArg);
+                string resolvedPath = ResolveExistingFilePath(fileArg, solutionDir);
 
                 // Close in editor first (best-effort)
                 try
@@ -284,17 +326,17 @@ internal static partial class ToolCatalog
                     await bridge.SendAsync(id, "close-file", Build((FileArg, resolvedPath)))
                         .ConfigureAwait(false);
                 }
-                catch (IOException)
+                catch (IOException ex)
                 {
-                    // best-effort: ignore close errors before delete
+                    McpServerLog.WriteException($"failed to close '{resolvedPath}' before delete", ex);
                 }
-                catch (InvalidOperationException)
+                catch (InvalidOperationException ex)
                 {
-                    // best-effort: ignore close errors before delete
+                    McpServerLog.WriteException($"failed to close '{resolvedPath}' before delete", ex);
                 }
-                catch (McpRequestException)
+                catch (McpRequestException ex)
                 {
-                    // best-effort: ignore close errors before delete
+                    McpServerLog.WriteException($"failed to close '{resolvedPath}' before delete", ex);
                 }
 
                 System.IO.File.Delete(resolvedPath);
@@ -328,7 +370,7 @@ internal static partial class ToolCatalog
 
                 bool overwrite = args?["overwrite"]?.GetValue<bool?>() ?? false;
                 string solutionDir = ServiceToolPaths.ResolveSolutionDirectory(bridge);
-                string resolvedSource = System.IO.Path.IsPathRooted(sourceArg) ? sourceArg : System.IO.Path.Combine(solutionDir, sourceArg);
+                string resolvedSource = ResolveExistingFilePath(sourceArg, solutionDir);
                 string resolvedDest = System.IO.Path.IsPathRooted(destArg) ? destArg : System.IO.Path.Combine(solutionDir, destArg);
 
                 string? destDir = System.IO.Path.GetDirectoryName(resolvedDest);
@@ -353,15 +395,13 @@ internal static partial class ToolCatalog
 
     private static IEnumerable<ToolEntry> SolutionSystemTools()
     {
-        yield return BridgeTool("open_solution",
+        yield return new("open_solution",
             "Open a specific existing .sln or .slnx file in the current Visual Studio instance.",
             ObjectSchema(
                 Req("solution", "Absolute path to the .sln or .slnx file."),
                 OptBool("wait_for_ready", "Wait for readiness after opening (default true).")),
-            "open-solution",
-            a => Build(
-                ("solution", OptionalString(a, "solution")),
-                BoolArg("wait-for-ready", a, "wait_for_ready", true, true)),
+            "documents",
+            (id, args, bridge) => OpenSolutionAsync(id, args, bridge),
             searchHints: BuildSearchHints(
                 workflow: [("wait_for_ready", "Wait for IntelliSense to load"), ("list_projects", "Inspect the loaded projects")],
                 related: [("vs_open", "Launch a new VS instance"), ("bind_solution", "Bind to an already-open solution"), ("search_solutions", "Find the solution path")]));
@@ -417,6 +457,62 @@ internal static partial class ToolCatalog
             searchHints: BuildSearchHints(
                 workflow: [("build", "Rebuild after changing the version"), ("errors", "Check for version-related errors")],
                 related: [("shell_exec", "Run custom versioning scripts")]));
+    }
+
+    private static async Task<JsonNode> OpenSolutionAsync(JsonNode? id, JsonObject? args, BridgeConnection bridge)
+    {
+        string solutionPath = System.IO.Path.GetFullPath(OptionalString(args, "solution")
+            ?? throw new McpRequestException(id, McpErrorCodes.InvalidParams, "'solution' is required."));
+
+        if (!File.Exists(solutionPath))
+        {
+            throw new McpRequestException(id, McpErrorCodes.InvalidParams, $"Solution file not found: {solutionPath}");
+        }
+
+        string extension = System.IO.Path.GetExtension(solutionPath);
+        if (!string.Equals(extension, ".sln", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(extension, ".slnx", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new McpRequestException(id, McpErrorCodes.InvalidParams, $"File is not a solution file: {solutionPath}");
+        }
+
+        IReadOnlyList<BridgeInstance> instances = await VsDiscovery.ListAsync(bridge.Mode).ConfigureAwait(false);
+        BridgeInstance[] matchingInstances = [.. instances.Where(instance =>
+            !string.IsNullOrWhiteSpace(instance.SolutionPath)
+            && string.Equals(System.IO.Path.GetFullPath(instance.SolutionPath), solutionPath, StringComparison.OrdinalIgnoreCase))];
+
+        if (matchingInstances.Length == 1)
+        {
+            JsonObject bindResult = await bridge.BindAsync(id, new JsonObject { ["instance_id"] = matchingInstances[0].InstanceId }).ConfigureAwait(false);
+            bindResult["alreadyOpen"] = true;
+            bindResult["solutionPath"] = solutionPath;
+
+            if (OptionalBool(args, "wait_for_ready", true))
+            {
+                JsonObject ready = await bridge.SendAsync(id, "ready", []).ConfigureAwait(false);
+                bindResult["ready"] = ready["Data"]?.DeepClone();
+            }
+
+            return ToolResultFormatter.StructuredToolResult(bindResult, args, successText: "Bound to already-open solution.");
+        }
+
+        if (matchingInstances.Length > 1)
+        {
+            throw new McpRequestException(id, McpErrorCodes.BridgeError,
+                $"Multiple live VS IDE Bridge instances already have '{solutionPath}' open. Call bind_instance with a specific instance_id.");
+        }
+
+        if (bridge.CurrentInstance is null)
+        {
+            throw new McpRequestException(id, McpErrorCodes.BridgeError,
+                "No live bound VS IDE Bridge instance is available to open the solution. Open Visual Studio with the VS IDE Bridge extension installed, then call bind_solution or bind_instance first.");
+        }
+
+        string openArgs = Build(
+            ("solution", solutionPath),
+            BoolArg("wait-for-ready", args, "wait_for_ready", true, true));
+        JsonObject response = await bridge.SendIgnoringSolutionHintAsync(id, "open-solution", openArgs).ConfigureAwait(false);
+        return BridgeResult(response);
     }
 
     private static JsonObject RunDocumentPostCheck(BridgeConnection bridge, string sourceTool)

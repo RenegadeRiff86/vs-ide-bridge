@@ -17,6 +17,7 @@ internal sealed class BridgeWatchdogProbeHealthState
     public DateTimeOffset? LastHealthyAtUtc;
     public DateTimeOffset? DegradedSinceUtc;
     public DateTimeOffset? LastTimeoutCommandAtUtc;
+    public BridgeWatchdogProbeTimeoutCommandState LastProbeTimeoutCommand = new();
     public bool IsDegraded;
     public string DegradedReason = string.Empty;
     public string LastError = string.Empty;
@@ -44,6 +45,15 @@ internal sealed class BridgeWatchdogActiveCommandState
     public string Name = string.Empty;
     public string RequestId = string.Empty;
     public DateTimeOffset? StartedAtUtc;
+}
+
+internal sealed class BridgeWatchdogProbeTimeoutCommandState
+{
+    public string Name = string.Empty;
+    public string RequestId = string.Empty;
+    public DateTimeOffset? StartedAtUtc;
+    public DateTimeOffset? DetectedAtUtc;
+    public double ElapsedMs;
 }
 
 internal sealed class BridgeWatchdogLastCommandState

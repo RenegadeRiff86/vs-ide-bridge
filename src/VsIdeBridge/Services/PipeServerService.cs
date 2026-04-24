@@ -8,7 +8,6 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Diagnostics;
 using System.IO;
-using System.IO.MemoryMappedFiles;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
@@ -28,44 +27,23 @@ internal sealed class PipeServerService : IDisposable
 {
     private readonly VsIdeBridgePackage _package;
     private readonly IdeBridgeRuntime _runtime;
-    private readonly string _discoveryFile;
-    private readonly MemoryDiscoveryStore[] _memoryDiscoveryStores =
-    [
-        new(),
-        new(
-            MemoryDiscoveryStore.GlobalMapName,
-            MemoryDiscoveryStore.GlobalMutexName,
-            MemoryDiscoveryStore.DefaultCapacityBytes,
-            TimeSpan.FromMilliseconds(100),
-            static name => new Mutex(false, name),
-            static (name, capacity) => MemoryMappedFile.CreateOrOpen(name, capacity, MemoryMappedFileAccess.ReadWrite)),
-    ];
-    private readonly bool _emitDiscoveryJson;
-    private readonly bool _emitMemoryDiscovery;
+    private readonly PipeServerDiscoveryCoordinator _discovery;
     private readonly CancellationTokenSource _cts = new();
-    private readonly object _discoverySync = new();
     private readonly PipeServerMutableState _state = new();
     private readonly SemaphoreSlim _commandQueue = new(1, 1);
     private Task? _listenTask;
     private DTE2? _dte; // cached after first use; stable for the lifetime of the VS instance
-    private string? _cachedSolutionPath; // updated by UpdateDiscovery and on first command; avoids main-thread switch per command
 
     public PipeServerService(VsIdeBridgePackage package, IdeBridgeRuntime runtime)
     {
         _package = package;
         _runtime = runtime;
-        string discoveryDir = Path.Combine(Path.GetTempPath(), "vs-ide-bridge", "pipes");
-        Directory.CreateDirectory(discoveryDir);
-        _discoveryFile = Path.Combine(discoveryDir, $"bridge-{runtime.BridgeInstanceService.ProcessId}.json");
-        _emitDiscoveryJson = PipeServerSupport.ReadBooleanEnvironmentVariable("VS_IDE_BRIDGE_EMIT_DISCOVERY_JSON", true);
-        string? mode = Environment.GetEnvironmentVariable("VS_IDE_BRIDGE_DISCOVERY_MODE");
-        bool modeAllowsMemory = !string.Equals(mode, "json-only", StringComparison.OrdinalIgnoreCase);
-        _emitMemoryDiscovery = modeAllowsMemory;
+        _discovery = new PipeServerDiscoveryCoordinator(package, runtime, _cts);
     }
 
     public void Start()
     {
-        QueueDiscoveryUpdate(null, includePurge: true);
+        _discovery.Start();
         _listenTask = Task.Factory.StartNew(
             () => ListenLoopAsync(_cts.Token),
             _cts.Token,
@@ -75,147 +53,7 @@ internal sealed class PipeServerService : IDisposable
 
     public void UpdateDiscovery(string? solutionPath)
     {
-        _cachedSolutionPath = solutionPath;
-        QueueDiscoveryUpdate(solutionPath);
-    }
-
-    private void QueueDiscoveryUpdate(string? solutionPath, bool includePurge = false)
-    {
-        lock (_discoverySync)
-        {
-            _state.PendingDiscoverySolutionPath = solutionPath ?? string.Empty;
-            if (includePurge)
-            {
-                _state.DiscoveryPurgePending = true;
-            }
-
-            if (_state.DiscoveryWorkerScheduled)
-            {
-                return;
-            }
-
-            _state.DiscoveryWorkerScheduled = true;
-        }
-
-        _ = Task.Run(FlushDiscoveryUpdatesAsync);
-    }
-
-    private async Task FlushDiscoveryUpdatesAsync()
-    {
-        while (!_cts.IsCancellationRequested)
-        {
-            string? solutionPath;
-            bool purgePending = false;
-            lock (_discoverySync)
-            {
-                solutionPath = _state.PendingDiscoverySolutionPath;
-                _state.PendingDiscoverySolutionPath = null;
-                purgePending = _state.DiscoveryPurgePending;
-                _state.DiscoveryPurgePending = false;
-            }
-
-            try
-            {
-                if (purgePending)
-                {
-                    PurgeStaleDiscoveryFiles();
-                }
-
-                WriteDiscoveryFile(solutionPath ?? string.Empty);
-            }
-            catch (IOException ex)
-            {
-                ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to flush discovery updates: {ex.Message}");
-            }
-
-            lock (_discoverySync)
-            {
-                if (_state.PendingDiscoverySolutionPath is null && !_state.DiscoveryPurgePending)
-                {
-                    _state.DiscoveryWorkerScheduled = false;
-                    return;
-                }
-            }
-
-            await Task.Yield();
-        }
-
-        lock (_discoverySync)
-        {
-            _state.DiscoveryWorkerScheduled = false;
-        }
-    }
-
-    private void PurgeStaleDiscoveryFiles()
-    {
-        string discoveryDir = Path.GetDirectoryName(_discoveryFile)!;
-        try
-        {
-            foreach (var file in Directory.GetFiles(discoveryDir, "bridge-*.json"))
-            {
-                if (string.Equals(file, _discoveryFile, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                string stem = Path.GetFileNameWithoutExtension(file); // "bridge-12345"
-                int dash = stem.LastIndexOf('-');
-                if (dash >= 0 && int.TryParse(stem.Substring(dash + 1), out int pid))
-                {
-                    try { Process.GetProcessById(pid); }
-                    catch (ArgumentException) { File.Delete(file); } // process gone
-                }
-            }
-        }
-        catch (IOException ex)
-        {
-            ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to purge stale discovery files: {ex.Message}");
-        }
-    }
-
-    private void WriteDiscoveryFile(string? solutionPath)
-    {
-        object record = _runtime.BridgeInstanceService.CreateDiscoveryRecord(solutionPath);
-
-        if (_emitDiscoveryJson)
-        {
-            try
-            {
-                string discoveryJson = JsonConvert.SerializeObject(record);
-                File.WriteAllText(_discoveryFile, discoveryJson, new UTF8Encoding(false));
-            }
-            catch (IOException ex)
-            {
-                ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update discovery file: {ex.Message}");
-            }
-        }
-
-        if (_emitMemoryDiscovery)
-        {
-            foreach (MemoryDiscoveryStore store in _memoryDiscoveryStores)
-            {
-                try
-                {
-                    store.Upsert(record);
-                }
-                catch (Exception ex) when (ex is not null)
-                {
-                    ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to update memory discovery store: {ex.Message}");
-                }
-            }
-        }
-    }
-
-    private static string GetSolutionPath(DTE2 dte)
-    {
-        ThreadHelper.ThrowIfNotOnUIThread();
-
-        try
-        {
-            return dte.Solution?.FullName ?? string.Empty;
-        }
-        catch
-        {
-            return string.Empty;
-        }
+        _discovery.UpdateDiscovery(solutionPath);
     }
 
     private static JArray BuildBatchSteps(PipeRequest request)
@@ -635,8 +473,8 @@ internal sealed class PipeServerService : IDisposable
         DTE2? dte = await GetDteAsync(commandToken).ConfigureAwait(false);
         Assumes.Present(dte);
 
-        string? solutionPath = await CaptureSolutionPathAsync(dte!, commandToken).ConfigureAwait(false);
-        QueueDiscoveryUpdate(solutionPath);
+        string? solutionPath = await _discovery.CaptureSolutionPathAsync(dte!, commandToken).ConfigureAwait(false);
+        _discovery.UpdateDiscovery(solutionPath);
 
         IdeCommandContext ctx = new(_package, dte!, _runtime.Logger, _runtime, commandToken);
         captureFailureContext(ctx);
@@ -645,7 +483,9 @@ internal sealed class PipeServerService : IDisposable
         if (hasBatch)
         {
             JArray steps = BuildBatchSteps(request);
-            return await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(false);
+            CommandExecutionResult batchResult = await IdeCoreCommands.ExecuteBatchAsync(ctx, steps, request.StopOnError ?? false).ConfigureAwait(false);
+            await _discovery.RefreshAfterCommandAsync(dte!, solutionPath, commandToken).ConfigureAwait(false);
+            return batchResult;
         }
 
         if (!_runtime.TryGetCommand(commandName, out IdeCommandBase cmd))
@@ -654,7 +494,9 @@ internal sealed class PipeServerService : IDisposable
         }
 
         CommandArguments args = CommandArgumentParser.Parse(request.Args);
-        return await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
+        CommandExecutionResult result = await cmd.ExecuteDirectAsync(ctx, args).ConfigureAwait(false);
+        await _discovery.RefreshAfterCommandAsync(dte!, solutionPath, commandToken).ConfigureAwait(false);
+        return result;
     }
 
     private static async Task<CommandExecutionResult> AwaitCommandExecutionAsync(JoinableTask<CommandExecutionResult> executionTask, int timeoutMilliseconds, CancellationTokenSource commandCts, CancellationToken commandToken, CancellationToken serverCancellationToken)
@@ -688,16 +530,6 @@ internal sealed class PipeServerService : IDisposable
         await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
         _dte = await _package.GetServiceAsync(typeof(SDTE)).ConfigureAwait(true) as DTE2;
         return _dte;
-    }
-
-    private async Task<string?> CaptureSolutionPathAsync(DTE2 dte, CancellationToken cancellationToken)
-    {
-        string? cached = _cachedSolutionPath;
-        if (cached is not null) return cached;
-        await _package.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
-        string? path = GetSolutionPath(dte);
-        _cachedSolutionPath = path;
-        return path;
     }
 
     private static bool IsDiagnosticsCommand(string commandName)
@@ -748,34 +580,7 @@ internal sealed class PipeServerService : IDisposable
         _cts.Cancel();
         _cts.Dispose();
         _commandQueue.Dispose();
-        foreach (MemoryDiscoveryStore store in _memoryDiscoveryStores)
-        {
-            store.Dispose();
-        }
-        try
-        {
-            if (_emitDiscoveryJson && File.Exists(_discoveryFile))
-                File.Delete(_discoveryFile);
-        }
-        catch (Exception ex) when (ex is not null) // best-effort discovery file cleanup
-        {
-            System.Diagnostics.Debug.WriteLine(ex);
-        }
-
-        if (_emitMemoryDiscovery)
-        {
-            foreach (MemoryDiscoveryStore store in _memoryDiscoveryStores)
-            {
-                try
-                {
-                    store.Remove(_runtime.BridgeInstanceService.InstanceId);
-                }
-                catch (Exception ex) when (ex is not null) // best-effort memory discovery cleanup
-                {
-                    ActivityLog.LogWarning(nameof(PipeServerService), $"Failed to remove memory discovery entry: {ex.Message}");
-                }
-            }
-        }
+        _discovery.Dispose();
     }
 }
 
@@ -783,6 +588,6 @@ file static class PipeServerConstants
 {
     internal const int PipeStreamBufferSize = 4096;
     internal const int DefaultCommandTimeoutMilliseconds = 120_000;
-    internal const int DefaultDiagnosticsTimeoutMilliseconds = 10_000;
+    internal const int DefaultDiagnosticsTimeoutMilliseconds = 120_000;
 }
 

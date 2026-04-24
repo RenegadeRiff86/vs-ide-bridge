@@ -6,7 +6,6 @@ internal static class InstallerDefaults
     internal const string ProductName = "VS IDE Bridge";
     internal const string InstallFolderName = "VsIdeBridge";
     internal const string SolutionFileName = "VsIdeBridge.sln";
-    internal const string CliDirectoryName = "cli";
     internal const string ServiceDirectoryName = "service";
     internal const string VsixDirectoryName = "vsix";
     internal const string PythonDirectoryName = "python";

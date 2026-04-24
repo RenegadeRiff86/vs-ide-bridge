@@ -13,7 +13,7 @@ internal static class GlobTool
             throw new McpRequestException(id, McpErrorCodes.InvalidParams, "Missing required argument 'pattern'.");
 
         string root = args?["path"]?.GetValue<string>()
-            ?? ServiceToolPaths.ResolveSolutionDirectory(bridge);
+            ?? ServiceToolPaths.ResolveRepoRootDirectory(bridge);
         int max = args?["max"]?.GetValue<int?>() ?? 200;
 
         Matcher matcher = new();

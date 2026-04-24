@@ -92,7 +92,7 @@ internal static partial class BestPracticeAnalyzerHelpers
                 continue;
             }
 
-            return candidateLine.IndexOf("GeneratedRegex(", StringComparison.Ordinal) >= 0;
+            return candidateLine.Contains("GeneratedRegex(");
         }
 
         return false;
@@ -320,6 +320,44 @@ internal static partial class BestPracticeAnalyzerHelpers
 #else
         return text.Substring(0, maxLength - 3) + "...";
 #endif
+    }
+
+    internal static int CountStructuralBraceDelta(string line)
+    {
+        (int depth, _) = ScanLineForBraces(line, 0, foundOpen: false);
+        return depth;
+    }
+
+    internal static bool TryGetCommentOnlyCatchBlockInfo(
+        string[] lines,
+        string content,
+        int matchIndex,
+        out int startLine,
+        out string message)
+    {
+        startLine = GetLineNumber(content, matchIndex);
+        string block = ExtractBracedBlock(lines, startLine - 1);
+        int openBraceIndex = block.IndexOf('{');
+        int closeBraceIndex = block.LastIndexOf('}');
+        if (openBraceIndex < 0 || closeBraceIndex <= openBraceIndex)
+        {
+            message = string.Empty;
+            return false;
+        }
+
+        string body = block.Substring(openBraceIndex + 1, closeBraceIndex - openBraceIndex - 1);
+        bool hadComment = body.IndexOf("//", StringComparison.Ordinal) >= 0 || body.IndexOf("/*", StringComparison.Ordinal) >= 0;
+        string stripped = Regex.Replace(body, @"//.*?$|/\*.*?\*/", string.Empty, RegexOptions.Multiline | RegexOptions.Singleline);
+        if (!string.IsNullOrWhiteSpace(stripped))
+        {
+            message = string.Empty;
+            return false;
+        }
+
+        message = hadComment
+            ? "Catch block only contains comments and still swallows the exception. Write the exception to the log with useful context, or rethrow it."
+            : "Empty catch block swallows exceptions silently. Log the exception with context or rethrow it.";
+        return true;
     }
 
     private static (int Depth, bool FoundOpen) ScanLineForBraces(string line, int depth, bool foundOpen)

@@ -48,7 +48,9 @@ internal sealed partial class ErrorListService(VsIdeBridgePackage package, Readi
             PublishBestPracticeRows(context.Dte, []);
         }
 
-        if (waitForIntellisense && !quickSnapshot)
+        // Readiness is allowed to delay a passive snapshot, but it must not force the
+        // active refresh path that can clear and repopulate the Error List in large C++ solutions.
+        if (waitForIntellisense)
         {
             await _readinessService.WaitForReadyAsync(context, timeoutMilliseconds, afterEdit).ConfigureAwait(true);
         }
@@ -56,28 +58,36 @@ internal sealed partial class ErrorListService(VsIdeBridgePackage package, Readi
         IReadOnlyList<JObject> rows;
         if (quickSnapshot)
         {
-            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
-            try
+            EnsureErrorListWindow(context.Dte);
+            // Use the synchronous table read: subscribes and reads whatever is
+            // currently cached by each provider immediately, without holding the
+            // subscription open and waiting for WaitForStabilityAsync. That wait
+            // loop is what caused C++ projects to time out — normal IntelliSense
+            // background updates kept resetting the stability counter forever.
+            if (!TryReadTableRows(out rows) || rows.Count == 0)
             {
-                rows = ReadRows(context.Dte);
-            }
-            catch (InvalidOperationException)
-            {
-                rows = [];
-            }
-
-            if (includeBuildOutputFallback && rows.Count == 0)
-            {
-                rows = ReadBuildOutputRows(context.Dte);
+                try
+                {
+                    rows = await ReadDteRowsAsync(context, rows).ConfigureAwait(true);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    LogNonCriticalException(ex);
+                }
             }
         }
         else
         {
             rows = await WaitForRowsAsync(context, timeoutMilliseconds, forceRefresh).ConfigureAwait(true);
-            if (includeBuildOutputFallback && rows.Count == 0)
+        }
+
+        if (includeBuildOutputFallback)
+        {
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
+            IReadOnlyList<JObject> buildOutputRows = ReadBuildOutputRows(context.Dte);
+            if (rows.Count == 0)
             {
-                await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(context.CancellationToken);
-                rows = ReadBuildOutputRows(context.Dte);
+                rows = buildOutputRows;
             }
         }
 
@@ -121,7 +131,7 @@ internal sealed partial class ErrorListService(VsIdeBridgePackage package, Readi
             ["hasWarnings"] = severityCounts["Warning"] > 0,
             ["filter"] = query?.ToJson() ?? [],
             ["rows"] = new JArray(filteredRows),
-            ["groups"] = BuildGroups(filteredRows, query?.GroupBy),
+            ["groups"] = BuildGroups(matchingRows, query?.GroupBy),
         };
     }
 

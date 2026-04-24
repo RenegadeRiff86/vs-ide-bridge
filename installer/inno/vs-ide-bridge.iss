@@ -2,7 +2,7 @@
 #define MyAppFolderName "VsIdeBridge"
 #define MyAppPublisher "RenegadeRiff86"
 #define MyAppURL "https://github.com/RenegadeRiff86/Visual-Studio-MCP"
-#define MyAppVersion "2.2.8"
+#define MyAppVersion "2.2.11"
 #define ServiceName "VsIdeBridgeService"
 #define VsixId "RenegadeRiff86.VsIdeBridge"
 #define LegacyVsixId "StanElston.VsIdeBridge"
@@ -28,10 +28,10 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-UninstallDisplayIcon={app}\cli\vs-ide-bridge.exe
+UninstallDisplayIcon={app}\service\VsIdeBridgeService.exe
 SetupLogging=yes
 CloseApplications=force
-CloseApplicationsFilter=vs-ide-bridge.exe,VsIdeBridgeService.exe
+CloseApplicationsFilter=VsIdeBridgeService.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -39,10 +39,15 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "service"; Description: "Install Windows service (automatic start)"
 Name: "startservice"; Description: "Start service after install"; Check: WizardIsTaskSelected('service')
+Name: "enablehttp"; Description: "Enable local HTTP MCP endpoint on localhost (recommended)"
+
+[Dirs]
+Name: "{commonappdata}\VsIdeBridge\state"; Permissions: users-modify; Flags: uninsneveruninstall
+
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\cli"
 
 [Files]
-Source: "..\..\src\VsIdeBridgeService\bin\{#Configuration}\net8.0-windows\VsIdeBridgeService.exe"; DestDir: "{app}\cli"; DestName: "vs-ide-bridge.exe"; Flags: ignoreversion restartreplace uninsrestartdelete; BeforeInstall: KillCliProcesses
-Source: "..\..\src\VsIdeBridgeService\bin\{#Configuration}\net8.0-windows\*"; DestDir: "{app}\cli"; Flags: recursesubdirs createallsubdirs ignoreversion restartreplace uninsrestartdelete; Excludes: "VsIdeBridgeService.exe"
 Source: "..\..\src\VsIdeBridgeService\bin\{#Configuration}\net8.0-windows\*"; DestDir: "{app}\service"; Flags: recursesubdirs createallsubdirs ignoreversion restartreplace uninsrestartdelete
 Source: "..\..\src\VsIdeBridgeLauncher\bin\{#Configuration}\*"; DestDir: "{app}\service"; Flags: recursesubdirs createallsubdirs ignoreversion restartreplace uninsrestartdelete
 Source: "..\..\src\VsIdeBridge\bin\{#Configuration}\net472\VsIdeBridge.vsix"; DestDir: "{app}\vsix"; Flags: ignoreversion
@@ -116,6 +121,11 @@ begin
   Result := ExpandConstant('{app}\config\python-runtime.json');
 end;
 
+function GetHttpEnabledFlagPath(): string;
+begin
+  Result := ExpandConstant('{commonappdata}\VsIdeBridge\state\http-enabled.flag');
+end;
+
 procedure RemoveManagedPythonRuntimeIfPresent();
 begin
   DelTree(ExpandConstant('{app}\python\managed-runtime'), True, True, True);
@@ -156,6 +166,22 @@ begin
   end;
 
   SaveStringToFile(ConfigPath, JsonText, False);
+end;
+
+procedure WriteHttpServerConfig();
+var
+  HttpFlagPath: string;
+  StateDirectory: string;
+begin
+  HttpFlagPath := GetHttpEnabledFlagPath();
+  StateDirectory := ExtractFileDir(HttpFlagPath);
+  if StateDirectory <> '' then
+    ForceDirectories(StateDirectory);
+
+  if WizardIsTaskSelected('enablehttp') then
+    SaveStringToFile(HttpFlagPath, '', False)
+  else if FileExists(HttpFlagPath) then
+    DeleteFile(HttpFlagPath);
 end;
 
 procedure InitializePythonSupportPage();
@@ -400,20 +426,6 @@ begin
   Result := UninstallOldVersionIfPresent();
 end;
 
-procedure KillCliProcesses();
-var
-  ExitCode: Integer;
-  I: Integer;
-begin
-  for I := 1 to 3 do
-  begin
-    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vs-ide-bridge.exe', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
-    if ExitCode = 128 then
-      Break;
-    Sleep(300);
-  end;
-end;
-
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ExitCode: Integer;
@@ -427,9 +439,7 @@ begin
   Log(Format('sc stop VsIdeBridgeService exited with code %d.', [ExitCode]));
   Sleep(2000);  { Give the service time to drain and release its file handles. }
 
-  Log('PrepareToInstall: killing residual vs-ide-bridge.exe / VsIdeBridgeService.exe processes...');
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM vs-ide-bridge.exe', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
-  Log(Format('taskkill vs-ide-bridge.exe exited with code %d (0=killed, 128=not running).', [ExitCode]));
+  Log('PrepareToInstall: killing residual VsIdeBridgeService.exe processes...');
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM VsIdeBridgeService.exe', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
   Log(Format('taskkill VsIdeBridgeService.exe exited with code %d.', [ExitCode]));
   Sleep(500);  { Brief pause before Inno Setup proceeds with file copies. }
@@ -448,7 +458,7 @@ end;
 
 function GetPostInstallStepCount(const HasVsixInstallerPath: Boolean): Integer;
 begin
-  Result := 1;
+  Result := 2;
 
   if WizardIsTaskSelected('service') then
     Result := Result + 6;  { stop, delete, create, description, failure, failureflag }
@@ -529,6 +539,29 @@ begin
     GetSelectedPythonProvisioningMode());
 end;
 
+procedure RunHttpServerSetupStep(var StepIndex: Integer; const TotalSteps: Integer);
+var
+  HttpMode: string;
+begin
+  if WizardIsTaskSelected('enablehttp') then
+    HttpMode := 'enabled'
+  else
+    HttpMode := 'disabled';
+
+  UpdatePostInstallProgress(
+    StepIndex,
+    TotalSteps,
+    'Configuring HTTP MCP endpoint...',
+    HttpMode);
+  WriteHttpServerConfig();
+  StepIndex := StepIndex + 1;
+  UpdatePostInstallProgress(
+    StepIndex,
+    TotalSteps,
+    'Configuring HTTP MCP endpoint...',
+    HttpMode);
+end;
+
 procedure RunPostInstallActions();
 var
   ScPath: string;
@@ -549,6 +582,7 @@ begin
 
   try
     RunPythonRuntimeSetupStep(StepIndex, TotalSteps);
+    RunHttpServerSetupStep(StepIndex, TotalSteps);
 
     if WizardIsTaskSelected('service') then
     begin

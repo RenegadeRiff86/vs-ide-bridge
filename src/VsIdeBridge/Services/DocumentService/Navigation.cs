@@ -58,7 +58,7 @@ internal sealed partial class DocumentService
             navigated = TryNavigateToRange(textDocument, startLine, startColumn, endLine, endColumn);
             if (!navigated)
             {
-                navigated = TryNavigateToLine(textDocument, startLine, startColumn);
+                navigated = await TryNavigateToLineAsync(textDocument, startLine, startColumn).ConfigureAwait(true);
             }
         }
 
@@ -258,7 +258,7 @@ internal sealed partial class DocumentService
         bool navigated = false;
         if (window.Document?.Object(TextDocumentKind) is TextDocument textDocument)
         {
-            navigated = TryNavigateToLine(textDocument, line, column);
+            navigated = await TryNavigateToLineAsync(textDocument, line, column).ConfigureAwait(true);
         }
 
         string windowCaption = window.Caption;
@@ -452,14 +452,16 @@ internal sealed partial class DocumentService
     /// transient COM errors (e.g. "Class not registered" when the editor buffer
     /// hasn't fully initialized after first open).
     /// </summary>
-    private static bool TryNavigateToLine(TextDocument textDocument, int line, int column)
+    private static async Task<bool> TryNavigateToLineAsync(TextDocument textDocument, int line, int column)
     {
-        ThreadHelper.ThrowIfNotOnUIThread();
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
         if (TryNavigateToLineOnce(textDocument, line, column)) return true;
 
         // Editor buffers can be transiently unavailable immediately after open.
-        System.Threading.Thread.Sleep(100);
+        // Yield the UI thread during the retry delay so the IDE stays responsive.
+        await Task.Delay(100).ConfigureAwait(true);
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
         if (TryNavigateToLineOnce(textDocument, line, column)) return true;
 
         // Final fallback: navigate to line 1 col 1 so the file is still visible.
@@ -500,9 +502,9 @@ internal sealed partial class DocumentService
             selection.MoveToLineAndOffset(1, 1, false);
             TryShowActivePoint(selection);
         }
-        catch (COMException)
+        catch (COMException ex)
         {
-            // Give up on navigation; the file is still open.
+            BridgeActivityLog.LogWarning(nameof(DocumentService), "Failed to move the editor selection to the requested start position", ex);
         }
     }
 
@@ -514,9 +516,9 @@ internal sealed partial class DocumentService
         {
             selection.ActivePoint.TryToShow(vsPaneShowHow.vsPaneShowCentered);
         }
-        catch (COMException)
+        catch (COMException ex)
         {
-            // Some editor surfaces may not support viewport repositioning.
+            BridgeActivityLog.LogWarning(nameof(DocumentService), "Failed to center the active editor point in the viewport", ex);
         }
     }
 

@@ -45,6 +45,10 @@ internal sealed class BridgeConnection
     public Task<JsonObject> SendAsync(JsonNode? id, string command, JsonObject? args)
         => SendCoreAsync(id, command, args?.DeepClone(), ignoreSolutionHint: false);
 
+    public Task<JsonObject> SendBatchAsync(JsonNode? id, JsonArray steps, bool stopOnError = false)
+        => SendCoreAsync(id, BuildBatchRequest(steps, stopOnError), ignoreSolutionHint: false,
+            BridgeConnectionArgs.SelectTimeoutProfile("batch"));
+
     public Task<JsonObject> SendIgnoringSolutionHintAsync(JsonNode? id, string command, string args)
         => SendCoreAsync(id, command, JsonValue.Create(args), ignoreSolutionHint: true);
 
@@ -119,19 +123,19 @@ internal sealed class BridgeConnection
     // ── Internal send logic ────────────────────────────────────────────────────
 
     private async Task<JsonObject> SendCoreAsync(JsonNode? id, string command, JsonNode? args, bool ignoreSolutionHint)
-        => await SendCoreAsync(id, command, args, ignoreSolutionHint, BridgeConnectionArgs.SelectTimeoutProfile(command)).ConfigureAwait(false);
+        => await SendCoreAsync(id, BuildRequest(command, args), ignoreSolutionHint,
+            BridgeConnectionArgs.SelectTimeoutProfile(command)).ConfigureAwait(false);
 
     private async Task<JsonObject> SendCoreAsync(
         JsonNode? id,
-        string command,
-        JsonNode? args,
+        JsonObject request,
         bool ignoreSolutionHint,
         ToolTimeoutProfile timeoutProfile)
     {
         try
         {
-            JsonObject response = await SendPipeAsync(command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
-            return await FinalizePipeResponseAsync(response, command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+            JsonObject response = await SendPipeAsync(request, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+            return await FinalizePipeResponseAsync(response, request, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
         }
         catch (McpRequestException)
         {
@@ -141,36 +145,29 @@ internal sealed class BridgeConnection
         catch (TimeoutException ex) { throw new McpRequestException(id, TimeoutError, $"Timed out: {ex.Message}"); }
         catch (UnauthorizedAccessException ex) when (ShouldRetry(timeoutProfile))
         {
-            return await RetryAfterFailureAsync(id, command, args, ex, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+            return await RetryAfterFailureAsync(id, request, ex, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
         }
         catch (IOException ex) when (ShouldRetry(timeoutProfile))
         {
-            return await RetryAfterFailureAsync(id, command, args, ex, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+            return await RetryAfterFailureAsync(id, request, ex, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
         }
         catch (UnauthorizedAccessException ex) { throw new McpRequestException(id, CommError, $"VS bridge communication failed: {ex.Message}"); }
         catch (IOException ex) { throw new McpRequestException(id, CommError, $"VS bridge communication failed: {ex.Message}"); }
     }
 
-    private async Task<JsonObject> SendPipeAsync(string command, JsonNode? args, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
+    private async Task<JsonObject> SendPipeAsync(JsonObject request, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
     {
         BridgeInstance instance = await GetInstanceAsync(ignoreSolutionHint).ConfigureAwait(false);
         await using VsPipeClient client = await VsPipeClient.CreateAsync(
             instance.PipeName,
             GetCommandTimeoutMs(timeoutProfile),
             GetPipeGateTimeoutMs(timeoutProfile)).ConfigureAwait(false);
-        JsonObject request = new()
-        {
-            ["id"] = Guid.NewGuid().ToString("N")[..8],
-            ["command"] = command,
-            ["args"] = args?.DeepClone(),
-        };
-        return await client.SendAsync(request).ConfigureAwait(false);
+        return await client.SendAsync((JsonObject)request.DeepClone()).ConfigureAwait(false);
     }
 
     private async Task<JsonObject> RetryAfterFailureAsync(
         JsonNode? id,
-        string command,
-        JsonNode? args,
+        JsonObject request,
         Exception ex,
         bool ignoreSolutionHint,
         ToolTimeoutProfile timeoutProfile)
@@ -180,17 +177,17 @@ internal sealed class BridgeConnection
 
         try
         {
-            JsonObject response = await SendPipeAsync(command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
-            return await FinalizePipeResponseAsync(response, command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+            JsonObject response = await SendPipeAsync(request, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+            return await FinalizePipeResponseAsync(response, request, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
         }
         catch (BridgeException retryEx) { throw new McpRequestException(id, BridgeError, retryEx.Message); }
         catch (TimeoutException retryEx) { throw new McpRequestException(id, TimeoutError, $"Timed out: {retryEx.Message}"); }
         catch (Exception retryEx) when (retryEx is not null) { throw new McpRequestException(id, CommError, $"VS bridge retry failed: {retryEx.Message}"); }
     }
 
-    private async Task<JsonObject> FinalizePipeResponseAsync(JsonObject response, string command, JsonNode? args, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
+    private async Task<JsonObject> FinalizePipeResponseAsync(JsonObject response, JsonObject request, bool ignoreSolutionHint, ToolTimeoutProfile timeoutProfile)
     {
-        response = await RetryImplicitBindingCancellationAsync(response, command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+        response = await RetryImplicitBindingCancellationAsync(response, request, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
         AttachPendingBindingNotice(response);
         RememberSolutionPath(response["Data"]?["solutionPath"]?.GetValue<string>());
         return response;
@@ -244,8 +241,24 @@ internal sealed class BridgeConnection
 
     private void RememberSolutionPath(string? path)
     {
-        if (!string.IsNullOrWhiteSpace(path))
-            lock (_gate) { _state.LastSolutionPath = path; }
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _state.LastSolutionPath = path;
+            if (_state.Cached is not null
+                && !string.Equals(_state.Cached.SolutionPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                _state.Cached = _state.Cached with
+                {
+                    SolutionPath = path,
+                    SolutionName = Path.GetFileName(path),
+                };
+            }
+        }
     }
 
     private void AttachPendingBindingNotice(JsonObject response)
@@ -268,8 +281,7 @@ internal sealed class BridgeConnection
 
     private async Task<JsonObject> RetryImplicitBindingCancellationAsync(
         JsonObject response,
-        string command,
-        JsonNode? args,
+        JsonObject request,
         bool ignoreSolutionHint,
         ToolTimeoutProfile timeoutProfile)
     {
@@ -289,7 +301,33 @@ internal sealed class BridgeConnection
             return response;
         }
 
-        return await SendPipeAsync(command, args, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+        JsonObject retryRequest = (JsonObject)request.DeepClone();
+        retryRequest["id"] = Guid.NewGuid().ToString("N")[..8];
+        return await SendPipeAsync(retryRequest, ignoreSolutionHint, timeoutProfile).ConfigureAwait(false);
+    }
+
+    private static JsonObject BuildRequest(string command, JsonNode? args) => new()
+    {
+        ["id"] = Guid.NewGuid().ToString("N")[..8],
+        ["command"] = command,
+        ["args"] = args?.DeepClone(),
+    };
+
+    private static JsonObject BuildBatchRequest(JsonArray steps, bool stopOnError)
+    {
+        JsonObject request = new()
+        {
+            ["id"] = Guid.NewGuid().ToString("N")[..8],
+            ["command"] = "batch",
+            ["batch"] = steps.DeepClone(),
+        };
+
+        if (stopOnError)
+        {
+            request["stopOnError"] = true;
+        }
+
+        return request;
     }
 
     private static bool IsInterruptedOperationResponse(JsonObject response)

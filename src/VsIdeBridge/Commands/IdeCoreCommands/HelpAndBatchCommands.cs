@@ -49,6 +49,40 @@ internal static partial class IdeCoreCommands
             commandData);
     }
 
+    private static JArray ParseBatchSteps(string json, string sourceDescription)
+    {
+        try
+        {
+            return JArray.Parse(json);
+        }
+        catch (JsonException ex)
+        {
+            throw new CommandErrorException("invalid_json", $"Failed to parse {sourceDescription}: {ex.Message}");
+        }
+    }
+
+    private static JArray LoadBatchSteps(CommandArguments args)
+    {
+        string? inlineSteps = args.GetString("steps");
+        if (!string.IsNullOrWhiteSpace(inlineSteps))
+        {
+            return ParseBatchSteps(inlineSteps!, "batch steps");
+        }
+
+        string? batchFile = args.GetString("batch-file");
+        if (string.IsNullOrWhiteSpace(batchFile))
+        {
+            throw new CommandErrorException("invalid_arguments", "Missing required argument --steps or --batch-file.");
+        }
+
+        if (!File.Exists(batchFile))
+        {
+            throw new CommandErrorException("file_not_found", $"Batch file not found: {batchFile}");
+        }
+
+        return ParseBatchSteps(File.ReadAllText(batchFile), "batch file");
+    }
+
     private static async Task<(JObject result, bool succeeded)> ExecuteBatchStepAsync(
         IdeCommandContext context, JToken entry, int index)
     {
@@ -70,7 +104,7 @@ internal static partial class IdeCoreCommands
 
         string? stepId = (string?)step["id"];
         string commandName = (string?)step["command"] ?? string.Empty;
-        string commandArgs = (string?)step["args"] ?? string.Empty;
+        JToken? commandArgs = step["args"];
 
         if (!context.Runtime.TryGetCommand(commandName, out var cmd))
         {
@@ -215,13 +249,13 @@ internal static partial class IdeCoreCommands
                 ["example"] = CreateExampleCommand("state", ("out", new JValue(@"C:\temp\ide-state.json"))),
                 ["documentSliceExample"] = CreateExampleCommand("document-slice", ("file", new JValue(ExampleCppPath)), ("start_line", new JValue(120)), ("end_line", new JValue(180)), ("out", new JValue(@"C:\temp\slice.json"))),
                 ["documentSlicesExample"] = CreateExampleCommand("document-slices", ("ranges", CreateExampleSlicesRanges())),
-                ["searchSymbolsExample"] = CreateExampleCommand("search-symbols", ("query", new JValue("propose_export_file_name_and_path")), ("kind", new JValue("function"))),
-                ["quickInfoExample"] = CreateExampleLocationCommand("quick-info"),
-                ["findTextPathExample"] = CreateExampleCommand("find-text", ("query", new JValue("OnInit")), ("path", new JValue("src\\libslic3r"))),
-                ["fileSymbolsExample"] = CreateExampleCommand("file-symbols", ("file", new JValue(ExampleCppPath)), ("kind", new JValue("function"))),
-                ["smartContextExample"] = CreateExampleCommand("smart-context", ("query", new JValue("where is GUI_App::OnInit used")), ("max_contexts", new JValue(3)), ("out", new JValue(@"C:\temp\smart-context.json"))),
-                ["referencesExample"] = CreateExampleCommand("find-references", [.. CreateExampleLocationArguments(), ("out", new JValue(@"C:\temp\references.json"))]),
-                ["callHierarchyExample"] = CreateExampleCommand("call-hierarchy", [.. CreateExampleLocationArguments(), ("max_depth", new JValue(2)), ("max_children", new JValue(10)), ("out", new JValue(@"C:\temp\call-hierarchy.json"))]),
+                ["searchSymbolsExample"] = CreateExampleCommand("search_symbols", ("query", new JValue("propose_export_file_name_and_path")), ("kind", new JValue("function"))),
+                ["quickInfoExample"] = CreateExampleLocationCommand("quick_info"),
+                ["findTextPathExample"] = CreateExampleCommand("find_text", ("query", new JValue("OnInit")), ("path", new JValue("src\\libslic3r"))),
+                ["fileSymbolsExample"] = CreateExampleCommand("file_symbols", ("file", new JValue(ExampleCppPath)), ("kind", new JValue("function"))),
+                ["smartContextExample"] = CreateExampleCommand("smart_context", ("query", new JValue("where is GUI_App::OnInit used")), ("max_contexts", new JValue(3)), ("out", new JValue(@"C:\temp\smart-context.json"))),
+                ["referencesExample"] = CreateExampleCommand("find_references", [.. CreateExampleLocationArguments(), ("out", new JValue(@"C:\temp\references.json"))]),
+                ["callHierarchyExample"] = CreateExampleCommand("call_hierarchy", [.. CreateExampleLocationArguments(), ("max_depth", new JValue(2)), ("max_children", new JValue(10)), ("out", new JValue(@"C:\temp\call_hierarchy.json"))]),
                 ["applyDiffFormat"] = "PREFER editor patch format: *** Begin Patch / *** Update File: path/to/file / @@ / context line / -old line / +new line / context line / *** End of File / *** End Patch. Matches by content context — tolerates line shifts after prior edits. Use *** Add File: or *** Delete File: for whole-file operations.",
                 ["applyDiffExample"] = CreateExampleCommand("apply-diff", ("patch_file", new JValue(@"C:\temp\change.diff")), ("out", new JValue(@"C:\temp\apply-diff.json"))),
                 ["openSolutionExample"] = CreateExampleCommand("open-solution", ("solution", new JValue(@"C:\path\to\solution.sln")), ("out", new JValue(@"C:\temp\open-solution.json")))
@@ -381,23 +415,7 @@ internal static partial class IdeCoreCommands
 
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
-            string batchFile = args.GetRequiredString("batch-file");
-            if (!File.Exists(batchFile))
-            {
-                throw new CommandErrorException("file_not_found", $"Batch file not found: {batchFile}");
-            }
-
-            string json = File.ReadAllText(batchFile);
-            JArray steps;
-            try
-            {
-                steps = JArray.Parse(json);
-            }
-            catch (JsonException ex)
-            {
-                throw new CommandErrorException("invalid_json", $"Failed to parse batch file: {ex.Message}");
-            }
-
+            JArray steps = LoadBatchSteps(args);
             bool stopOnError = args.GetBoolean("stop-on-error", false);
             return await ExecuteBatchAsync(context, steps, stopOnError).ConfigureAwait(true);
         }

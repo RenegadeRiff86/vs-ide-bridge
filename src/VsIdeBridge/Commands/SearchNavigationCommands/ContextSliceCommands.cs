@@ -64,7 +64,7 @@ internal static partial class SearchNavigationCommands
                 args.GetInt32("max-contexts", 3),
                 args.GetInt32("context-before", 10),
                 args.GetInt32("context-after", 10),
-                args.GetBoolean("populate-results-window", true),
+                args.GetBoolean("populate-results-window", false),
                 args.GetInt32("results-window", 1)).ConfigureAwait(true);
 
             return new CommandExecutionResult(

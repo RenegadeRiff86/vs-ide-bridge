@@ -20,12 +20,12 @@ MCP Client  ──►  VsIdeBridgeService  ──►  [named pipe]  ──►  V
 
 - Windows 10 or Windows 11
 - Visual Studio 2022 (17.x) or Visual Studio 2025 (18.x)
-- A compatible MCP client (Claude Desktop, Cursor, or any client that speaks HTTP MCP or stdio MCP)
+- A compatible MCP client (Codex, Claude Code, Cursor, or any client that speaks HTTP MCP or stdio MCP)
 
 ## Installation
 
 1. Download the latest release installer.
-2. Run the installer. It installs the Windows service, the VS extension, and the CLI.
+2. Run the installer. It installs the Windows service, the VS extension, and optional managed Python support.
 3. Start Visual Studio. The extension auto-registers the bridge instance on startup.
 4. Connect your MCP client using one of the config examples below.
 
@@ -34,7 +34,6 @@ After installation, the default layout is:
 ```
 C:\Program Files\VsIdeBridge\
   service\VsIdeBridgeService.exe   ← MCP host and Windows service
-  cli\vs-ide-bridge.exe            ← CLI entry point
   vsix\VsIdeBridge.vsix            ← VS extension payload
   python\managed-runtime\          ← optional managed Python runtime
 ```
@@ -45,19 +44,35 @@ The bridge supports two connection models.
 
 ### HTTP MCP (recommended)
 
-Use this when your client can speak HTTP MCP. It reuses the already-running Windows service.
+Use this when your client can speak HTTP MCP. It reuses the already-running Windows service instead of starting a second foreground host process.
 
-Enable the HTTP listener once:
+Current installers enable the local HTTP endpoint on `http://localhost:8080/` by default.
+
+If you turned it off, or you are upgrading from an older install that predates the shared HTTP state fix, re-enable it once:
 
 In Visual Studio: **Tools → IdeVSBridgeMenu → Enable HTTP MCP**
 
-Or from the CLI:
+Or call the bridge `http_enable` tool.
 
-```
-vs-ide-bridge http enable
+#### Codex
+
+Codex supports MCP in both the CLI and the IDE extension, and both share the same MCP config. Add the bridge to `~/.codex/config.toml` (or a trusted project-scoped `.codex/config.toml`):
+
+```toml
+[mcp_servers.vs-ide-bridge]
+url = "http://localhost:8080/"
+enabled = true
 ```
 
-Then add to your MCP client config:
+If you prefer the Codex CLI, you can register the same HTTP endpoint with:
+
+```bash
+codex mcp add vs-ide-bridge --url http://localhost:8080/
+```
+
+#### Other HTTP clients
+
+Use the equivalent HTTP MCP entry in your client config, for example:
 
 ```json
 {
@@ -74,24 +89,30 @@ Then add to your MCP client config:
 
 ### Stdio MCP
 
-Use this when your client requires stdio (Claude Code, Cursor, and most IDE-native clients). It starts a dedicated foreground host process — this is not attachment to the already-running Windows service.
+Use this when your client requires stdio, or when you intentionally want a dedicated foreground host process. It does not attach to the already-running Windows service.
 
 #### Claude Code
 
-Run once to register the server globally:
+Choose one registration scope:
 
 ```bash
-claude mcp add vs-ide-bridge "C:\Program Files\VsIdeBridge\service\VsIdeBridgeService.exe" mcp-server
+# project-scoped (.mcp.json in the current repo)
+claude mcp add --transport stdio --scope project vs-ide-bridge "C:\Program Files\VsIdeBridge\service\VsIdeBridgeService.exe" mcp-server
+
+# user-scoped (~/.claude.json, available everywhere)
+claude mcp add --transport stdio --scope user vs-ide-bridge "C:\Program Files\VsIdeBridge\service\VsIdeBridgeService.exe" mcp-server
 ```
 
-Or add it manually to `~/.claude.json` under `mcpServers`:
+If you add the server manually, the entry must include `"type": "stdio"`. Use the same server object in either a repo `.mcp.json` or `~/.claude.json` under `mcpServers`:
 
 ```json
 {
   "mcpServers": {
     "vs-ide-bridge": {
+      "type": "stdio",
       "command": "C:\\Program Files\\VsIdeBridge\\service\\VsIdeBridgeService.exe",
-      "args": ["mcp-server"]
+      "args": ["mcp-server"],
+      "env": {}
     }
   }
 }
@@ -101,6 +122,26 @@ Or add it manually to `~/.claude.json` under `mcpServers`:
 
 Use the same `command` / `args` pattern in your client's MCP config file.
 
+### Re-registering after reinstall (Claude Code)
+
+If the MCP server stops appearing in Claude Code after a bridge reinstall or the command path changes, re-run one of the registration commands above. Use `--scope project` when you want a repo-local `.mcp.json`, or `--scope user` when you want the server available from any working directory via `~/.claude.json`.
+
+```bash
+# project-scoped (.mcp.json in the current repo)
+claude mcp add --transport stdio --scope project vs-ide-bridge "C:\Program Files\VsIdeBridge\service\VsIdeBridgeService.exe" mcp-server
+
+# user-scoped (~/.claude.json, available everywhere)
+claude mcp add --transport stdio --scope user vs-ide-bridge "C:\Program Files\VsIdeBridge\service\VsIdeBridgeService.exe" mcp-server
+```
+
+To verify registration took effect:
+
+```bash
+claude mcp list
+```
+
+After adding, restart Claude Code — the MCP server is launched as a child process on session start. VS with the extension must already be running so that discovery can find the named-pipe registration.
+
 ### Tool safety
 
 If your client supports per-tool controls, disable `shell_exec` by default:
@@ -109,6 +150,7 @@ If your client supports per-tool controls, disable `shell_exec` by default:
 {
   "mcpServers": {
     "vs-ide-bridge": {
+      "type": "stdio",
       "command": "C:\\Program Files\\VsIdeBridge\\service\\VsIdeBridgeService.exe",
       "args": ["mcp-server"],
       "disabledTools": ["shell_exec"]
@@ -145,7 +187,7 @@ Connect to the right VS instance and manage the current session.
 
 Find files, inspect symbols, read code, and trace definitions and references.
 
-`find_files` · `find_text` · `find_text_batch` · `search_symbols` · `read_file` · `read_file_batch` · `file_outline` · `file_symbols` · `symbol_info` · `peek_definition` · `goto_definition` · `goto_implementation` · `find_references` · `count_references` · `call_hierarchy` · `smart_context`
+`find_files` · `glob` · `find_text` · `find_text_batch` · `search_symbols` · `read_file` · `read_file_batch` · `file_outline` · `file_symbols` · `symbol_info` · `peek_definition` · `goto_definition` · `goto_implementation` · `find_references` · `count_references` · `call_hierarchy` · `smart_context`
 
 ### diagnostics — Errors and build
 

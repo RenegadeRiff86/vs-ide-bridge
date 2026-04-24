@@ -100,17 +100,29 @@ internal sealed partial class DocumentService
             .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar)
             .TrimStart(Path.DirectorySeparatorChar);
 
+        List<string> rootedCandidates = [];
+
         foreach (string root in EnumerateDocumentSearchRoots(dte))
         {
             string candidate = PathNormalization.NormalizeFilePath(Path.Combine(root, normalizedRelativePath));
-            if (File.Exists(candidate))
+            if (File.Exists(candidate) && !rootedCandidates.Contains(candidate, StringComparer.OrdinalIgnoreCase))
             {
-                return candidate;
+                rootedCandidates.Add(candidate);
             }
         }
 
+        if (rootedCandidates.Count > 0)
+        {
+            return rootedCandidates
+                .OrderByDescending(path => IsSourceTreePath(path))
+                .ThenBy(path => IsBuildArtifactPath(path))
+                .ThenBy(path => path.Length)
+                .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .First();
+        }
+
         string targetFileName = Path.GetFileName(normalizedRelativePath);
-        string? fileNameMatch = null;
+        List<string> matchingPaths = [];
         foreach (Document document in EnumerateOpenDocuments(dte))
         {
             string? documentPath = TryGetDocumentFullName(document);
@@ -124,16 +136,30 @@ internal sealed partial class DocumentService
             if (comparableDocumentPath.EndsWith(Path.DirectorySeparatorChar + normalizedRelativePath, StringComparison.OrdinalIgnoreCase) ||
                 comparableDocumentPath.EndsWith(normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
             {
-                return normalizedDocumentPath;
+                matchingPaths.Add(normalizedDocumentPath);
+                continue;
             }
 
-            if (fileNameMatch is null && string.Equals(Path.GetFileName(comparableDocumentPath), targetFileName, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(Path.GetFileName(comparableDocumentPath), targetFileName, StringComparison.OrdinalIgnoreCase))
             {
-                fileNameMatch = normalizedDocumentPath;
+                matchingPaths.Add(normalizedDocumentPath);
             }
         }
 
-        return fileNameMatch;
+        if (matchingPaths.Count == 0)
+        {
+            return null;
+        }
+
+        return matchingPaths
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(path => path.EndsWith(Path.DirectorySeparatorChar + normalizedRelativePath, StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(path => IsSourceTreePath(path))
+            .ThenBy(path => IsBuildArtifactPath(path))
+            .ThenBy(path => path.Length)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .First();
     }
 
     private static IReadOnlyList<string> EnumerateDocumentSearchRoots(DTE2 dte)
@@ -280,6 +306,8 @@ internal sealed partial class DocumentService
             }
         }
 
+        matches = PreferMatches(matches, document => TryGetDocumentFullName(document) is string path && IsSourceTreePath(path));
+        matches = PreferMatches(matches, document => TryGetDocumentFullName(document) is string path && !IsBuildArtifactPath(path));
         matches = PreferMatches(matches, IsProjectBackedDocument);
         matches = PreferMatches(matches, document => !IsReviewArtifactDocument(document));
         matches = PreferMatches(matches, document => !IsOutputDocument(document));
@@ -330,6 +358,7 @@ internal sealed partial class DocumentService
             return null;
         }
 
+        List<string> matchingPaths = [];
         foreach (Document document in EnumerateOpenDocuments(dte))
         {
             string? documentPath = TryGetDocumentFullName(document);
@@ -340,10 +369,36 @@ internal sealed partial class DocumentService
 
             if (string.Equals(Path.GetFileName(documentPath), fileName, StringComparison.OrdinalIgnoreCase))
             {
-                return documentPath;
+                matchingPaths.Add(documentPath!);
             }
         }
 
-        return null;
+        if (matchingPaths.Count == 0)
+        {
+            return null;
+        }
+
+        return matchingPaths
+            .OrderByDescending(path => IsSourceTreePath(path))
+            .ThenBy(path => IsBuildArtifactPath(path))
+            .ThenBy(path => path.Length)
+            .ThenBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .First();
+    }
+
+    private static bool IsSourceTreePath(string path)
+    {
+        string normalizedPath = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        return normalizedPath.IndexOf("\\src\\", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool IsBuildArtifactPath(string path)
+    {
+        string normalizedPath = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        return normalizedPath.IndexOf("\\build\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            normalizedPath.IndexOf("\\bin\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            normalizedPath.IndexOf("\\obj\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            normalizedPath.IndexOf("\\out\\", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            normalizedPath.IndexOf("\\output\\", StringComparison.OrdinalIgnoreCase) >= 0;
     }
 }

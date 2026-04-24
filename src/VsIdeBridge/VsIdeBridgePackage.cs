@@ -217,8 +217,8 @@ public sealed class VsIdeBridgePackage : AsyncPackage, IAsyncDisposable
         {
             File.Delete(flagFile);
         }
-        catch (IOException) { /* intentional: flag file cleanup — deletion failure is non-fatal */ }
-        catch (UnauthorizedAccessException) { /* intentional: flag file cleanup — deletion failure is non-fatal */ }
+        catch (IOException ex) { BridgeActivityLog.LogWarning(nameof(VsIdeBridgePackage), $"Failed to delete startup flag file '{flagFile}'", ex); }
+        catch (UnauthorizedAccessException ex) { BridgeActivityLog.LogWarning(nameof(VsIdeBridgePackage), $"Failed to delete startup flag file '{flagFile}'", ex); }
         return true;
     }
 
@@ -235,8 +235,8 @@ public sealed class VsIdeBridgePackage : AsyncPackage, IAsyncDisposable
             File.Delete(flagFile);
             return string.IsNullOrWhiteSpace(solutionPath) ? null : solutionPath;
         }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
+        catch (IOException ex) { BridgeActivityLog.LogWarning(nameof(VsIdeBridgePackage), $"Failed to read startup solution flag '{flagFile}'", ex); return null; }
+        catch (UnauthorizedAccessException ex) { BridgeActivityLog.LogWarning(nameof(VsIdeBridgePackage), $"Failed to read startup solution flag '{flagFile}'", ex); return null; }
     }
 
     private async Task InitializeDteAsync(IdeBridgeRuntime runtime)

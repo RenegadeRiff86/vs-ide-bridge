@@ -38,9 +38,13 @@ internal sealed class StdioHostLease : IDisposable
         {
             _monitorTask.Wait(TimeSpan.FromSeconds(2));
         }
-        catch
+        catch (AggregateException ex)
         {
-            // best effort shutdown
+            McpServerLog.WriteException("failed to wait for stdio host monitor shutdown", ex);
+        }
+        catch (ObjectDisposedException ex)
+        {
+            McpServerLog.WriteException("failed to wait for stdio host monitor shutdown", ex);
         }
         finally
         {

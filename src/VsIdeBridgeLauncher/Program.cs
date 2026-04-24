@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
+using System.Globalization;
 
 namespace VsIdeBridgeLauncher
 {
@@ -19,6 +20,7 @@ namespace VsIdeBridgeLauncher
         private const int StartupValidationTimeoutMilliseconds = 30_000;
         private const int StartupPollMilliseconds = 250;
         private const int ProcessExitWaitMilliseconds = 5000;
+        private static readonly char[] QuoteArgumentSpecialCharacters = [' ', '\t', '"'];
 
         private static int Main(string[] args)
         {
@@ -116,11 +118,9 @@ namespace VsIdeBridgeLauncher
 
         private static void HandleBrokerConnection(NamedPipeServerStream server)
         {
-            using StreamReader reader = new(server, Encoding.UTF8, false, 1024, true);
-            using StreamWriter writer = new(server, new UTF8Encoding(false), 1024, true)
-            {
-                AutoFlush = true
-            };
+            // leaveOpen=true on both: the caller owns the server stream lifetime.
+            StreamReader reader = new(server, Encoding.UTF8, false, 1024, true);
+            StreamWriter writer = new(server, new UTF8Encoding(false), 1024, true) { AutoFlush = true };
 
             BrokerRequest request = ParseBrokerRequest(reader.ReadLine());
             if (!request.IsValid)
@@ -140,7 +140,7 @@ namespace VsIdeBridgeLauncher
             }
 
             writer.Write("ok\t");
-            writer.WriteLine(launchAttempt.ProcessId.Value.ToString());
+            writer.WriteLine(launchAttempt.ProcessId.Value.ToString(CultureInfo.InvariantCulture));
         }
 
         private static BrokerRequest ParseBrokerRequest(string request)
@@ -165,7 +165,7 @@ namespace VsIdeBridgeLauncher
         {
             if (!File.Exists(devenvPath))
             {
-                return LaunchAttemptResult.Failed(string.Format("devenv.exe not found: {0}", devenvPath), new List<Process>());
+                return LaunchAttemptResult.Failed($"devenv.exe not found: {devenvPath}", []);
             }
 
             ProcessStartInfo startInfo = new()
@@ -185,7 +185,7 @@ namespace VsIdeBridgeLauncher
             using Process process = Process.Start(startInfo);
             if (process == null)
             {
-                return LaunchAttemptResult.Failed("Visual Studio launch failed: Process.Start returned null.", new List<Process>());
+                return LaunchAttemptResult.Failed("Visual Studio launch failed: Process.Start returned null.", []);
             }
 
             LaunchAttemptResult launchAttempt = WaitForVisualStudioStartup(process, existingProcessIds);
@@ -221,7 +221,7 @@ namespace VsIdeBridgeLauncher
 
                 if (index + 1 >= args.Length)
                 {
-                    throw new InvalidOperationException(string.Format("Missing value for argument '{0}'.", argument));
+                    throw new InvalidOperationException($"Missing value for argument '{argument}'.");
                 }
 
                 options[argument] = args[++index];
@@ -232,7 +232,7 @@ namespace VsIdeBridgeLauncher
 
         private static LaunchAttemptResult WaitForVisualStudioStartup(Process process, HashSet<int> existingProcessIds)
         {
-            List<Process> launchedProcesses = new();
+            List<Process> launchedProcesses = [];
             Stopwatch stopwatch = Stopwatch.StartNew();
             while (stopwatch.ElapsedMilliseconds < StartupValidationTimeoutMilliseconds)
             {
@@ -281,7 +281,7 @@ namespace VsIdeBridgeLauncher
 
         private static HashSet<int> CaptureExistingDevenvProcessIds()
         {
-            HashSet<int> processIds = new();
+            HashSet<int> processIds = [];
             Process[] processes = Process.GetProcessesByName("devenv");
             for (int index = 0; index < processes.Length; index++)
             {
@@ -295,8 +295,8 @@ namespace VsIdeBridgeLauncher
         private static LauncherProcessCatalog CaptureLaunchedDevenvProcesses(HashSet<int> existingProcessIds, List<Process> launchedProcesses)
         {
             Process[] processes = Process.GetProcessesByName("devenv");
-            Dictionary<int, Process> candidatesById = new();
-            List<LauncherProcessSnapshot> snapshots = new();
+            Dictionary<int, Process> candidatesById = [];
+            List<LauncherProcessSnapshot> snapshots = [];
 
             for (int index = 0; index < processes.Length; index++)
             {
@@ -365,11 +365,11 @@ namespace VsIdeBridgeLauncher
         private static IEnumerable<string> GetTempRoots()
         {
             string[] candidates =
-            {
+            [
                 Environment.GetEnvironmentVariable("TEMP"),
                 Environment.GetEnvironmentVariable("TMP"),
                 Path.GetTempPath(),
-            };
+            ];
 
             IReadOnlyList<string> normalized = LauncherProcessSelection.NormalizeTempRoots(candidates);
             for (int index = 0; index < normalized.Count; index++)
@@ -444,17 +444,11 @@ namespace VsIdeBridgeLauncher
             }
         }
 
-        private sealed class LauncherProcessCatalog
+        private sealed class LauncherProcessCatalog(Dictionary<int, Process> processesById, List<LauncherProcessSnapshot> snapshots)
         {
-            public LauncherProcessCatalog(Dictionary<int, Process> processesById, List<LauncherProcessSnapshot> snapshots)
-            {
-                ProcessesById = processesById;
-                Snapshots = snapshots;
-            }
+            public Dictionary<int, Process> ProcessesById { get; } = processesById;
 
-            public Dictionary<int, Process> ProcessesById { get; }
-
-            public List<LauncherProcessSnapshot> Snapshots { get; }
+            public List<LauncherProcessSnapshot> Snapshots { get; } = snapshots;
         }
 
         private sealed class BrokerRequest
@@ -493,7 +487,7 @@ namespace VsIdeBridgeLauncher
                 return "\"\"";
             }
 
-            if (value.IndexOfAny(new[] { ' ', '\t', '"' }) < 0)
+            if (value.IndexOfAny(QuoteArgumentSpecialCharacters) < 0)
             {
                 return value;
             }
@@ -532,7 +526,7 @@ namespace VsIdeBridgeLauncher
             payload.Append(success ? "true" : "false");
             payload.Append(',');
             payload.Append("\"pid\":");
-            payload.Append(pid.HasValue ? pid.Value.ToString() : "null");
+            payload.Append(pid.HasValue ? pid.Value.ToString(CultureInfo.InvariantCulture) : "null");
             payload.Append(',');
             payload.Append("\"error\":");
             payload.Append(error == null ? "null" : QuoteJson(error));

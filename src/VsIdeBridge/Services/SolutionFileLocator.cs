@@ -40,6 +40,7 @@ internal static class SolutionFileLocator
         string? queryFileName = Path.GetFileName(trimmedQuery.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
 
         return [.. EnumerateSolutionFiles(dte)
+            .Where(item => IsAccessibleSolutionPath(dte, item.Path))
             .Select(item => new Match
             {
                 Path = item.Path,
@@ -82,6 +83,28 @@ internal static class SolutionFileLocator
         }
 
         return null;
+    }
+
+    private static bool IsAccessibleSolutionPath(DTE2 dte, string path)
+    {
+        ThreadHelper.ThrowIfNotOnUIThread();
+
+        if (File.Exists(path))
+        {
+            return true;
+        }
+
+        foreach (Document document in dte.Documents)
+        {
+            string? fullName = document?.FullName;
+            if (!string.IsNullOrWhiteSpace(fullName) &&
+                PathNormalization.AreEquivalent(fullName, path))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static IReadOnlyList<Match> FindDiskMatches(
@@ -214,6 +237,30 @@ internal static class SolutionFileLocator
         if (candidatePath.IndexOf(rawQuery, StringComparison.OrdinalIgnoreCase) >= 0)
         {
             score = Math.Max(score, 300);
+        }
+
+        score += GetPathPreferenceScore(candidatePath);
+
+        return score;
+    }
+
+    private static int GetPathPreferenceScore(string candidatePath)
+    {
+        string normalizedPath = NormalizeQuery(candidatePath);
+        int score = 0;
+
+        if (normalizedPath.Contains("/src/", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 30;
+        }
+
+        if (normalizedPath.Contains("/build/", StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.Contains("/bin/", StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.Contains("/obj/", StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.Contains("/out/", StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.Contains("/output/", StringComparison.OrdinalIgnoreCase))
+        {
+            score -= 30;
         }
 
         return score;

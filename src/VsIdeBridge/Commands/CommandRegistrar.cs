@@ -74,6 +74,7 @@ internal static class CommandRegistrar
         RegisterCommandSafely(() => new SearchNavigationCommands.IdeGetFileOutlineCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SearchNavigationCommands.IdeSearchSymbolsCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SearchNavigationCommands.IdeGetQuickInfoCommand(package, runtime, commandService));
+        RegisterCommandSafely(() => new SearchNavigationCommands.IdePeekDefinitionCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SearchNavigationCommands.IdeGetDocumentSlicesCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SearchNavigationCommands.IdeGetFileSymbolsCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new PatchCommands.IdeApplyEditorPatchCommand(package, runtime, commandService));

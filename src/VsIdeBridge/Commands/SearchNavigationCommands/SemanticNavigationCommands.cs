@@ -316,6 +316,27 @@ internal static partial class SearchNavigationCommands
         }
     }
 
+    internal sealed class IdePeekDefinitionCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x0265)
+    {
+        protected override string CanonicalName => "Tools.IdePeekDefinition";
+
+        protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
+        {
+            JObject peekDefinition = await context.Runtime.DocumentService.PeekDefinitionAsync(
+                context.Dte,
+                args.GetString("file"),
+                args.GetString(DocumentArgument),
+                args.GetNullableInt32("line"),
+                args.GetNullableInt32("column")).ConfigureAwait(true);
+
+            bool found = (bool?)peekDefinition["definitionFound"] == true;
+            string symbol = (string?)peekDefinition["word"] ?? string.Empty;
+            return new CommandExecutionResult(
+                found ? $"Peeked definition for '{symbol}'." : $"Peek definition: no definition found for '{symbol}'.",
+                peekDefinition);
+        }
+    }
+
     internal sealed class IdeGetFileSymbolsCommand(VsIdeBridgePackage package, IdeBridgeRuntime runtime, OleMenuCommandService commandService) : IdeCommandBase(package, runtime, commandService, 0x022D)
     {
         protected override string CanonicalName => "Tools.IdeGetFileSymbols";

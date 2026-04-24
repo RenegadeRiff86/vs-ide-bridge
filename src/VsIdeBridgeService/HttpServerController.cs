@@ -1,17 +1,18 @@
 using System.Text.Json.Nodes;
+using VsIdeBridge.Shared;
 
 namespace VsIdeBridgeService;
 
 /// <summary>
 /// Manages the optional HTTP MCP server lifecycle.
-/// The enabled state is persisted to a flag file so it survives process restarts.
+/// The enabled state is persisted to a machine-shared flag file so it survives
+/// process restarts and stays in sync with the Visual Studio extension toggle.
 /// Call <see cref="RestoreState"/> from service startup and
 /// <see cref="StopAndWait"/> from service shutdown.
 /// </summary>
 internal static class HttpServerController
 {
-    private static readonly string FlagFilePath = System.IO.Path.Combine(
-        System.IO.Path.GetTempPath(), "vs-ide-bridge", "http-enabled.flag");
+    private static readonly string FlagFilePath = HttpServerStatePaths.GetHttpEnabledFlagPath();
 
     private static readonly string[] ServerArgs = ["--port", "8080"];
 

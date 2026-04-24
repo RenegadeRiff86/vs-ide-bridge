@@ -2,6 +2,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using VsIdeBridge.Infrastructure;
 using VsIdeBridge.Services;
 
@@ -39,5 +40,25 @@ internal static partial class DebugBuildCommands
             ["count"] = commandResult.Length,
             ["rows"] = new JArray(commandResult.Select(r => r.DeepClone())),
         };
+    }
+
+    private static Task<JObject> GetSeverityDiagnosticsAsync(
+        IdeCommandContext context,
+        bool waitForIntellisense,
+        int timeoutMilliseconds,
+        bool quickSnapshot,
+        string severity,
+        int? max)
+    {
+        return GetDiagnosticsWithFallbackAsync(
+            context,
+            waitForIntellisense,
+            timeoutMilliseconds,
+            quickSnapshot,
+            new ErrorListQuery
+            {
+                Severity = severity,
+                Max = max,
+            });
     }
 }

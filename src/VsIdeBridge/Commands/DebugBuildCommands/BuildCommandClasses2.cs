@@ -19,8 +19,8 @@ internal static partial class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             int timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
-            await EnsureCleanDiagnosticsAsync(context, args, timeout).ConfigureAwait(true);
-            bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, true);
+            bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, false);
+            await EnsureCleanDiagnosticsAsync(context, args, timeout, quickPreflight: !waitForCompletion).ConfigureAwait(true);
 
             string? project = args.GetString("project");
             JObject buildResult;
@@ -87,8 +87,8 @@ internal static partial class DebugBuildCommands
         protected override async Task<CommandExecutionResult> ExecuteAsync(IdeCommandContext context, CommandArguments args)
         {
             int timeout = args.GetInt32(TimeoutMillisecondsArgument, DefaultBuildTimeoutMilliseconds);
-            await EnsureCleanDiagnosticsAsync(context, args, timeout).ConfigureAwait(true);
             bool waitForCompletion = args.GetBoolean(WaitForCompletionArgument, false);
+            await EnsureCleanDiagnosticsAsync(context, args, timeout, quickPreflight: !waitForCompletion).ConfigureAwait(true);
 
             await context.Runtime.BridgeApprovalService.RequestApprovalAsync(
                 context,
@@ -131,13 +131,13 @@ internal static partial class DebugBuildCommands
         {
             bool quick = args.GetBoolean("quick", false);
             bool forceRefresh = GetDiagnosticsForceRefresh(args);
-            JObject errorListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
+            JObject errorListResult = await GetDiagnosticsWithFallbackAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
                 CreateErrorListQuery(args),
-                forceRefresh: forceRefresh).ConfigureAwait(true);
+                forceRefresh).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Captured {errorListResult["count"]} Error List row(s).", errorListResult);
         }
@@ -151,13 +151,13 @@ internal static partial class DebugBuildCommands
         {
             bool quick = args.GetBoolean("quick", false);
             bool forceRefresh = GetDiagnosticsForceRefresh(args);
-            JObject warningListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
+            JObject warningListResult = await GetDiagnosticsWithFallbackAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
                 CreateErrorListQuery(args, "warning"),
-                forceRefresh: forceRefresh).ConfigureAwait(true);
+                forceRefresh).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Captured {warningListResult["count"]} warning row(s).", warningListResult);
         }
@@ -171,13 +171,13 @@ internal static partial class DebugBuildCommands
         {
             bool quick = args.GetBoolean("quick", false);
             bool forceRefresh = GetDiagnosticsForceRefresh(args);
-            JObject messageListResult = await context.Runtime.ErrorListService.GetErrorListAsync(
+            JObject messageListResult = await GetDiagnosticsWithFallbackAsync(
                 context,
                 args.GetBoolean("wait-for-intellisense", !quick),
                 args.GetInt32(TimeoutMillisecondsArgument, GetQuickDiagnosticsTimeout(quick)),
                 quick,
                 CreateErrorListQuery(args, "message"),
-                forceRefresh: forceRefresh).ConfigureAwait(true);
+                forceRefresh).ConfigureAwait(true);
 
             return new CommandExecutionResult($"Captured {messageListResult["count"]} message row(s).", messageListResult);
         }
@@ -195,12 +195,12 @@ internal static partial class DebugBuildCommands
                 context,
                 timeout,
                 args.GetBoolean(WaitForIntellisenseArgument, true)).ConfigureAwait(true);
-            JObject errors = await context.Runtime.ErrorListService.GetErrorListAsync(
+            JObject errors = await GetDiagnosticsWithFallbackAsync(
                 context,
-                false,
+                waitForIntellisense: false,
                 timeout,
-                query: CreateErrorListQuery(args),
-                includeBuildOutputFallback: true).ConfigureAwait(true);
+                quickSnapshot: false,
+                CreateErrorListQuery(args)).ConfigureAwait(true);
 
             JObject buildAndErrorsResult = new()
             {
@@ -245,12 +245,12 @@ internal static partial class DebugBuildCommands
                 return CreateStartedResult("Code analysis", analysisResult);
             }
 
-            JObject errors = await context.Runtime.ErrorListService.GetErrorListAsync(
+            JObject errors = await GetDiagnosticsWithFallbackAsync(
                 context,
-                false,
+                waitForIntellisense: false,
                 timeout,
-                query: CreateErrorListQuery(args),
-                includeBuildOutputFallback: false).ConfigureAwait(true);
+                quickSnapshot: false,
+                CreateErrorListQuery(args)).ConfigureAwait(true);
             JObject result = new()
             {
                 ["analysis"] = analysisResult,

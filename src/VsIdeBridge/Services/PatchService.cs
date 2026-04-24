@@ -225,7 +225,7 @@ internal sealed partial class PatchService
                     result.DeletedLineMarkers).ConfigureAwait(true);
 
                 bool contentChanged = (bool?)writeResult["contentChanged"] ?? true;
-                bool verified = (bool?)writeResult["verified"] ?? false;
+                bool verified = await VerifyPatchedContentAsync(dte, documentService, paths.TargetPath, result.Content).ConfigureAwait(true);
                 alreadySatisfied = requestedContentChange && !contentChanged && verified;
 
                 if (paths.IsMove)
@@ -352,6 +352,26 @@ internal sealed partial class PatchService
             ["alreadySatisfied"] = alreadySatisfied,
             ["saved"] = true,
         };
+    }
+
+    private static async Task<bool> VerifyPatchedContentAsync(DTE2 dte, DocumentService documentService, string targetPath, string expectedContent)
+    {
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+        string currentContent = ReadContentFromEditorOrDisk(dte, targetPath);
+        if (string.Equals(currentContent, expectedContent, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        await documentService.ReloadDocumentAsync(targetPath).ConfigureAwait(true);
+        currentContent = ReadContentFromEditorOrDisk(dte, targetPath);
+        if (string.Equals(currentContent, expectedContent, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        throw new CommandErrorException("write_failed", $"Patched content could not be verified after write: {targetPath}");
     }
 }
 

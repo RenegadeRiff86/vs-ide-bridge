@@ -67,9 +67,17 @@ internal sealed class ServiceControlClient : IAsyncDisposable
                 await SendAsync("CLIENT_DISCONNECTED", CancellationToken.None).ConfigureAwait(false);
             }
         }
-        catch
+        catch (IOException ex)
         {
-            // best effort disconnect notification
+            McpServerLog.WriteException("failed to send CLIENT_DISCONNECTED notification", ex);
+        }
+        catch (ObjectDisposedException ex)
+        {
+            McpServerLog.WriteException("failed to send CLIENT_DISCONNECTED notification", ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            McpServerLog.WriteException("failed to send CLIENT_DISCONNECTED notification", ex);
         }
         finally
         {

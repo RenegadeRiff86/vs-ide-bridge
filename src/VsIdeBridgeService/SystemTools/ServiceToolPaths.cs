@@ -64,6 +64,46 @@ internal static class ServiceToolPaths
         return Environment.CurrentDirectory;
     }
 
+    /// <summary>
+    /// Returns the root directory of the git repository that contains the solution.
+    /// Walks up from the solution directory looking for a <c>.git</c> directory or file.
+    /// Falls back to the solution directory when no git root is found.
+    /// </summary>
+    public static string ResolveRepoRootDirectory(BridgeConnection bridge)
+    {
+        string solutionDirectory = ResolveSolutionDirectory(bridge);
+        return FindGitRoot(solutionDirectory) ?? solutionDirectory;
+    }
+
+    /// <summary>
+    /// Walks up from <paramref name="startDirectory"/> to find the directory that contains
+    /// a <c>.git</c> entry (directory for normal repos, file for git worktrees).
+    /// Returns <see langword="null"/> when no git root is found within a reasonable depth.
+    /// </summary>
+    public static string? FindGitRoot(string startDirectory)
+    {
+        string current = startDirectory;
+        for (int depth = 0; depth < 10 && !string.IsNullOrWhiteSpace(current); depth++)
+        {
+            if (Directory.Exists(Path.Combine(current, ".git")) ||
+                File.Exists(Path.Combine(current, ".git")))
+            {
+                return current;
+            }
+
+            string parent = Path.GetDirectoryName(current) ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(parent) ||
+                string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            current = parent;
+        }
+
+        return null;
+    }
+
     private static string? TryGetSolutionDirectory(string? solutionPath)
     {
         if (string.IsNullOrWhiteSpace(solutionPath))

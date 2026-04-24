@@ -1,6 +1,5 @@
 using EnvDTE;
 using EnvDTE80;
-using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Threading;
@@ -25,6 +24,7 @@ internal sealed class BuildService(ReadinessService readinessService)
     private const string ActivePlatformKey = "activePlatform";
 
     private readonly ReadinessService _readinessService = readinessService;
+    private readonly BuildBackgroundOperationTracker _backgroundOperations = new();
 
     public async Task<JObject> StartBuildSolutionAsync(IdeCommandContext context, int timeoutMilliseconds, string? configuration, string? platform)
     {
@@ -104,7 +104,14 @@ internal sealed class BuildService(ReadinessService readinessService)
     public async Task<JObject> GetBuildStateAsync(DTE2 dte)
     {
         await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-        return GetBuildStateCore(dte);
+
+        JObject buildStatus = GetBuildStateCore(dte);
+        if (_backgroundOperations.GetSnapshot() is { } backgroundOperation)
+        {
+            buildStatus["backgroundOperation"] = backgroundOperation;
+        }
+
+        return buildStatus;
     }
 
     private static JObject GetBuildStateCore(DTE2 dte)
@@ -251,7 +258,7 @@ internal sealed class BuildService(ReadinessService readinessService)
                 await Task.Yield();
                 await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync(CancellationToken.None);
                 try { dte.ExecuteCommand("Build.RunCodeAnalysisonSolution"); }
-                catch { /* analysis failed to start; waiter will time out */ }
+                catch (COMException ex) { BridgeActivityLog.LogWarning(nameof(BuildService), "Failed to start solution code analysis command", ex); }
             });
             try
             {
@@ -410,15 +417,42 @@ internal sealed class BuildService(ReadinessService readinessService)
     {
         IdeCommandContext detached = new(context.Package, context.Dte, context.Logger, context.Runtime, CancellationToken.None);
         DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+        string startedAtUtc = startedAt.ToString("O");
 
-        JoinableTask backgroundTask = context.Package.JoinableTaskFactory.RunAsync(async () =>
+        _backgroundOperations.MarkQueued(operation, startedAt);
+
+        JoinableTask<JObject> backgroundTask = context.Package.JoinableTaskFactory.RunAsync(async () =>
         {
             await Task.Yield();
-            await operationAsync(detached).ConfigureAwait(true);
+
+            _backgroundOperations.MarkRunning(operation, startedAtUtc);
+            return await operationAsync(detached).ConfigureAwait(true);
         });
 
+        _ = backgroundTask.Task.ContinueWith(task =>
+        {
+            if (task.Status == TaskStatus.RanToCompletion)
+            {
+                _backgroundOperations.Complete(operation, startedAtUtc, task.Result);
+                return;
+            }
+
+            Exception failure = task.Exception?.GetBaseException()
+                ?? new OperationCanceledException($"The background '{operation}' operation did not complete.");
+            _backgroundOperations.Fail(operation, startedAtUtc, failure);
+        },
+        CancellationToken.None,
+        TaskContinuationOptions.ExecuteSynchronously,
+        TaskScheduler.Default);
+
         BuildServiceHelpers.ObserveBackgroundOperation(backgroundTask.Task, detached, operation);
-        return BuildServiceHelpers.CreateStartedOperationResult(startedAt, operation);
+        JObject startedResult = BuildServiceHelpers.CreateStartedOperationResult(startedAt, operation);
+        if (_backgroundOperations.GetSnapshot() is { } backgroundOperation)
+        {
+            startedResult["backgroundOperation"] = backgroundOperation;
+        }
+
+        return startedResult;
     }
 
     private static async Task<(DTE2 Dte, SolutionBuild SolutionBuild)> PrepareBuildAsync(IdeCommandContext context, string? configuration, string? platform)
@@ -565,51 +599,4 @@ internal sealed class BuildService(ReadinessService readinessService)
         };
     }
 
-    private sealed class BuildCompletionWaiter : IVsUpdateSolutionEvents
-    {
-        private readonly IVsSolutionBuildManager2 _buildManager;
-        private readonly TaskCompletionSource<bool> _tcs = new();
-        private uint _cookie;
-
-        internal Task CompletionTask => _tcs.Task;
-
-        internal int LastBuildInfo { get; private set; }
-
-        internal BuildCompletionWaiter(IVsSolutionBuildManager2 buildManager)
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            _buildManager = buildManager;
-            _buildManager.AdviseUpdateSolutionEvents(this, out _cookie);
-        }
-
-        internal void Unsubscribe()
-        {
-            ThreadHelper.ThrowIfNotOnUIThread();
-            if (_cookie != 0)
-            {
-                _buildManager.UnadviseUpdateSolutionEvents(_cookie);
-                _cookie = 0;
-            }
-            _tcs.TrySetCanceled();
-        }
-
-        int IVsUpdateSolutionEvents.UpdateSolution_Begin(ref int pfCancelUpdate) => VSConstants.S_OK;
-
-        int IVsUpdateSolutionEvents.UpdateSolution_Done(int fSucceeded, int fModified, int fCancelCommand)
-        {
-            LastBuildInfo = fSucceeded != 0 ? 0 : 1;
-            _tcs.TrySetResult(true);
-            return VSConstants.S_OK;
-        }
-
-        int IVsUpdateSolutionEvents.UpdateSolution_StartUpdate(ref int pfCancelUpdate) => VSConstants.S_OK;
-
-        int IVsUpdateSolutionEvents.UpdateSolution_Cancel()
-        {
-            _tcs.TrySetResult(true);
-            return VSConstants.S_OK;
-        }
-
-        int IVsUpdateSolutionEvents.OnActiveProjectCfgChange(IVsHierarchy pIVsHierarchy) => VSConstants.S_OK;
-    }
 }

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 
@@ -148,9 +149,17 @@ internal static class GitRunner
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
         }
-        catch
+        catch (InvalidOperationException ex)
         {
-            // Already gone — ignore.
+            McpServerLog.WriteException("failed to terminate git child process", ex);
+        }
+        catch (Win32Exception ex)
+        {
+            McpServerLog.WriteException("failed to terminate git child process", ex);
+        }
+        catch (NotSupportedException ex)
+        {
+            McpServerLog.WriteException("failed to terminate git child process", ex);
         }
     }
 }

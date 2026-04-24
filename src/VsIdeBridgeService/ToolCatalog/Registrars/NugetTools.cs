@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -198,7 +199,9 @@ internal static partial class ToolCatalog
     private static void TryKillProcess(Process process)
     {
         try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        catch { /* already gone */ }
+        catch (InvalidOperationException ex) { McpServerLog.WriteException("failed to terminate NuGet child process", ex); }
+        catch (Win32Exception ex) { McpServerLog.WriteException("failed to terminate NuGet child process", ex); }
+        catch (NotSupportedException ex) { McpServerLog.WriteException("failed to terminate NuGet child process", ex); }
     }
 
     private static JsonObject BuildDependencyScanPayload(

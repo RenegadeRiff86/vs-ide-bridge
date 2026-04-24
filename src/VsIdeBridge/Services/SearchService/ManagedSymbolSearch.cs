@@ -146,30 +146,32 @@ internal sealed partial class SearchService
         {
             "document" => string.IsNullOrWhiteSpace(activeDocument.Path)
                 ? []
-                : new[] { activeDocument },
+                : [activeDocument],
             "open" => EnumerateOpenFiles(dte),
             "project" => EnumerateSolutionFiles(dte)
-                .Where(item => string.Equals(item.ProjectUniqueName, projectUniqueName, StringComparison.OrdinalIgnoreCase)),
+                .Where(item => MatchesProjectFilter(item.ProjectUniqueName, projectUniqueName)),
             _ => EnumerateSolutionFiles(dte),
         };
+
+        // If project is supplied without scope:"project", honour the intent by applying the
+        // project filter on top of whatever scope resolved to (but not document/open — those
+        // are intentionally narrow and should not be widened).
+        if (!string.IsNullOrWhiteSpace(projectUniqueName)
+            && scope != "project" && scope != "document" && scope != "open")
+        {
+            files = files.Where(item => MatchesProjectFilter(item.ProjectUniqueName, projectUniqueName));
+        }
 
         if (!string.IsNullOrWhiteSpace(normalizedPathFilter))
         {
             files = files.Where(item => MatchesPathFilter(item.Path, normalizedPathFilter));
         }
 
-        Dictionary<string, string> pathToProject = [];
-        foreach ((string Path, string ProjectUniqueName) file in files)
-        {
-            if (!IsManagedSearchCandidate(file.Path) || pathToProject.ContainsKey(file.Path.ToLowerInvariant()))
-            {
-                continue;
-            }
-
-            pathToProject[file.Path.ToLowerInvariant()] = file.ProjectUniqueName;
-        }
-
-        return pathToProject;
+        // Use OrdinalIgnoreCase so all lookup sites work regardless of path casing.
+        return files
+            .Where(file => IsManagedSearchCandidate(file.Path))
+            .GroupBy(file => file.Path, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().ProjectUniqueName, StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool IsManagedSearchCandidate(string path)
@@ -182,6 +184,13 @@ internal sealed partial class SearchService
         string extension = Path.GetExtension(path);
         return s_managedSearchExtensions.Contains(extension.ToLowerInvariant());
     }
+
+    // Matches DTE ProjectUniqueName (e.g. "src\VsIdeBridge\VsIdeBridge.csproj") against a
+    // caller-supplied filter that may be a short name ("VsIdeBridge") or the full unique name.
+    private static bool MatchesProjectFilter(string projectUniqueName, string? filter)
+        => !string.IsNullOrWhiteSpace(filter)
+        && (string.Equals(projectUniqueName, filter, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(Path.GetFileNameWithoutExtension(projectUniqueName), filter, StringComparison.OrdinalIgnoreCase));
 
     private static async Task<ManagedSearchOutcome> SearchManagedSymbolsCoreAsync(
         IComponentModel componentModel,
@@ -363,7 +372,7 @@ internal sealed partial class SearchService
                 }
 
                 string normalizedPath = PathNormalization.NormalizeFilePath(lineSpan.Path);
-                if (!pathToProject.TryGetValue(normalizedPath.ToLowerInvariant(), out string? candidateProject))
+                if (!pathToProject.TryGetValue(normalizedPath, out string? candidateProject))
                 {
                     continue;
                 }

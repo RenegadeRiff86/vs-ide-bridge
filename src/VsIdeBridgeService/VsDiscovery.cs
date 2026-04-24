@@ -37,7 +37,11 @@ internal static class VsDiscovery
         IReadOnlyList<BridgeInstance> merged = mode == DiscoveryMode.MemoryFirst
             ? Merge(memoryInstances, jsonInstances, preferPrimary: true)
             : Merge(memoryInstances, jsonInstances, preferPrimary: false);
-        return FilterLiveInstances(merged);
+        IReadOnlyList<BridgeInstance> liveInstances = FilterLiveInstances(merged);
+        IReadOnlyList<BridgeInstance> enriched = await EnrichIncompleteInstancesAsync(liveInstances).ConfigureAwait(false);
+        IReadOnlyList<BridgeInstance> withSolutionPaths =
+            [.. enriched.Where(static instance => !string.IsNullOrWhiteSpace(instance.SolutionPath))];
+        return withSolutionPaths.Count > 0 ? withSolutionPaths : enriched;
     }
 
     public static async Task<BridgeInstance> SelectAsync(BridgeInstanceSelector selector, DiscoveryMode mode = DiscoveryMode.MemoryFirst)
@@ -146,19 +150,8 @@ internal static class VsDiscovery
 
     private static async Task<IReadOnlyList<BridgeInstance>> ListJsonAsync()
     {
-        IEnumerable<string> tempDirs = new[]
-            {
-                Environment.GetEnvironmentVariable("TEMP"),
-                Environment.GetEnvironmentVariable("TMP"),
-                Path.GetTempPath(),
-            }
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(p => p!)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-
-        foreach (string tempDir in tempDirs)
+        foreach (string directory in EnumerateCandidatePipeDirectories())
         {
-            string directory = Path.Combine(tempDir, "vs-ide-bridge", "pipes");
             try
             {
                 if (!Directory.Exists(directory)) continue;
@@ -178,11 +171,55 @@ internal static class VsDiscovery
 
                 if (instances.Count > 0) return instances;
             }
-            catch (IOException) { /* intentional: pipe directory may be inaccessible or mid-cleanup — skip this discovery path */ }
-            catch (UnauthorizedAccessException) { /* intentional: pipe directory may be inaccessible or mid-cleanup — skip this discovery path */ }
+            catch (IOException ex) { McpServerLog.WriteException($"failed to scan discovery pipe directory '{directory}'", ex); }
+            catch (UnauthorizedAccessException ex) { McpServerLog.WriteException($"failed to scan discovery pipe directory '{directory}'", ex); }
         }
 
         return [];
+    }
+
+    private static HashSet<string> EnumerateCandidatePipeDirectories()
+    {
+        HashSet<string> directories = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string tempDir in new[]
+                 {
+                     Environment.GetEnvironmentVariable("TEMP"),
+                     Environment.GetEnvironmentVariable("TMP"),
+                     Path.GetTempPath(),
+                 }
+                 .Where(static p => !string.IsNullOrWhiteSpace(p))
+                 .Select(static p => p!))
+        {
+            directories.Add(Path.Combine(tempDir, "vs-ide-bridge", "pipes"));
+        }
+
+        string systemDrive = Environment.GetEnvironmentVariable("SystemDrive") ?? "C:";
+        string usersRoot = Path.Combine(systemDrive, "Users");
+        try
+        {
+            if (Directory.Exists(usersRoot))
+            {
+                foreach (string profileDir in Directory.GetDirectories(usersRoot))
+                {
+                    directories.Add(Path.Combine(profileDir, "AppData", "Local", "Temp", "vs-ide-bridge", "pipes"));
+                }
+            }
+        }
+        catch (IOException ex)
+        {
+            McpServerLog.WriteException($"failed to enumerate user profile temp discovery directories under '{usersRoot}'", ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            McpServerLog.WriteException($"failed to enumerate user profile temp discovery directories under '{usersRoot}'", ex);
+        }
+        catch (NotSupportedException ex)
+        {
+            McpServerLog.WriteException($"failed to enumerate user profile temp discovery directories under '{usersRoot}'", ex);
+        }
+
+        return directories;
     }
 
     private static async Task<BridgeInstance?> TryLoadJsonFileAsync(string path)
@@ -311,15 +348,45 @@ internal static class VsDiscovery
 
         foreach (BridgeInstance inst in first)
         {
-            if (seen.Add(inst.PipeName)) result.Add(inst);
+            if (seen.Add(inst.PipeName))
+            {
+                result.Add(inst);
+            }
         }
 
         foreach (BridgeInstance inst in second)
         {
-            if (seen.Add(inst.PipeName)) result.Add(inst);
+            int existingIndex = result.FindIndex(existing => string.Equals(existing.PipeName, inst.PipeName, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+            {
+                result[existingIndex] = ChoosePreferredInstance(result[existingIndex], inst, preferPrimary);
+                continue;
+            }
+
+            if (seen.Add(inst.PipeName))
+            {
+                result.Add(inst);
+            }
         }
 
         return result;
+    }
+
+    private static BridgeInstance ChoosePreferredInstance(BridgeInstance first, BridgeInstance second, bool preferFirst)
+    {
+        bool firstHasSolution = !string.IsNullOrWhiteSpace(first.SolutionPath);
+        bool secondHasSolution = !string.IsNullOrWhiteSpace(second.SolutionPath);
+        if (firstHasSolution != secondHasSolution)
+        {
+            return firstHasSolution ? first : second;
+        }
+
+        if (first.LastWriteTimeUtc != second.LastWriteTimeUtc)
+        {
+            return first.LastWriteTimeUtc >= second.LastWriteTimeUtc ? first : second;
+        }
+
+        return preferFirst ? first : second;
     }
 
     private static IReadOnlyList<BridgeInstance> FilterLiveInstances(IReadOnlyList<BridgeInstance> instances)
@@ -347,6 +414,84 @@ internal static class VsDiscovery
         return liveInstances;
     }
 
+    private static async Task<IReadOnlyList<BridgeInstance>> EnrichIncompleteInstancesAsync(IReadOnlyList<BridgeInstance> instances)
+    {
+        if (instances.Count == 0)
+        {
+            return instances;
+        }
+
+        List<BridgeInstance> enriched = [];
+        foreach (BridgeInstance instance in instances)
+        {
+            if (!string.IsNullOrWhiteSpace(instance.SolutionPath))
+            {
+                enriched.Add(instance);
+                continue;
+            }
+
+            BridgeInstance refreshed = await TryRefreshInstanceStateAsync(instance).ConfigureAwait(false);
+            enriched.Add(refreshed);
+        }
+
+        return enriched;
+    }
+
+    private static async Task<BridgeInstance> TryRefreshInstanceStateAsync(BridgeInstance instance)
+    {
+        try
+        {
+            if (instance.DiscoveryFile.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                BridgeInstance? refreshedFromFile = await TryLoadJsonFileAsync(instance.DiscoveryFile).ConfigureAwait(false);
+                if (refreshedFromFile is not null && !string.IsNullOrWhiteSpace(refreshedFromFile.SolutionPath))
+                {
+                    return refreshedFromFile;
+                }
+            }
+
+            await using VsPipeClient client = await VsPipeClient.CreateAsync(instance.PipeName, 3_000, 500).ConfigureAwait(false);
+            JsonObject response = await client.SendAsync(new JsonObject
+            {
+                ["id"] = "discover",
+                ["command"] = "state",
+                ["args"] = new JsonObject(),
+            }).ConfigureAwait(false);
+
+            JsonObject payload = response["Data"] as JsonObject
+                ?? response["data"] as JsonObject
+                ?? response;
+            string? solutionPath = payload["solutionPath"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(solutionPath))
+            {
+                return instance;
+            }
+
+            string solutionName = Path.GetFileName(solutionPath);
+            string label = string.IsNullOrWhiteSpace(instance.Label) || string.Equals(instance.Label, instance.PipeName, StringComparison.OrdinalIgnoreCase)
+                ? BuildFallbackLabel(solutionPath, instance.ProcessId, instance.PipeName)
+                : instance.Label;
+
+            return instance with
+            {
+                SolutionPath = solutionPath,
+                SolutionName = solutionName,
+                Label = label,
+            };
+        }
+        catch
+        {
+            return instance;
+        }
+    }
+
+    private static string BuildFallbackLabel(string solutionPath, int processId, string pipeName)
+    {
+        string solutionBaseName = Path.GetFileNameWithoutExtension(solutionPath);
+        string name = string.IsNullOrWhiteSpace(solutionBaseName) ? pipeName : solutionBaseName;
+        return processId > 0 ? $"{name} ({processId})" : name;
+    }
+
     private static bool IsLiveInstance(BridgeInstance instance)
     {
         if (instance.ProcessId <= 0)
@@ -369,8 +514,24 @@ internal static class VsDiscovery
 
             return IsWithinHeadlessGracePeriod(instance);
         }
-        catch
+        catch (ArgumentException ex)
         {
+            McpServerLog.WriteException($"failed to probe process liveness for '{instance.ProcessId}'", ex);
+            return false;
+        }
+        catch (InvalidOperationException ex)
+        {
+            McpServerLog.WriteException($"failed to probe process liveness for '{instance.ProcessId}'", ex);
+            return false;
+        }
+        catch (NotSupportedException ex)
+        {
+            McpServerLog.WriteException($"failed to probe process liveness for '{instance.ProcessId}'", ex);
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            McpServerLog.WriteException($"failed to probe process liveness for '{instance.ProcessId}'", ex);
             return false;
         }
     }
@@ -406,9 +567,17 @@ internal static class VsDiscovery
                 File.Delete(path);
             }
         }
-        catch
+        catch (IOException ex)
         {
-            // Best-effort cleanup only.
+            McpServerLog.WriteException($"failed to delete stale discovery file '{path}'", ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            McpServerLog.WriteException($"failed to delete stale discovery file '{path}'", ex);
+        }
+        catch (NotSupportedException ex)
+        {
+            McpServerLog.WriteException($"failed to delete stale discovery file '{path}'", ex);
         }
     }
 }
