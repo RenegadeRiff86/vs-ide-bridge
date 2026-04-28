@@ -130,12 +130,8 @@ internal static partial class SearchNavigationCommands
                     args.GetInt32("timeout-ms", 5000))
                 .ConfigureAwait(true);
 
-            JObject nativeSdkPopulation = await context.Runtime.SearchService
-                .PopulateNativeCallHierarchyWindowAsync(
-                    context,
-                    managedHierarchy,
-                    args.GetBoolean("activate-window", true))
-                .ConfigureAwait(true);
+            // CallHierarchy native SDK population disabled for VS 2026 compatibility
+            JObject nativeSdkPopulation = new JObject { ["available"] = false, ["reason"] = "CallHierarchy not available in VS 2026 build" };
 
             callHierarchyResult["managedHierarchy"] = managedHierarchy;
             callHierarchyResult["nativeInvocationLocation"] = nativeInvocationLocation;

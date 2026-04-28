@@ -61,7 +61,7 @@ Filename: "{code:GetVsixInstallerPath}"; Parameters: "/quiet /shutdownprocesses 
 
 [Code]
 const
-  VisualStudioMajorVersion = '18';
+  VisualStudioMajorVersion = '2026';
   InstallerLineBreak = #13#10;
   InstallerDoubleLineBreak = #13#10#13#10;
   PostInstallPageTitle = 'Configuring VS IDE Bridge';

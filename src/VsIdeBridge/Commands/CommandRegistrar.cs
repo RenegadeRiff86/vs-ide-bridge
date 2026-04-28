@@ -143,6 +143,8 @@ internal static class CommandRegistrar
         RegisterCommandSafely(() => new SolutionProjectCommands.IdeCreateProjectCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SolutionProjectCommands.IdeRemoveProjectCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SolutionProjectCommands.IdeSetStartupProjectCommand(package, runtime, commandService));
+        RegisterCommandSafely(() => new SolutionProjectCommands.IdeListLaunchProfilesCommand(package, runtime, commandService));
+        RegisterCommandSafely(() => new SolutionProjectCommands.IdeSetLaunchProfileCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SolutionProjectCommands.IdeRenameProjectCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SolutionProjectCommands.IdeAddFileToProjectCommand(package, runtime, commandService));
         RegisterCommandSafely(() => new SolutionProjectCommands.IdeRemoveFileFromProjectCommand(package, runtime, commandService));

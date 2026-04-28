@@ -19,7 +19,9 @@ internal static class InstallerDefaults
     internal const string ServiceDescription = "VS IDE Bridge background host (automatic start, idle auto-stop).";
     internal const string VsixId = "RenegadeRiff86.VsIdeBridge";
     internal const string LegacyVsixId = "StanElston.VsIdeBridge";
-    internal const string VisualStudioMajorVersion = "18";
+    // VS 2026 (18.x) uses "2026" as the folder name under Program Files, not the
+    // internal version number "18".  Path: ...\Microsoft Visual Studio\2026\<edition>
+    internal const string VisualStudioMajorVersion = "2026";
     internal const int DefaultIdleSoftSeconds = 900;
     internal const int DefaultIdleHardSeconds = 1200;
 

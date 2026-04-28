@@ -17,13 +17,30 @@
     <PlatformTarget>AnyCPU</PlatformTarget>
     <CreateVsixContainer>true</CreateVsixContainer>
     <InstallationTargetVersion>18.0</InstallationTargetVersion>
+    <!-- VS SDK metapackage: 17.14.x is the latest on NuGet.org (no 18.x exists);
+         APIs are forward-compatible with VS 2026. -->
     <VisualStudioSDKImplicitPackageVersion>17.14.40265</VisualStudioSDKImplicitPackageVersion>
+    <!-- VSSDK Build Tools: use latest 18.x for VS 2026 VSIX packaging support -->
+    <VSSDKBuildToolsImplicitPackageVersion>18.5.38461</VSSDKBuildToolsImplicitPackageVersion>
     <InstallationTargetProductArchitecture>amd64</InstallationTargetProductArchitecture>
   </PropertyGroup>
 
+  <!--
+    VS-provided packages: use IncludeAssets=compile so we can build against
+    these APIs but do NOT copy them into the VSIX.  VS 2026 ships its own
+    versions of Newtonsoft.Json, Roslyn (CodeAnalysis / LanguageServices),
+    System.Collections.Immutable, System.Composition, Threading, etc.
+    Shipping our own copies causes binding-redirect / version conflicts.
+  -->
   <ItemGroup>
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="4.14.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4">
+      <IncludeAssets>compile</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.VisualStudio.LanguageServices" Version="4.14.0">
+      <IncludeAssets>compile</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="System.Collections.Immutable" Version="10.0.1">
       <IncludeAssets>compile</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -34,10 +51,12 @@
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="PresentationCore" />
     <Reference Include="Microsoft.CSharp" />
-    <Reference Include="Microsoft.VisualStudio.Language.CallHierarchy">
-      <HintPath>$(DevEnvDir)CommonExtensions\Microsoft\CallHierarchy\Microsoft.VisualStudio.Language.CallHierarchy.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <!-- CallHierarchy types changed in VS 2026; exclude for now -->
+  </ItemGroup>
+
+  <!-- Exclude CallHierarchyWindow.cs — depends on CallHierarchy APIs not available in VS 2026 -->
+  <ItemGroup>
+    <Compile Remove="Services\SearchService\CallHierarchyWindow.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -58,9 +77,33 @@
     </Content>
   </ItemGroup>
 
+  <!--
+    Include CopyLocal NuGet DLLs in the VSIX, but EXCLUDE assemblies that
+    VS 2026 already provides (Roslyn, Threading, Composition, Immutable, etc.).
+    Shipping duplicate copies causes binding-redirect version conflicts.
+  -->
   <Target Name="IncludeCopyLocalPackageDependenciesInVsix" AfterTargets="GetVsixSourceItems">
     <ItemGroup>
-      <VSIXSourceItem Include="@(ReferenceCopyLocalPaths)" Condition="'%(ReferenceCopyLocalPaths.NuGetPackageId)' != '' and '%(ReferenceCopyLocalPaths.Extension)' == '.dll'" />
+      <VSIXSourceItem
+        Include="@(ReferenceCopyLocalPaths)"
+        Condition="
+          '%(ReferenceCopyLocalPaths.NuGetPackageId)' != ''
+          and '%(ReferenceCopyLocalPaths.Extension)' == '.dll'
+          and !$([System.String]::new('%(Filename)').StartsWith('Microsoft.CodeAnalysis'))
+          and !$([System.String]::new('%(Filename)').StartsWith('Microsoft.VisualStudio'))
+          and !$([System.String]::new('%(Filename)').StartsWith('Microsoft.ServiceHub'))
+          and !$([System.String]::new('%(Filename)').StartsWith('System.Collections.Immutable'))
+          and !$([System.String]::new('%(Filename)').StartsWith('System.Composition'))
+          and !$([System.String]::new('%(Filename)').StartsWith('System.IO.Pipelines'))
+          and !$([System.String]::new('%(Filename)').StartsWith('System.Reflection.Metadata'))
+          and !$([System.String]::new('%(Filename)').StartsWith('System.Threading.Tasks.Extensions'))
+          and !$([System.String]::new('%(Filename)').StartsWith('System.Text.Encoding.CodePages'))
+          and !$([System.String]::new('%(Filename)').StartsWith('System.Runtime.CompilerServices.Unsafe'))
+          and '%(Filename)' != 'Newtonsoft.Json'
+          and '%(Filename)' != 'StreamJsonRpc'
+          and '%(Filename)' != 'MessagePack'
+          and '%(Filename)' != 'Nerdbank.Streams'
+        " />
     </ItemGroup>
   </Target>
 </Project>

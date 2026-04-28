@@ -703,6 +703,28 @@
           <LocCanonicalName>.Tools.IdeRunCodeAnalysis</LocCanonicalName>
         </Strings>
       </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeListLaunchProfiles" priority="0x0265" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE List Launch Profiles</ButtonText>
+          <CommandName>IdeListLaunchProfiles</CommandName>
+          <CanonicalName>Tools.IdeListLaunchProfiles</CanonicalName>
+          <LocCanonicalName>.Tools.IdeListLaunchProfiles</LocCanonicalName>
+        </Strings>
+      </Button>
+      <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeSetLaunchProfile" priority="0x0266" type="Button">
+        <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
+        <CommandFlag>CommandWellOnly</CommandFlag>
+        <CommandFlag>AllowParams</CommandFlag>
+        <Strings>
+          <ButtonText>IDE Set Launch Profile</ButtonText>
+          <CommandName>IdeSetLaunchProfile</CommandName>
+          <CanonicalName>Tools.IdeSetLaunchProfile</CanonicalName>
+          <LocCanonicalName>.Tools.IdeSetLaunchProfile</LocCanonicalName>
+        </Strings>
+      </Button>
       <Button guid="guidVsIdeBridgeCommandSet" id="cmdidIdeOpenSolution" priority="0x0224" type="Button">
         <Parent guid="guidVsIdeBridgeCommandSet" id="BridgeCommandGroup" />
         <CommandFlag>CommandWellOnly</CommandFlag>
@@ -1020,6 +1042,8 @@
       <IDSymbol name="cmdidIdeGetWarnings" value="0x0230" />
       <IDSymbol name="cmdidIdeGetMessages" value="0x0263" />
       <IDSymbol name="cmdidIdeRunCodeAnalysis" value="0x0264" />
+      <IDSymbol name="cmdidIdeListLaunchProfiles" value="0x0265" />
+      <IDSymbol name="cmdidIdeSetLaunchProfile" value="0x0266" />
       <IDSymbol name="cmdidIdeBuildAndCaptureErrors" value="0x0214" />
       <IDSymbol name="cmdidIdeOpenSolution" value="0x0224" />
       <IDSymbol name="cmdidIdeCreateSolution" value="0x023D" />

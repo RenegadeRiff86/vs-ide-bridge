@@ -90,6 +90,8 @@ internal static class PipeCommandNames
         ["Tools.IdeCreateProject"] = ["create-project"],
         ["Tools.IdeRemoveProject"] = ["remove-project"],
         ["Tools.IdeSetStartupProject"] = ["set-startup-project"],
+        ["Tools.IdeListLaunchProfiles"] = ["list-launch-profiles"],
+        ["Tools.IdeSetLaunchProfile"] = ["set-launch-profile"],
         ["Tools.IdeRenameProject"] = ["rename-project"],
         ["Tools.IdeAddFileToProject"] = ["add-file-to-project"],
         ["Tools.IdeRemoveFileFromProject"] = ["remove-file-from-project"],
